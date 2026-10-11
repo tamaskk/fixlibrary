@@ -14,6 +14,10 @@ export const ERROR_CODES = [
   'INVALID_INPUT',
   'STYLE_IN_USE',
   'SECRET_STORAGE_UNAVAILABLE',
+  // Why a library scan did not run, or stopped.
+  'LIBRARY_NOT_SET',
+  'LIBRARY_UNAVAILABLE',
+  'LIBRARY_ROOT_UNSUITABLE',
   // Something failed that no code above describes; the detail is in the log.
   'UNEXPECTED'
 ] as const
@@ -69,5 +73,8 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   INVALID_INPUT: 'The stage was given invalid input',
   STYLE_IN_USE: 'A style is still in use',
   SECRET_STORAGE_UNAVAILABLE: 'The Keychain is not available',
+  LIBRARY_NOT_SET: 'No library folder is chosen',
+  LIBRARY_UNAVAILABLE: 'The library folder cannot be reached',
+  LIBRARY_ROOT_UNSUITABLE: 'This folder cannot be used as the library',
   UNEXPECTED: 'Unexpected error'
 }

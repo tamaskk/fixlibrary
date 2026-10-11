@@ -9,6 +9,16 @@ export function errorMessage(code: ErrorCode): string {
       return 'A Keychain nem érhető el, a kulcs nincs elmentve.'
     case 'INVALID_INPUT':
       return 'Ez az érték nem menthető.'
+    case 'LIBRARY_ROOT_UNSUITABLE':
+      return 'Ez a mappa nem lehet a könyvtár: túl sok mindent tartalmaz. Válassz egy mappát vagy egy lemezt.'
+    case 'LIBRARY_NOT_SET':
+      return 'Még nincs könyvtár mappa kiválasztva. A Beállításokban adhatod meg.'
+    case 'LIBRARY_UNAVAILABLE':
+      return 'A könyvtár mappája nem érhető el. Csatlakoztasd a lemezt, és próbáld újra.'
+    case 'PYTHON_CRASHED':
+    case 'PYTHON_ERROR':
+    case 'TIMEOUT':
+      return 'A hangfeldolgozó nem válaszolt. Próbáld újra.'
     default:
       return 'A művelet nem sikerült. Próbáld újra.'
   }
