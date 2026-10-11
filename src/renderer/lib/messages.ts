@@ -19,6 +19,16 @@ export function errorMessage(code: ErrorCode): string {
       return 'Most nem változtatható: egy futás dolgozik, vagy egy batch jóváhagyásra vár.'
     case 'BACKUPS_IN_USE':
       return 'A backup mappa most nem változhat: az utolsó batch még innen vonható vissza.'
+    case 'FILE_UNREADABLE':
+      return 'A fájl nem olvasható.'
+    case 'LOOKUP_FAILED':
+      return 'Az online keresés nem sikerült.'
+    case 'CLAUDE_FAILED':
+      return 'A Claude nem adott használható választ.'
+    case 'WRITE_FAILED':
+      return 'A fájl nem írható.'
+    case 'NOTHING_TO_UNDO':
+      return 'Nincs visszavonható batch.'
     case 'PYTHON_CRASHED':
     case 'PYTHON_ERROR':
     case 'TIMEOUT':

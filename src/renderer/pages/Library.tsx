@@ -14,6 +14,7 @@ import { scanPhaseLabel } from '@/lib/scan-phase'
 import { useAppStore } from '@/stores/app-store'
 import { useLibraryStore } from '@/stores/library-store'
 import { usePipelineStore } from '@/stores/pipeline-store'
+import { usePreviewStore } from '@/stores/preview-store'
 
 export function Library(): React.JSX.Element {
   const data = useLibraryStore((state) => state.data)
@@ -48,13 +49,16 @@ export function Library(): React.JSX.Element {
   const pauseRun = usePipelineStore((state) => state.pause)
   const resumeRun = usePipelineStore((state) => state.resume)
   const cancelRun = usePipelineStore((state) => state.cancel)
+  const waitingForApproval = usePreviewStore((state) => state.batch !== null)
+  const loadPreview = usePreviewStore((state) => state.load)
 
   // Asked again on every visit: the library folder may have been chosen in Settings
   // since, and the app may be scanning by itself.
   React.useEffect(() => {
     void load()
     void loadPipeline()
-  }, [load, loadPipeline])
+    void loadPreview()
+  }, [load, loadPipeline, loadPreview])
 
   const tracks = list.status === 'ready' ? list.tracks : null
   const rows = React.useMemo(
@@ -124,6 +128,16 @@ export function Library(): React.JSX.Element {
               }
             />
             <RunResult finished={runProgress === null ? runFinished : null} />
+            {waitingForApproval && runProgress === null && (
+              <div className="mb-2 flex items-center gap-4">
+                <StatusLine tone="warning">
+                  Egy batch jóváhagyásra vár. Amíg nem hagyod jóvá, egy fájl sem változik.
+                </StatusLine>
+                <Button variant="secondary" onClick={() => setPage('preview')}>
+                  Előnézet megnyitása
+                </Button>
+              </div>
+            )}
           </div>
 
           {hasTracks && (list.status === 'idle' || list.status === 'loading') && (

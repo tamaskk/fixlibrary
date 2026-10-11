@@ -4,15 +4,29 @@ import { cn } from '@/lib/cn'
 type SelectProps = Omit<React.ComponentProps<'select'>, 'id'> & {
   /** Always visible, above the field. */
   label: string
+  /**
+   * Hides the label visually, for a select in a table whose column header already
+   * shows it. The label stays in place for assistive technology.
+   */
+  labelHidden?: boolean
 }
 
 // The native control: keyboard, type-ahead and screen reader behaviour come with it.
-export function Select({ className, label, children, ...props }: SelectProps): React.JSX.Element {
+export function Select({
+  className,
+  label,
+  labelHidden = false,
+  children,
+  ...props
+}: SelectProps): React.JSX.Element {
   const id = React.useId()
 
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-label text-text-muted uppercase">
+      <label
+        htmlFor={id}
+        className={cn('text-label text-text-muted uppercase', labelHidden && 'sr-only')}
+      >
         {label}
       </label>
       <select

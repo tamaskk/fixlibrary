@@ -16,8 +16,25 @@ export function RunResult({ finished }: RunResultProps): React.JSX.Element {
     <div role="status">
       {finished !== null && (
         <div className="mb-2 flex flex-col gap-1">
-          {finished.outcome === 'cancelled' ? (
+          {finished.outcome === 'cancelled' && finished.phase === 'apply' ? (
+            // Files were being written: what was done stays done until it is undone.
+            <StatusLine tone="warning">
+              Az alkalmazás megszakítva. Ami addig elkészült, megmaradt; az Előnézet oldalon
+              visszavonhatod.
+            </StatusLine>
+          ) : finished.outcome === 'cancelled' ? (
             <StatusLine tone="neutral">A futás megszakítva. A fájljaid nem változtak.</StatusLine>
+          ) : finished.outcome === 'applied' ? (
+            <>
+              <StatusLine tone="success">
+                A változások alkalmazva: {formatCount(processed)} track.
+              </StatusLine>
+              {failed > 0 && (
+                <StatusLine tone="danger">
+                  {formatCount(failed)} tracknél hiba történt. Ezek kimaradtak.
+                </StatusLine>
+              )}
+            </>
           ) : (
             <>
               <StatusLine tone="success">

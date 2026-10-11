@@ -23,11 +23,12 @@ export function registerPreviewIpc(preview: Preview): void {
   )
   handleIpc(IPC_CHANNELS.previewDiscard, batchId, (_event, id) => preview.discard(id))
 
-  const mayWrite = createRateGate(WRITE_INTERVAL_MS)
+  const mayApprove = createRateGate(WRITE_INTERVAL_MS)
   handleIpc(IPC_CHANNELS.previewApprove, batchId, (_event, id) =>
-    mayWrite() ? preview.approve(id) : ({ ok: false, code: 'RUN_ACTIVE' } as const)
+    mayApprove() ? preview.approve(id) : ({ ok: false, code: 'RUN_ACTIVE' } as const)
   )
+  const mayUndo = createRateGate(WRITE_INTERVAL_MS)
   handleIpc(IPC_CHANNELS.previewUndoLast, noArguments, () =>
-    mayWrite() ? preview.undoLast() : ({ ok: false, code: 'RUN_ACTIVE' } as const)
+    mayUndo() ? preview.undoLast() : ({ ok: false, code: 'RUN_ACTIVE' } as const)
   )
 }

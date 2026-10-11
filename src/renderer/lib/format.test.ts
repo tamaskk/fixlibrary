@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { formatCount, formatDecimal, formatElapsed, formatRemaining, parseDecimal } from './format'
+import {
+  formatCount,
+  formatDecimal,
+  formatElapsed,
+  formatGigabytes,
+  formatPercent,
+  formatRemaining,
+  parseDecimal
+} from './format'
 
 describe('formatDecimal', () => {
   it.each([
@@ -82,6 +90,32 @@ describe('formatRemaining', () => {
   ])('formats %d ms as %s', (ms, expected) => {
     // Act
     const text = formatRemaining(ms)
+
+    // Assert
+    expect(text).toBe(expected)
+  })
+})
+
+describe('formatGigabytes', () => {
+  it('rounds what is needed up and what is free down, so the two never look like enough', () => {
+    // Act
+    const needed = formatGigabytes(4_610_000_000, 'up')
+    const free = formatGigabytes(4_690_000_000, 'down')
+
+    // Assert
+    expect(needed).toBe('4,7 GB')
+    expect(free).toBe('4,6 GB')
+  })
+})
+
+describe('formatPercent', () => {
+  it.each([
+    [0.699, '69%'],
+    [0.7, '70%'],
+    [1, '100%']
+  ])('formats %d as %s', (share, expected) => {
+    // Act
+    const text = formatPercent(share)
 
     // Assert
     expect(text).toBe(expected)

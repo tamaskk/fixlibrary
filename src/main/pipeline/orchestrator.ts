@@ -140,6 +140,8 @@ interface Run {
   durations: Map<string, number[]>
   controllers: Map<number, AbortController>
   pauseReason: 'user' | 'offline' | null
+  /** In the apply phase: how many tracks are written. The others were left out. */
+  writtenTracks: number | null
   /** The tracks that a stage of this phase failed for. */
   failedTracks: Set<number>
   /** How long the phase worked before the last pause, in this session of the app. */
@@ -247,7 +249,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       pauseReason: active.pauseReason,
       counts: total,
       stages: perStage,
-      tracks: { total: active.byTrack.size, failed: active.failedTracks.size },
+      tracks: {
+        total: active.writtenTracks ?? active.byTrack.size,
+        failed: active.failedTracks.size
+      },
       elapsedMs: active.activeMs + (active.activeSince === null ? 0 : now() - active.activeSince),
       remainingMs: state === 'finished' ? null : estimate(active)
     }
@@ -557,6 +562,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       durations: new Map(),
       controllers: new Map(),
       pauseReason,
+      writtenTracks: null,
       failedTracks: new Set(),
       activeMs: 0,
       activeSince: pauseReason === null ? now() : null,
@@ -602,6 +608,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       for (const job of active.phaseJobs) {
         if (!writable.has(job.trackId)) skipWithDependents(active, job)
       }
+      active.writtenTracks = writable.size
     }
     for (const job of active.phaseJobs) resolve(active, job)
 

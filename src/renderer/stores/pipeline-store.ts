@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { RunProgress } from '@shared/pipeline'
+import { usePreviewStore } from './preview-store'
 
 /** Every function at once, or one of them by its name. */
 export type FunctionChoice = 'all' | string
@@ -38,6 +39,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
     window.api.pipeline.onProgress((progress) => {
       if (progress.state === 'finished') {
         set({ progress: null, lastFinished: progress, actionFailed: false })
+        // A phase that ended changes what waits for approval and what can be undone.
+        void usePreviewStore.getState().load()
       } else {
         set({ progress, progressAt: Date.now(), lastFinished: null })
       }
