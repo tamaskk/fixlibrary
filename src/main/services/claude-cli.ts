@@ -7,7 +7,7 @@
 // project, an empty working directory, and the subscription login, never an API key.
 import { spawn as spawnProcess } from 'child_process'
 import { constants } from 'fs'
-import { access, mkdir, mkdtemp, realpath, rm, stat } from 'fs/promises'
+import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, stat } from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, dirname, isAbsolute, join } from 'path'
 import { z } from 'zod'
@@ -16,6 +16,7 @@ import { describeError } from './error-text'
 import { logger } from './logger'
 
 const COMMAND_NAME = 'claude'
+const CALL_FOLDER_PREFIX = 'call-'
 // Where `claude` is usually installed, tried when the login shell does not name it.
 const USUAL_FOLDERS = ['.local/bin', '.claude/local']
 const USUAL_SYSTEM_FOLDERS = ['/opt/homebrew/bin', '/usr/local/bin']
@@ -28,8 +29,12 @@ const MAX_STREAM_BYTES = 32 * 1024 * 1024
 const MAX_CHECK_OUTPUT_BYTES = 64 * 1024
 // After it was told to stop, a process gets this long before it is killed.
 const KILL_AFTER_MS = 2000
+// How long the output of a process that has ended may still take to arrive.
+const EXIT_DRAIN_MS = 500
 
-const versionPattern = /^(\d{1,4}\.\d{1,4}\.\d{1,6})\b/
+// What `claude --version` prints: the version, and that it is Claude Code. A program
+// that says anything else is not the command, whatever its file is called.
+const versionPattern = /^(\d{1,4}\.\d{1,4}\.\d{1,6}) \(Claude Code\)/
 
 // Only what the app uses of `claude auth status --json`. The account's email and
 // organisation are in there too: they are never read into a variable.
@@ -83,8 +88,10 @@ export type ClaudeCheck =
 export interface ClaudeCli {
   /** The path of the `claude` command as the user's login shell finds it, or null. */
   locate: () => Promise<string | null>
-  /** True for a path that names a `claude` command that can be run. */
+  /** True for an absolute path to a file that can be executed. */
   isUsable: (path: string) => Promise<boolean>
+  /** At startup: removes the call folders a run that was killed left behind. */
+  cleanUp: () => Promise<void>
   check: (path: string) => Promise<ClaudeCheck>
   run: (path: string, request: ClaudeRequest) => Promise<ClaudeRunOutcome>
 }
@@ -140,11 +147,16 @@ function runProcess(
     let overflowed = false
     let settled = false
     let killer: NodeJS.Timeout | null = null
+    let drain: NodeJS.Timeout | null = null
 
     const stop = (): void => {
-      if (child.exitCode !== null || child.signalCode !== null) return
-      child.kill('SIGTERM')
-      killer ??= setTimeout(() => child.kill('SIGKILL'), KILL_AFTER_MS)
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+      // Whatever becomes of the process: after this long the wait is over. A helper
+      // it started may hold its output open long after it is gone itself.
+      killer ??= setTimeout(() => {
+        child.kill('SIGKILL')
+        finish(null)
+      }, KILL_AFTER_MS)
     }
     const timer = setTimeout(() => {
       timedOut = true
@@ -159,7 +171,11 @@ function runProcess(
       settled = true
       clearTimeout(timer)
       if (killer) clearTimeout(killer)
+      if (drain) clearTimeout(drain)
       options.signal?.removeEventListener('abort', onAbort)
+      // Nothing more is read, whoever still holds the other end.
+      child.stdout.destroy()
+      child.stderr.destroy()
       if (pending !== '' && !overflowed) options.onLine?.(pending)
       resolve({ code, stdout, stderr, timedOut, overflowed })
     }
@@ -194,6 +210,12 @@ function runProcess(
     })
     child.on('error', () => finish(null))
     child.on('close', (code) => finish(code))
+    // `close` waits for everyone who holds the output: a background process of a
+    // shell profile would keep it open. The process itself has ended; what it wrote
+    // gets a moment to arrive, and then that is the result.
+    child.on('exit', (code) => {
+      drain ??= setTimeout(() => finish(code), EXIT_DRAIN_MS)
+    })
     // A process that does not read its input must not take the app down with it.
     child.stdin.on('error', () => {})
     child.stdin.end(options.input ?? '')
@@ -215,15 +237,16 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
       USER: options.userName,
       LOGNAME: options.userName,
       SHELL: shellPath,
-      PATH: [...ownFolder, SYSTEM_PATH].join(':'),
+      // The system's own programs first: a helper the command starts by name is not
+      // looked for in a folder the user can write to before it is looked for there.
+      PATH: [SYSTEM_PATH, ...ownFolder].join(':'),
       LANG: 'en_US.UTF-8',
       TMPDIR: tmpdir()
     }
   }
 
   async function isUsable(path: string): Promise<boolean> {
-    // The name is checked as given: the command is often a link to a versioned file.
-    if (!isAbsolute(path) || basename(path) !== COMMAND_NAME) return false
+    if (!isAbsolute(path)) return false
     try {
       const resolved = await realpath(path)
       if (!(await stat(resolved)).isFile()) return false
@@ -234,17 +257,27 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
     }
   }
 
+  /** The first of the candidates that is a command named `claude`. */
   async function firstUsable(candidates: readonly string[]): Promise<string | null> {
     for (const candidate of candidates) {
-      if (await isUsable(candidate)) return candidate
+      // The name is checked as given: the command is often a link to a versioned file.
+      if (basename(candidate) === COMMAND_NAME && (await isUsable(candidate))) return candidate
     }
     return null
   }
 
+  /** The app's own folder for calls. A link in its place would send them elsewhere. */
+  async function ownWorkDir(): Promise<string> {
+    await mkdir(options.workDir, { recursive: true, mode: 0o700 })
+    if (!(await lstat(options.workDir)).isDirectory()) {
+      throw new Error('The Claude working folder is not a folder')
+    }
+    return options.workDir
+  }
+
   /** A call runs where nothing is: no `CLAUDE.md`, no settings, no files to read. */
   async function inEmptyFolder<T>(work: (folder: string) => Promise<T>): Promise<T> {
-    await mkdir(options.workDir, { recursive: true })
-    const folder = await mkdtemp(join(options.workDir, 'call-'))
+    const folder = await mkdtemp(join(await ownWorkDir(), CALL_FOLDER_PREFIX))
     try {
       return await work(folder)
     } finally {
@@ -261,6 +294,18 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
 
   return {
     isUsable,
+
+    async cleanUp() {
+      try {
+        const workDir = await ownWorkDir()
+        for (const entry of await readdir(workDir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || !entry.name.startsWith(CALL_FOLDER_PREFIX)) continue
+          await rm(join(workDir, entry.name), { recursive: true, force: true })
+        }
+      } catch (error) {
+        logger.warn(`The Claude working folder could not be cleaned: ${describeError(error)}`)
+      }
+    },
 
     async locate() {
       // A Mac app started from the Finder does not get the PATH of the user's shell;
@@ -324,12 +369,20 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
     },
 
     async run(path, request) {
+      // Checked again at every use: what the path names may have changed since.
+      if (!(await isUsable(path))) return { kind: 'failed' }
+      // Stopped by whoever asked, or by the stream itself when it is not what was asked for.
+      const stopper = new AbortController()
+      const signal = request.signal
+        ? AbortSignal.any([request.signal, stopper.signal])
+        : stopper.signal
       // What the stream has said so far.
       const seen: {
+        cleanInit: boolean
         answer: { structured: unknown } | null
         limit: { resetsAt: number | null } | null
         unexpected: string | null
-      } = { answer: null, limit: null, unexpected: null }
+      } = { cleanInit: false, answer: null, limit: null, unexpected: null }
 
       const onLine = (line: string): void => {
         if (line.trim() === '') return
@@ -352,7 +405,13 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
             init.success &&
             init.data.mcp_servers.length === 0 &&
             init.data.tools.every((tool) => tool === ANSWER_TOOL)
-          if (!clean) seen.unexpected = 'the call started with tools or MCP servers'
+          if (clean) {
+            seen.cleanInit = true
+          } else {
+            seen.unexpected = 'the call started with tools or MCP servers'
+            // Not a moment longer with what it was not meant to have.
+            stopper.abort()
+          }
           return
         }
         if (type === 'rate_limit_event') {
@@ -371,12 +430,10 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
           const result = resultSchema.safeParse(message)
           if (!result.success) return
           const failed = result.data.is_error === true
-          if (
-            failed &&
-            (result.data.api_error_status === 429 || /limit/i.test(result.data.result ?? ''))
-          ) {
-            seen.limit ??= { resetsAt: null }
-          }
+          const limited =
+            result.data.api_error_status === 429 ||
+            /usage limit|rate limit/i.test(result.data.result ?? '')
+          if (failed && limited) seen.limit ??= { resetsAt: null }
           if (!failed && result.data.structured_output !== undefined) {
             seen.answer = { structured: result.data.structured_output }
           }
@@ -414,7 +471,7 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
             timeoutMs: request.timeoutMs ?? CLAUDE_CALL_TIMEOUT_MS,
             maxOutputBytes: MAX_STREAM_BYTES,
             input: request.prompt,
-            signal: request.signal,
+            signal,
             onLine
           }
         )
@@ -425,12 +482,15 @@ export function createClaudeCli(options: ClaudeCliOptions): ClaudeCli {
         return { kind: 'failed' }
       }
       if (isUnknownOption(result)) return { kind: 'outdated' }
+      // An answer counts only from a call that said, at its start, that it has no
+      // tools and no servers. A stream that never said so is not trusted either.
+      const answered = seen.answer !== null && seen.cleanInit && !result.overflowed
+      // A call that was held up and then answered has answered: the limit is only
+      // what a call ended on.
+      if (answered && seen.answer) return { kind: 'answer', structured: seen.answer.structured }
       // Before the timeout: a call that waits out a limit runs into its time too.
       if (seen.limit !== null) return { kind: 'limit', resetsAt: seen.limit.resetsAt }
       if (result.timedOut) return { kind: 'timeout' }
-      if (seen.answer !== null && !result.overflowed) {
-        return { kind: 'answer', structured: seen.answer.structured }
-      }
       // What the tool printed stays out of the log: it may quote what it was asked.
       logger.warn(`A Claude call gave no answer (exit code ${String(result.code)})`)
       return { kind: 'failed' }

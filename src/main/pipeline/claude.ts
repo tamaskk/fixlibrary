@@ -2,6 +2,7 @@
 // and how questions are gathered into calls of at most 20 items. The process itself
 // is started by `services/claude-cli.ts`; what is asked is a task of
 // `services/claude-prompts/`.
+import { isAbsolute } from 'path'
 import { z } from 'zod'
 import type { AppDatabase } from '../db/connection'
 import { getSetting, setSetting } from '../db/settings'
@@ -10,6 +11,7 @@ import { listTracks } from '../db/tracks'
 import type { ClaudeCli, ClaudeRunOutcome } from '../services/claude-cli'
 import { createStyleTask, type StyleInput } from '../services/claude-prompts/style'
 import type { ClaudeTask } from '../services/claude-prompts/task'
+import { describeError } from '../services/error-text'
 import { logger } from '../services/logger'
 import {
   CLAUDE_BATCH_SIZE,
@@ -22,7 +24,13 @@ import { CLAUDE_LIMIT_RETRY_MS } from '@shared/timeouts'
 
 const SETTING_KEY = 'claude'
 // The command the user chose by hand; null means "the one the login shell finds".
-const settingSchema = z.object({ path: z.string().min(1).max(1024).nullable() })
+const settingSchema = z.object({
+  path: z
+    .string()
+    .max(1024)
+    .refine((path) => isAbsolute(path))
+    .nullable()
+})
 
 // Items that arrive within this time of each other share a call.
 const GATHER_MS = 200
@@ -68,12 +76,20 @@ export interface Claude {
     input: Input,
     signal?: AbortSignal
   ) => Promise<Omit<Answer, 'id'>>
-  /** One call for up to 20 items, with one retry for an answer that is not valid. */
+  /**
+   * One call for up to 20 items, with one retry for an answer that is not valid. It
+   * takes its turn behind the calls that are already waiting.
+   */
   askBatch: <Input, Answer extends { id: number }>(
     task: ClaudeTask<Input, Answer>,
     items: readonly ({ id: number } & Input)[],
     signal?: AbortSignal
   ) => Promise<BatchOutcome<Answer>>
+  /**
+   * For quitting the app: stops the call that is running and hands back everything
+   * that waits. No `claude` process outlives the app.
+   */
+  stop: () => void
 }
 
 interface Waiting {
@@ -135,21 +151,34 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
     return { ...check, chosenByHand }
   }
 
+  // Counts the changes of the command: a check that was started for an older one
+  // must not be taken for the answer about the current one.
+  let generation = 0
+
   function status(force: boolean): Promise<ClaudeStatus> {
     if (checking) return checking
     // Checking starts processes: even a forced check is not repeated back to back.
-    if (lastStatus && (!force || now() - lastStatus.at < MIN_RECHECK_INTERVAL_MS)) {
+    // A status that a call has since contradicted (`at` 0) is asked for again.
+    const fresh = lastStatus !== null && now() - lastStatus.at < MIN_RECHECK_INTERVAL_MS
+    if (lastStatus && (fresh || (!force && lastStatus.at !== 0))) {
       return Promise.resolve(lastStatus.status)
     }
-    checking = checkNow(force)
+    const startedFor = generation
+    const check: Promise<ClaudeStatus> = checkNow(force)
       .then((result) => {
+        // Another command was chosen meanwhile: this answer is about the old one.
+        if (startedFor !== generation) {
+          checking = null
+          return status(true)
+        }
         lastStatus = { status: result, at: now() }
         return result
       })
       .finally(() => {
-        checking = null
+        if (checking === check) checking = null
       })
-    return checking
+    checking = check
+    return check
   }
 
   function noteProblem(reason: ClaudeProblem): void {
@@ -158,7 +187,7 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
     logger.warn(`Claude cannot be used: ${reason}`)
   }
 
-  async function askBatch<Input, Answer extends { id: number }>(
+  async function callOnce<Input, Answer extends { id: number }>(
     task: ClaudeTask<Input, Answer>,
     items: readonly ({ id: number } & Input)[],
     signal?: AbortSignal
@@ -198,37 +227,34 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
         return { kind: 'unusable', reason: 'failed' }
       }
 
+      // What an earlier try answered validly stays: the second try only has to
+      // mend what was wrong.
       invalid = new Set()
       issues = []
-      answers.clear()
       const envelope = envelopeSchema.safeParse(outcome.structured)
       if (!envelope.success) {
         issues.push('the answer must be an object with an "items" array')
-        invalid = new Set(asked)
+        invalid = new Set([...asked].filter((id) => !answers.has(id)))
         continue
       }
       for (const entry of envelope.data.items) {
         const answer = task.answerSchema.safeParse(entry)
-        const id = z.object({ id: z.number().int() }).safeParse(entry).data?.id
         if (!answer.success) {
-          // Named by what the schema says, never by what Claude wrote.
+          const id = z.object({ id: z.number().int() }).safeParse(entry).data?.id
+          // Only an entry for an id that was asked for is worth another try, and it
+          // is named by what the schema says, never by what Claude wrote.
+          if (id === undefined || !asked.has(id) || answers.has(id)) continue
           const where = answer.error.issues[0]?.path.join('.') ?? ''
-          issues.push(`an item has an invalid "${where}"`)
-          if (id !== undefined && asked.has(id)) invalid.add(id)
+          issues.push(`the item with id ${id} has an invalid "${where}"`)
+          invalid.add(id)
           continue
         }
-        if (!asked.has(answer.data.id)) {
-          issues.push('an item has an id that was not asked for')
-          continue
-        }
-        if (answers.has(answer.data.id)) {
-          issues.push('an id is answered twice')
-          continue
-        }
+        // An id nobody asked for, or one that is answered already, is simply not used.
+        if (!asked.has(answer.data.id) || answers.has(answer.data.id)) continue
         answers.set(answer.data.id, answer.data)
       }
       for (const id of answers.keys()) invalid.delete(id)
-      if (issues.length === 0) break
+      if (invalid.size === 0) break
     }
 
     return {
@@ -242,6 +268,39 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
   // One lane of waiting items per task; one call at a time across all of them.
   const lanes = new Map<string, Lane>()
   let calling: Promise<void> = Promise.resolve()
+  // The call that is running, so that it can be stopped.
+  let running: AbortController | null = null
+  // Until when nothing is asked, after the usage limit was reached.
+  let limitedUntil = 0
+  let stopped = false
+
+  /** Runs one call when its turn has come. Every call of the app goes through here. */
+  function inTurn<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const result = calling.then(async () => {
+      const controller = new AbortController()
+      running = controller
+      try {
+        return await work(controller.signal)
+      } finally {
+        if (running === controller) running = null
+      }
+    })
+    calling = result.then(
+      () => {},
+      () => {}
+    )
+    return result
+  }
+
+  function askBatch<Input, Answer extends { id: number }>(
+    task: ClaudeTask<Input, Answer>,
+    items: readonly ({ id: number } & Input)[],
+    signal?: AbortSignal
+  ): Promise<BatchOutcome<Answer>> {
+    return inTurn((own) => callOnce(task, items, signal ? AbortSignal.any([signal, own]) : own))
+  }
+
+  const limitError = (): AppError => new AppError('CLAUDE_LIMIT', 'the usage limit is reached')
 
   function flush(lane: Lane): void {
     if (lane.timer) clearTimeout(lane.timer)
@@ -254,31 +313,53 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
     })
     const batch = lane.waiting.splice(0, CLAUDE_BATCH_SIZE)
     if (batch.length === 0) return
-    calling = calling.then(() => callFor(lane, batch)).catch(() => {})
+    void inTurn((own) => callFor(lane, batch, own)).catch((error: unknown) => {
+      logger.error(`A call to Claude could not be made: ${describeError(error)}`)
+      for (const item of batch) item.reject(new AppError('CLAUDE_FAILED', 'the call failed'))
+    })
     // What is left over waits for company again, unless it is a full call already.
     if (lane.waiting.length >= CLAUDE_BATCH_SIZE) flush(lane)
     else if (lane.waiting.length > 0) lane.timer = setTimeout(() => flush(lane), gatherMs)
   }
 
-  async function callFor(lane: Lane, batch: Waiting[]): Promise<void> {
+  async function callFor(lane: Lane, batch: Waiting[], own: AbortSignal): Promise<void> {
+    // Lined up before the limit was reached: asking now would only be refused again.
+    if (stopped || now() < limitedUntil) {
+      for (const item of batch) item.reject(limitError())
+      return
+    }
+    // A call that nobody waits for any more is stopped.
+    const withdrawn = new AbortController()
+    const stillWanted = (): boolean => batch.some((item) => !item.signal?.aborted)
+    const onWithdraw = (): void => {
+      if (!stillWanted()) withdrawn.abort()
+    }
+    for (const item of batch) item.signal?.addEventListener('abort', onWithdraw, { once: true })
+    onWithdraw()
+
     // The ids are the places in this call: Claude never sees a track id.
     const items = batch.map((item, index) => ({ ...(item.input as object), id: index + 1 }))
     let outcome: BatchOutcome<{ id: number }>
     try {
-      outcome = await askBatch(lane.task, items)
+      outcome = await callOnce(lane.task, items, AbortSignal.any([own, withdrawn.signal]))
     } catch (error) {
-      logger.error('A call to Claude could not be made', error)
+      logger.error(`A call to Claude could not be made: ${describeError(error)}`)
       outcome = { kind: 'unusable', reason: 'failed' }
+    } finally {
+      for (const item of batch) item.signal?.removeEventListener('abort', onWithdraw)
     }
 
     if (outcome.kind === 'limit') {
-      const retryAt = now() + CLAUDE_LIMIT_RETRY_MS
+      limitedUntil = now() + CLAUDE_LIMIT_RETRY_MS
       logger.warn('The Claude usage limit is reached; trying again in 15 minutes')
-      dependencies.onLimit?.(retryAt)
       // Everything that waits is handed back: it is asked again once there is room.
       const all = [...batch, ...lane.waiting.splice(0)]
-      for (const item of all)
-        item.reject(new AppError('CLAUDE_LIMIT', 'the usage limit is reached'))
+      for (const item of all) item.reject(limitError())
+      try {
+        dependencies.onLimit?.(limitedUntil)
+      } catch (error) {
+        logger.error(`The Claude limit could not be passed on: ${describeError(error)}`)
+      }
       return
     }
     if (outcome.kind === 'unusable') {
@@ -315,14 +396,32 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
     status,
 
     async choosePath(path) {
-      if (path !== null && !(await cli.isUsable(path))) return { ok: false, code: 'INVALID_INPUT' }
+      // Nothing to change: no reason to look for the command and check it again.
+      if (path === null && chosenPath() === null) return { ok: true, value: await status(false) }
+      if (path !== null) {
+        // A program is the command only if it says so itself; its file name may be
+        // anything, since the dialog hands back what a link points to.
+        const check = await cli.check(path)
+        if (check.version === null) return { ok: false, code: 'INVALID_INPUT' }
+      }
       setSetting(db, SETTING_KEY, { path })
+      generation += 1
       located = null
       lastStatus = null
       return { ok: true, value: await status(true) }
     },
 
     askBatch,
+
+    stop() {
+      stopped = true
+      running?.abort()
+      for (const lane of lanes.values()) {
+        if (lane.timer) clearTimeout(lane.timer)
+        lane.timer = null
+        for (const item of lane.waiting.splice(0)) item.reject(limitError())
+      }
+    },
 
     ask(task, input, signal) {
       return new Promise((resolve, reject) => {

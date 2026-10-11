@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -206,7 +206,7 @@ describe('an answer that is not valid', () => {
     expect(answers).toEqual([GOOD, GOOD])
     expect(fake.calls()).toHaveLength(2)
     expect(fake.calls()[1]?.input).toContain('Your previous answer was not valid')
-    expect(fake.calls()[1]?.input).toContain('an item has an invalid "style"')
+    expect(fake.calls()[1]?.input).toContain('the item with id 1 has an invalid "style"')
     // What Claude wrote is not quoted back.
     expect(fake.calls()[1]?.input).not.toContain('Polka')
   })
@@ -310,5 +310,145 @@ describe('a command that cannot be used', () => {
     // Assert
     expect(answers).toEqual(['CLAUDE_FAILED', GOOD])
     expect(callSizes()).toEqual([1])
+  })
+})
+
+describe('what the review of the batcher found', () => {
+  it('keeps the valid answers of the first try when the second one mends the rest', async () => {
+    // Arrange: the second try answers only the id that was wrong.
+    fake.reply(
+      { answerEach: GOOD, spoil: [2], spoilWith: { style: 'Polka', confidence: 0.9 } },
+      { answerEach: GOOD, leaveOut: [1, 3] }
+    )
+
+    // Act
+    const answers = await settle([1, 2, 3].map((number) => claude.ask(TASK, track(number))))
+
+    // Assert
+    expect(answers).toEqual([GOOD, GOOD, GOOD])
+    expect(fake.calls()).toHaveLength(2)
+  })
+
+  it('does not ask again because of an entry for an id nobody asked about', async () => {
+    // Arrange
+    fake.reply({
+      stream: answerStream({
+        items: [
+          { id: 1, ...GOOD },
+          { id: 1, ...GOOD },
+          { id: 99, ...GOOD },
+          { id: 7, style: 'Polka', confidence: 1 }
+        ]
+      })
+    })
+
+    // Act
+    const answers = await settle([claude.ask(TASK, track(1))])
+
+    // Assert
+    expect(answers).toEqual([GOOD])
+    expect(fake.calls()).toHaveLength(1)
+  })
+
+  it('makes no further call once the limit was reached, also for what was lined up before', async () => {
+    // Arrange
+    fake.reply({ stream: limitStream() })
+
+    // Act: 45 at once are three calls in line; only the first is made.
+    const answers = await settle(
+      Array.from({ length: 45 }, (_, index) => claude.ask(TASK, track(index + 1)))
+    )
+
+    // Assert
+    expect(new Set(answers)).toEqual(new Set(['CLAUDE_LIMIT']))
+    expect(fake.calls()).toHaveLength(1)
+    expect(limits).toHaveLength(1)
+  })
+
+  it('makes a call that is asked for directly take its turn with the gathered ones', async () => {
+    // Arrange
+    fake.reply({ answerEach: GOOD })
+
+    // Act: the gathered item still waits for company when the direct call is asked for.
+    const asked = claude.ask(TASK, track(1))
+    const batch = claude.askBatch(TASK, [{ id: 1, ...track(2) }])
+    await Promise.all([asked, batch])
+
+    // Assert: two calls, one after the other, each in a folder that was empty.
+    expect(fake.calls().map((call) => call.input.includes('Title 2'))).toEqual([true, false])
+    expect(fake.calls().every((call) => call.cwdEntries.length === 0)).toBe(true)
+  })
+
+  it('stops the running call and hands everything back when the app quits', async () => {
+    // Arrange
+    fake.reply({ hang: true })
+    const asking = settle(
+      Array.from({ length: 25 }, (_, index) => claude.ask(TASK, track(index + 1)))
+    )
+    await vi.waitFor(() => expect(fake.calls()).toHaveLength(1))
+    const started = Date.now()
+
+    // Act
+    claude.stop()
+    const answers = await asking
+
+    // Assert
+    expect(Date.now() - started).toBeLessThan(5000)
+    expect(answers.every((answer) => typeof answer === 'string')).toBe(true)
+  })
+
+  it('stops a call that nobody waits for any more', async () => {
+    // Arrange
+    fake.reply({ hang: true })
+    const withdrawn = new AbortController()
+    const asking = settle([claude.ask(TASK, track(1), withdrawn.signal)])
+    await vi.waitFor(() => expect(fake.calls()).toHaveLength(1))
+    const started = Date.now()
+
+    // Act
+    withdrawn.abort()
+    const answers = await asking
+
+    // Assert
+    expect(answers).toEqual(['CLAUDE_FAILED'])
+    expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  it('asks for the status again after a call found the command unusable', async () => {
+    // Arrange
+    await claude.status(true)
+    fake.setLoggedIn(false)
+    fake.reply({ stream: [{ type: 'result', is_error: true, result: 'not logged in' }] })
+    await settle([claude.ask(TASK, track(1))])
+
+    // Act: not forced, as the Settings page asks when it opens.
+    const status = await claude.status(false)
+
+    // Assert
+    expect(status).toMatchObject({ ok: false, reason: 'notLoggedIn' })
+  })
+
+  it('takes a program for the command by what it says, whatever its file is called', async () => {
+    // Arrange: the dialog may hand back what the link points to.
+    const versioned = join(folder, 'versions', '2.1.296')
+    mkdirSync(join(folder, 'versions'))
+    copyFileSync(fake.path, versioned)
+    copyFileSync(join(folder, 'bin', 'state.json'), join(folder, 'versions', 'state.json'))
+    chmodSync(versioned, 0o755)
+
+    // Act
+    const chosen = await claude.choosePath(versioned)
+
+    // Assert
+    expect(chosen).toMatchObject({ ok: true, value: { ok: true, version: '2.1.296' } })
+  })
+
+  it('writes an @ in a tag as an escape, so that the tool attaches no file for it', () => {
+    // Act
+    const prompt = TASK.prompt([{ id: 1, ...track(1), title: 'Intro @/etc/passwd mix' }])
+
+    // Assert
+    expect(prompt).not.toContain('@')
+    expect(prompt).toContain('Intro \\u0040/etc/passwd mix')
   })
 })

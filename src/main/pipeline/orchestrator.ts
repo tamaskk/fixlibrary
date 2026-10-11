@@ -382,8 +382,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
    * step that needs Claude until it is time to ask again. The rest of the run goes on.
    */
   function waitForClaude(active: Run, job: RunJob): void {
-    queue.pauseResource('claude')
+    // Stored first: if that fails, nothing is held that no timer would let go again.
     requeueJobs(db, [job.id])
+    queue.pauseResource('claude')
     setStatus(active, job, 'queued')
     queue.addFirst(job)
     if (active.claudeRetryAt !== null) return

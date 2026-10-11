@@ -306,3 +306,117 @@ describe('one call', () => {
     expect(outcome).toEqual({ kind: 'failed' })
   })
 })
+
+describe('what the audit of the service found', () => {
+  it('takes no answer from a stream that never said it has no tools', async () => {
+    // Arrange
+    fake.reply({
+      stream: [{ type: 'result', is_error: false, structured_output: { items: [] } }]
+    })
+
+    // Act
+    const outcome = await cli.run(fake.path, REQUEST)
+
+    // Assert
+    expect(outcome).toEqual({ kind: 'failed' })
+  })
+
+  it('takes the answer of a call that was held up by the limit and answered after all', async () => {
+    // Arrange
+    const stream = answerStream({ items: [{ id: 1 }] })
+    stream.splice(1, 0, { type: 'system', subtype: 'api_retry', error: 'rate_limit', attempt: 1 })
+    fake.reply({ stream })
+
+    // Act
+    const outcome = await cli.run(fake.path, REQUEST)
+
+    // Assert
+    expect(outcome).toEqual({ kind: 'answer', structured: { items: [{ id: 1 }] } })
+  })
+
+  it('does not take an error that only mentions a limit for the usage limit', async () => {
+    // Arrange
+    fake.reply({
+      stream: [
+        { type: 'system', subtype: 'init', tools: [], mcp_servers: [] },
+        { type: 'result', is_error: true, result: 'The output token limit was exceeded' }
+      ]
+    })
+
+    // Act
+    const outcome = await cli.run(fake.path, REQUEST)
+
+    // Assert
+    expect(outcome).toEqual({ kind: 'failed' })
+  })
+
+  it('does not run a path that is no program any more', async () => {
+    // Arrange
+    fake.reply({ stream: answerStream({}) })
+    chmodSync(fake.path, 0o644)
+
+    // Act
+    const outcome = await cli.run(fake.path, REQUEST)
+
+    // Assert
+    expect(outcome).toEqual({ kind: 'failed' })
+    expect(fake.calls()).toEqual([])
+  })
+
+  it('does not wait for a background process of the shell profile', async () => {
+    // Arrange: the profile leaves something running that keeps the output open.
+    const shell = join(folder, 'slow-shell')
+    writeFileSync(shell, `#!/bin/sh\nsleep 20 &\necho '${fake.path}'\n`)
+    chmodSync(shell, 0o755)
+    const started = Date.now()
+
+    // Act
+    const found = await cliWith(shell).locate()
+
+    // Assert
+    expect(found).toBe(fake.path)
+    expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  it('removes the call folders that a run that was killed left behind, and nothing else', async () => {
+    // Arrange
+    mkdirSync(join(workDir, 'call-left'), { recursive: true })
+    writeFileSync(join(workDir, 'call-left', 'x'), 'x')
+    mkdirSync(join(workDir, 'other'))
+
+    // Act
+    await cli.cleanUp()
+
+    // Assert
+    expect(readdirSync(workDir)).toEqual(['other'])
+  })
+
+  it('refuses a working folder that is a link to somewhere else', async () => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const elsewhere = join(folder, 'elsewhere')
+    mkdirSync(elsewhere)
+    symlinkSync(elsewhere, workDir)
+    fake.reply({ stream: answerStream({}) })
+
+    // Act
+    const running = cli.run(fake.path, REQUEST)
+
+    // Assert
+    await expect(running).rejects.toThrow('not a folder')
+    expect(readdirSync(elsewhere)).toEqual([])
+  })
+
+  it('puts the folder of the command last on the PATH', async () => {
+    // Arrange
+    fake.reply({ stream: answerStream({}) })
+
+    // Act
+    await cli.run(fake.path, REQUEST)
+
+    // Assert
+    expect(fake.calls()[0]?.env['PATH']).toBe(
+      `/usr/bin:/bin:/usr/sbin:/sbin:${join(folder, 'bin')}`
+    )
+  })
+})

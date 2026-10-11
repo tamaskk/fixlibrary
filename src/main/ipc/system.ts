@@ -19,7 +19,9 @@ export interface SystemIpcDependencies {
 
 const noArguments = z.tuple([])
 // A test is a real call on the user's subscription: one in this time is all a person asks for.
-const MIN_TEST_INTERVAL_MS = 10_000
+const MIN_TEST_INTERVAL_MS = 30_000
+// Choosing a command starts a login shell and the command itself.
+const MIN_CHOICE_INTERVAL_MS = 2000
 // Shown by the system dialog itself, so the user sees what the choice is for.
 const CLAUDE_PROMPT = 'Válaszd ki a claude parancsot'
 
@@ -62,7 +64,8 @@ export function registerSystemIpc({
           message: CLAUDE_PROMPT,
           buttonLabel: 'Kiválasztás',
           // It usually lives in a hidden folder of the home folder.
-          properties: ['openFile', 'showHiddenFiles']
+          // As picked, not what it points to: the command is usually a link.
+          properties: ['openFile', 'showHiddenFiles', 'noResolveAliases']
         }
         const window = BrowserWindow.fromWebContents(event.sender)
         const picked = window
@@ -77,13 +80,16 @@ export function registerSystemIpc({
     }
   )
 
-  handleIpc(IPC_CHANNELS.systemClearClaude, noArguments, () => claude.choosePath(null))
+  const mayClear = createRateGate(MIN_CHOICE_INTERVAL_MS)
+  handleIpc(IPC_CHANNELS.systemClearClaude, noArguments, async (): Promise<Result<ClaudeStatus>> =>
+    mayClear() ? claude.choosePath(null) : { ok: true, value: await claude.status(false) }
+  )
 
   const mayTest = createRateGate(MIN_TEST_INTERVAL_MS)
   let testing: Promise<ClaudeTestResult> | null = null
   handleIpc(IPC_CHANNELS.systemTestClaude, noArguments, (): Promise<ClaudeTestResult> => {
     if (testing) return testing
-    if (!mayTest()) return Promise.resolve({ ok: false, reason: 'timeout' })
+    if (!mayTest()) return Promise.resolve({ ok: false, reason: 'tooSoon' })
     testing = testClaude(db, claude).finally(() => {
       testing = null
     })

@@ -12,7 +12,7 @@ import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/hand
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
-import { createClaude } from './pipeline/claude'
+import { createClaude, type Claude } from './pipeline/claude'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { commitManualEdits, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
@@ -40,6 +40,8 @@ import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
 let pythonBridge: PythonBridge | null = null
 let stoppingSidecar = false
 let orchestrator: Orchestrator | null = null
+// Kept so that quitting can stop a call to Claude that is still running.
+let claudeService: Claude | null = null
 
 // How old the limits of a run may be before the settings are read again.
 const LIMITS_MAX_AGE_MS = 1000
@@ -103,6 +105,7 @@ function stopAfterUncaughtException(): void {
     logger.error('The run could not be put aside', error)
   }
   orchestrator = null
+  claudeService?.stop()
   closeDatabase()
   if (relaunch) app.relaunch()
   // The sidecar ends by itself when its input closes.
@@ -126,15 +129,16 @@ function registerSettingsAndSystemIpc(): void {
     secrets,
     environment: { homeDir: homedir(), cpuCount: cpus().length }
   })
-  const claude = createClaude({
-    db,
-    cli: createClaudeCli({
-      // The app's own folder; every call runs in a new, empty folder inside it.
-      workDir: join(app.getPath('userData'), 'claude-workdir'),
-      homeDir: homedir(),
-      userName: userInfo().username
-    })
+  const cli = createClaudeCli({
+    // The app's own folder; every call runs in a new, empty folder inside it.
+    workDir: join(app.getPath('userData'), 'claude-workdir'),
+    homeDir: homedir(),
+    userName: userInfo().username
   })
+  const claude = createClaude({ db, cli })
+  claudeService = claude
+  // What a run that was killed left in the working folder goes first.
+  void cli.cleanUp()
   // Asked once at startup, so the log says whether Claude can be used; the Settings
   // page reads the same answer.
   void claude
@@ -430,6 +434,8 @@ app.on('before-quit', (event) => {
   // and put back in line, so the next start goes on with the run.
   orchestrator?.shutdown()
   orchestrator = null
+  // No `claude` process outlives the app.
+  claudeService?.stop()
   if (!pythonBridge) return
   // Hold the quit until the sidecar is gone, so no Python process outlives the app.
   // A second quit request during the wait is held back too.

@@ -32,6 +32,15 @@ const SYSTEM_PROMPT = [
   'Say how sure you are as a number from 0 to 1. Answer for every id you were given, and only through the structured output.'
 ].join(' ')
 
+/**
+ * Data as JSON for a prompt. An `@` is written as its escape: the model reads the
+ * same text, but the command-line tool, which takes `@path` in a prompt for a file
+ * to attach, finds no such mention in a tag.
+ */
+function asData(value: unknown): string {
+  return JSON.stringify(value).replaceAll('@', '\\u0040')
+}
+
 function clean(text: string | null): string | null {
   return text === null ? null : toOneLine(text, MAX_TEXT)
 }
@@ -49,9 +58,9 @@ export function createStyleTask(
     systemPrompt: SYSTEM_PROMPT,
     prompt: (items) =>
       [
-        `Styles: ${JSON.stringify(choices)}`,
+        `Styles: ${asData(choices)}`,
         'Tracks, as JSON:',
-        JSON.stringify(
+        asData(
           items.map((item) => ({
             id: item.id,
             artist: clean(item.artist),

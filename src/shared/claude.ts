@@ -31,4 +31,5 @@ export type ClaudeStatus =
 /** How a test call from Settings went. */
 export type ClaudeTestResult =
   | { ok: true; answered: number; asked: number; durationMs: number }
-  | { ok: false; reason: ClaudeProblem | 'limit' | 'noAnswer' }
+  /** `tooSoon`: a test was made a moment ago; each one is a real call. */
+  | { ok: false; reason: ClaudeProblem | 'limit' | 'noAnswer' | 'tooSoon' }

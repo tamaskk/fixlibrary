@@ -35,6 +35,9 @@ function describeTest(result: ClaudeTestResult): { tone: 'success' | 'danger'; t
   if (result.reason === 'limit') {
     return { tone: 'danger', text: 'Claude usage limit elérve. Próbáld újra később.' }
   }
+  if (result.reason === 'tooSoon') {
+    return { tone: 'danger', text: 'Az előbb volt egy teszt. Várj fél percet, és próbáld újra.' }
+  }
   if (result.reason === 'noAnswer') {
     return { tone: 'danger', text: 'A Claude válaszolt, de a válasza nem volt használható.' }
   }
@@ -139,6 +142,11 @@ export function ClaudeStatus(): React.JSX.Element {
         {claude?.chosenByHand === true && (
           <p className="text-small text-text-muted">A claude parancsot kézzel választottad ki.</p>
         )}
+        {claude?.ok === true && claude.subscription === null && (
+          <StatusLine tone="warning">
+            A bejelentkezés nem előfizetéshez tartozik: a hívások díjkötelesek lehetnek.
+          </StatusLine>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -184,7 +192,8 @@ export function ClaudeStatus(): React.JSX.Element {
         </Button>
       </div>
       <p className="text-small text-text-muted">
-        A teszt egy valódi hívás: legfeljebb öt track artist és title adatát küldi el Claude-nak.
+        A teszt egy valódi hívás: legfeljebb öt track adatait (artist, title, label, év, BPM) és a
+        stílusaid nevét küldi el Claude-nak.
       </p>
       <div role="status">
         {pickRefused && (
