@@ -76,6 +76,7 @@ npm run test           unit tests (Vitest)
 npm run test:e2e       build, then end-to-end tests (Playwright + Electron)
 npm run format         format the codebase
 npm run format:check   check formatting without writing
+npx drizzle-kit generate --name <what_changed>   new migration after a schema change
 
 uv run pytest          Python tests, from python/
 uv run ruff check .    Python lint, from python/
