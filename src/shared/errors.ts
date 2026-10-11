@@ -8,6 +8,8 @@ export const ERROR_CODES = [
   'LOOKUP_FAILED',
   'PYTHON_CRASHED',
   'CLAUDE_FAILED',
+  // Not a failure of the track: the Claude subscription has no room now. The job waits.
+  'CLAUDE_LIMIT',
   'WRITE_FAILED',
   // Other expected failures.
   'PYTHON_ERROR',
@@ -76,6 +78,7 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   LOOKUP_FAILED: 'The online lookup failed',
   PYTHON_CRASHED: 'The audio engine stopped while working on the track',
   CLAUDE_FAILED: 'Claude gave no usable answer',
+  CLAUDE_LIMIT: 'The Claude usage limit is reached',
   WRITE_FAILED: 'The file could not be written',
   PYTHON_ERROR: 'The audio engine reported an error',
   INVALID_INPUT: 'The stage was given invalid input',
