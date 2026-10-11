@@ -150,7 +150,7 @@ function registerLibrary(): void {
       )
     }
   })
-  registerLibraryIpc({ db, scanner })
+  registerLibraryIpc({ db, scanner, listMountedVolumes })
 
   // Picks up what changed on the drive since the last run. Without a chosen folder
   // there is nothing to scan, and a drive that is not connected ends the scan at once.
