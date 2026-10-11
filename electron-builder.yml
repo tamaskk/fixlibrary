@@ -15,6 +15,19 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md,AGENTS.md,CLAUDE.md,CLAUDE.local.md,.mcp.json}'
   - '!{.env,.env.*,.npmrc}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!drizzle.config.ts'
+  # better-sqlite3 ships its sources and a prebuilt binary for every platform.
+  - '!**/node_modules/better-sqlite3/{deps,src}/**'
+  - '!**/node_modules/better-sqlite3/prebuilds/{win32,linux,linuxmusl}-*.node'
+  - '!**/node_modules/better-sqlite3/prebuilds/darwin-x64.node'
+# The migrator reads plain files, so the SQL migrations sit next to the asar.
+extraResources:
+  - from: src/main/db/migrations
+    to: migrations
+    # The snapshots are only for drizzle-kit; the journal and the SQL files are needed.
+    filter:
+      - '**/*'
+      - '!meta/*_snapshot.json'
 asarUnpack:
   - '**/*.node'
 mac:

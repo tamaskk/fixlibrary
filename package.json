@@ -7,6 +7,9 @@
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/tamaskk/fixlibrary",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
@@ -26,8 +29,10 @@
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
+    "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
+    "drizzle-orm": "^0.45.4",
     "lucide-react": "^1.55.0",
     "radix-ui": "^1.7.0",
     "zod": "^4.6.5",
@@ -39,10 +44,12 @@
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.19.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "drizzle-kit": "^0.31.11",
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",

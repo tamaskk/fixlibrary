@@ -6,7 +6,6 @@ Derived from docs/PRD.md §05 and the 45-task plan. `T-0NN` is task NN in docs/s
 
 Package 1: foundations.
 
-- [ ] T-004 (base, M) Database schema: better-sqlite3 + Drizzle, migrations
 - [ ] T-005 (base, S) External binaries: yt-dlp, ffmpeg, fpcalc, mp3gain
 - [ ] T-006 (base, M) Settings page and Keychain-backed secrets
 - [ ] T-007 (base, S) Logging and the skip-and-list error framework
@@ -96,3 +95,4 @@ Nothing planned. See docs/PRD.md §07 before proposing anything.
 - [x] T-001 (base, M) Project skeleton: electron-vite, sandboxed typed IPC, Tailwind v4, design tokens, UI primitives, Vitest, Playwright. Not done: the GitHub remote `tamaskk/fixlibrary` is not created yet.
 - [x] T-002 (base, S) Python environment spike on M1: Essentia + Demucs via uv and python-build-standalone. Result in `python/SPIKE.md`. Not done: the run on three real tracks compared with Rekordbox BPM and key; do it with T-013 at the latest.
 - [x] T-003 (base, M) Python sidecar and bridge: JSON-RPC over stdio, crash recovery. The bridge starts in development only; the packaged Python path comes with T-041.
+- [x] T-004 (base, M) Database schema: better-sqlite3 + Drizzle, migrations. Not done: the Library page does not show the offline state yet, because it lists no tracks before T-008; the data side (`offline` on every track read) is in place.
