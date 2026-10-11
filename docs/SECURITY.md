@@ -49,7 +49,7 @@ There are no accounts and no personal data of other people.
 - External tools (`yt-dlp`, `ffmpeg`, `fpcalc`, `mp3gain`, `claude`, `python`) are started with `spawn(binary, argsArray)`. No `shell: true`, no `exec` with an interpolated string. A user-controlled value that could start with `-` is preceded by `--` or passed as an option value.
 - Paths: every write target is resolved and checked to be inside the library root, the clean library folder, the backup folder, the Inbox, or Electron `userData`. Reject `..` segments and absolute paths from the renderer.
 - File names built from metadata replace characters the file system forbids (`/`, `:`) and are length limited.
-- Library files change only in the apply phase, through `src/main/services/file-ops.ts`: backup or copy first, write to a temp file in the same folder, rename on success.
+- Library files change only in the apply phase, through `src/main/services/file-ops.ts`: backup or copy first, write to a temp file in the same folder, rename on success. That module checks every path it reads, writes or deletes against the library, clean library and backup folders as they are on disk, and is the only place where a file is deleted. What it deletes: temp files of interrupted writes (by their name pattern, at startup), files a batch created (on undo, from the journal), and backups of batches older than the last applied one.
 - SQL goes through Drizzle with bound parameters. No string-built SQL.
 - XML is produced by a serializer that escapes values, never by string templates.
 - No `dangerouslySetInnerHTML`. No remote scripts, fonts or styles in the renderer.

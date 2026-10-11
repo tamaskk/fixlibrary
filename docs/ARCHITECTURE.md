@@ -60,7 +60,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
       index.ts           app lifecycle and window creation only
       ipc/               one file per domain; registers handlers, validates input, calls a pipeline or service
       pipeline/          business logic: orchestrator, queue, stages/, scanner, naming, style, cues, playlists
-      services/          side-effect adapters: python-bridge, file-ops, claude-cli, binaries, keychain, logger, rekordbox-xml, lookup/
+      services/          side-effect adapters: python-bridge, file-ops (the only code that changes library files), claude-cli, binaries, keychain, logger, rekordbox-xml, lookup/
       db/                connection.ts, schema.ts, migrations/, one query module per table group (tracks.ts, settings.ts, …)
     preload/             contextBridge exposure of window.api. No logic.
     renderer/            React app (index.html, main.tsx, App.tsx)
@@ -90,7 +90,7 @@ SQLite: `src/main/db/` holds one connection (WAL mode, foreign keys on) opened a
 
 - Startup opens the database and runs the pending migrations before IPC, the sidecar and the window. If the database cannot be opened or migrated, or was written by a newer version of the app, the app shows an error and quits. Only one instance of the app runs at a time.
 - Migrations run with foreign keys off (a table rebuild would otherwise cascade into the child tables), followed by a foreign key check; the keys are on for everything else.
-- Rows that undo depends on never disappear as a side effect: a batch with backups cannot be deleted, a track that a batch refers to cannot be deleted, and deleting a track only clears the link on its backup rows. The one delete of batches is `deleteDiscardedBatches`, run when a new run starts: it removes batches that were cancelled before anything was written (never applied, no backup, no apply job ever started), with their items and jobs. A batch that got as far as writing is never deleted by it.
+- Rows that undo depends on never disappear as a side effect (the same holds for `batch_files`): a batch with backups cannot be deleted, a track that a batch refers to cannot be deleted, and deleting a track only clears the link on its backup rows. The one delete of batches is `deleteDiscardedBatches`, run when a new run starts: it removes batches that were cancelled before anything was written (never applied, no backup, no apply job ever started), with their items and jobs. A batch that got as far as writing is never deleted by it.
 - Track paths are stored normalized and NFC-composed, and the volume name is always derived from the path.
 - Settings keys that start with `secret.` are reserved for encrypted values (task 6); `setSetting` refuses them.
 - Migrations are generated with `npx drizzle-kit generate --name <what_changed>` and committed. The packaged app reads them from `Resources/migrations` (`extraResources`).
@@ -215,6 +215,20 @@ Pipeline runs:
 - Long work in the sidecar runs inside `cancellable(job_id)` and checks its stop event between steps. The bridge takes a job id and an abort signal with a call: on abort the call is rejected at once and `job.cancel` is sent. A job has five seconds to stop. A cancel that reaches the sidecar before its job has registered is remembered, and the job is stopped as it starts. Every attempt of a job gets its own id, made in the main process, of at most 64 characters. No method uses this before T-013.
 - No real stage exists before T-013. In development, `FIXLIB_DEMO_STAGES=1` adds two stages that only wait (`pipeline/stages/demo.ts`), so a run can be tried and tested end to end; `FIXLIB_DEMO_STAGE_MS` sets how long they take. The packaged app ignores both.
 - Progress is reported as counts per stage and an estimate of the time left: per stage, how long its last 50 jobs took, times the jobs left, over how many run at once. There is no estimate while a stage with jobs left has not finished one.
+
+File changes, backup and undo:
+
+- `services/file-ops.ts` is the only code that copies, renames, overwrites or deletes a file of the library. It knows nothing about batches. Every write goes through `.<name>.fixlib-tmp` next to its target and is renamed into place only when it is complete; a write that fails or is told to stop leaves the target byte-identical and removes the temp file. It refuses every path outside the library, the clean library and the backup folder, decided by what the folders are on disk (a link, `..` or another letter case cannot lead out). It never deletes a folder that holds anything.
+- `pipeline/batch-files.ts` holds the rules. An apply stage gets `context.files`, bound to its one track: `workingPath`, `move` and `replaceContent`. A compute stage gets `null`, so it has no way to change a file.
+- In place: before the first change of a track, the original is copied to `<backup folder>/<batch id>/<track id>.<ext>` and recorded in `backups`. The copy is a clone where the file system can make one (`COPYFILE_FICLONE`), and is checked by size. A track is backed up once per batch, as it was before the batch.
+- Clean library: the first change copies the track to the same relative place under the clean library folder, and all work happens on the copy. The track's `path` then names the copy and `originalPath` the untouched original; the scanner knows such an original and does not take it for a new track. A copy that an earlier batch made is backed up like an original before a later batch changes it.
+- `batch_files` is a journal of the files a batch creates (copies, and files under a new name). A row is written before its file is, so undo and the next run know about a file even if the app stopped between the two. After a crash, a file that is not where its track says is found again through the journal.
+- A taken name gets ` (2)`, ` (3)`, …; the stage is told, and reports `NAME_COLLISION` for the preview.
+- Before the apply phase starts, `checkSpace` adds up what still has to be copied, per volume, and `applyBatch` answers `NOT_ENOUGH_SPACE` if that plus 64 MB does not fit. The whole size is always counted, also where a clone would take no room.
+- Undo (`undoLast`) acts on the newest batch that changed files and has not been undone, also one that was cancelled halfway. It first checks that every backup is there, then puts each back in one step per file, deletes the files the batch created (but not a file that only got another letter case: that is the restored original), restores the tracks whose files it touched from `batch_items.before`, and marks the batch `undone`. It is refused while a batch is computed or applied, and it can be asked for again if it stopped halfway.
+- Once a batch is applied, the backup files and records of every earlier batch are deleted: only the last batch can be undone, and a library's worth of backups must not pile up.
+- At startup the app deletes the `.fixlib-tmp` files that interrupted writes left in the three folders, before it scans.
+- Nothing calls `applyBatch` or `undoLast` from the page yet; the approval and the "Undo last batch" button come with T-011.
 
 Python sidecar:
 
