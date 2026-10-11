@@ -1,4 +1,4 @@
-import { app, dialog, shell, BrowserWindow } from 'electron'
+import { app, dialog, powerSaveBlocker, shell, BrowserWindow } from 'electron'
 import { existsSync } from 'fs'
 import { cpus, homedir } from 'os'
 import { join } from 'path'
@@ -6,24 +6,31 @@ import { optimizer, is } from '@electron-toolkit/utils'
 import { closeDatabase, getDatabase, initDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
+import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
+import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { createLibraryScanner } from './pipeline/scanner'
 import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
-import { ensureDefaultStyles, readSettings } from './pipeline/settings'
+import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
+import { selectableStages, STAGES, validateStages } from './pipeline/stages'
+import { createDemoStages } from './pipeline/stages/demo'
 import { createToolChecker } from './pipeline/system'
 import { resolveToolLocations } from './services/binaries'
 import { readEnvFile } from './services/env-file'
 import { keychainCipher } from './services/keychain'
 import { logger, startFileLogging } from './services/logger'
+import { createSleepBlocker } from './services/power'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import { createMountedVolumesCache, listMountedVolumes } from './services/volumes'
 import { AppError } from '@shared/errors'
+import { FIXED_RESOURCE_LIMITS } from '@shared/pipeline'
 import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
 
 let pythonBridge: PythonBridge | null = null
 let stoppingSidecar = false
+let orchestrator: Orchestrator | null = null
 
 /** Opens the database and applies pending migrations. Returns false if the app cannot run. */
 function openAppDatabase(): boolean {
@@ -126,11 +133,23 @@ function startPythonSidecar(): void {
     .catch((error: unknown) => logger.error('Python sidecar did not answer ping', error))
 }
 
-function registerLibrary(): void {
+/**
+ * The stages a run can use. In development, `FIXLIB_DEMO_STAGES=1` adds two stages
+ * that only wait, so a run can be tried and tested end to end while no real stage
+ * exists. The packaged app never has them.
+ */
+function availableStages(): ReturnType<typeof createDemoStages> {
+  if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') return [...STAGES]
+  const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])
+  return [...STAGES, ...createDemoStages(Number.isFinite(ms) && ms > 0 ? ms : undefined)]
+}
+
+function registerLibraryAndPipeline(): void {
   const db = getDatabase()
+  const environment = { homeDir: homedir(), cpuCount: cpus().length }
   const scanner = createLibraryScanner({
     db,
-    environment: { homeDir: homedir(), cpuCount: cpus().length },
+    environment,
     listMountedVolumes,
     onProgress: sendScanProgress,
     readTags: async (paths) => {
@@ -150,22 +169,55 @@ function registerLibrary(): void {
       )
     }
   })
+
+  const stages = availableStages()
+  // A mistake in the stages is a bug of this build: better to stop here than to run them.
+  validateStages(stages)
+  const runs = createOrchestrator({
+    db,
+    stages,
+    // Read whenever a job could start, so a changed worker count applies to a running run.
+    limits: () => ({
+      ...FIXED_RESOURCE_LIMITS,
+      cpu: resolveEffectiveSettings(readSettings(db), environment).workerCount
+    }),
+    listMountedVolumes,
+    mode: () => readSettings(db).library.mode,
+    onProgress: sendRunProgress,
+    onBusyChange: createSleepBlocker(powerSaveBlocker)
+  })
+  orchestrator = runs
+
   // The scanner above always asks afresh: it decides whether tracks are marked missing.
-  registerLibraryIpc({ db, scanner, listMountedVolumes: createMountedVolumesCache(1000) })
+  registerLibraryIpc({
+    db,
+    scanner,
+    orchestrator: runs,
+    listMountedVolumes: createMountedVolumesCache(1000)
+  })
+  registerPipelineIpc({ orchestrator: runs, functions: selectableStages(stages) })
 
   // Picks up what changed on the drive since the last run. Without a chosen folder
   // there is nothing to scan, and a drive that is not connected ends the scan at once.
-  if (readSettings(db).library.rootFolder === null) return
-  void scanner.scan().then((result) => {
-    if (result.ok) {
-      const { found, added, updated, missing, unreadable } = result.value
-      logger.info(
-        `Startup scan: ${found} files, ${added} new, ${updated} changed, ${missing} missing, ${unreadable} unreadable`
-      )
-    } else {
-      logger.warn(`Startup scan did not finish: ${result.code}`)
-    }
-  })
+  // A run that was interrupted goes on after the scan, so both do not read the
+  // drive at the same time.
+  if (readSettings(db).library.rootFolder === null) {
+    runs.recover()
+    return
+  }
+  void scanner
+    .scan()
+    .then((result) => {
+      if (result.ok) {
+        const { found, added, updated, missing, unreadable } = result.value
+        logger.info(
+          `Startup scan: ${found} files, ${added} new, ${updated} changed, ${missing} missing, ${unreadable} unreadable`
+        )
+      } else {
+        logger.warn(`Startup scan did not finish: ${result.code}`)
+      }
+    })
+    .finally(() => runs.recover())
 }
 
 function createWindow(): void {
@@ -252,7 +304,7 @@ app.whenReady().then(() => {
   registerAppIpc()
   registerSettingsAndSystemIpc()
   startPythonSidecar()
-  registerLibrary()
+  registerLibraryAndPipeline()
   createWindow()
 
   app.on('activate', () => {
@@ -261,6 +313,10 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', (event) => {
+  // First, and while the database is still open: the running jobs are told to stop
+  // and put back in line, so the next start goes on with the run.
+  orchestrator?.shutdown()
+  orchestrator = null
   if (!pythonBridge) return
   // Hold the quit until the sidecar is gone, so no Python process outlives the app.
   // A second quit request during the wait is held back too.

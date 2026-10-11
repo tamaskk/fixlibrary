@@ -6,10 +6,11 @@ import type {
   LibraryPageRequest,
   LibraryStatus,
   RunRequest,
-  RunTargets,
+  RunStarted,
   ScanProgress,
   ScanSummary
 } from './library'
+import type { PipelineState, RunProgress } from './pipeline'
 import type {
   FolderKind,
   KeyService,
@@ -41,12 +42,17 @@ export const IPC_CHANNELS = {
   libraryScan: 'library:scan',
   libraryFollowScan: 'library:followScan',
   libraryList: 'library:list',
-  libraryRun: 'library:run'
+  libraryRun: 'library:run',
+  pipelineState: 'pipeline:state',
+  pipelinePause: 'pipeline:pause',
+  pipelineResume: 'pipeline:resume',
+  pipelineCancel: 'pipeline:cancel'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
 export const IPC_EVENTS = {
-  libraryScanProgress: 'library:scanProgress'
+  libraryScanProgress: 'library:scanProgress',
+  pipelineProgress: 'pipeline:progress'
 } as const
 
 export interface FixLibraryApi {
@@ -96,11 +102,22 @@ export interface FixLibraryApi {
     /** One page of the library, in path order. */
     list: (page: LibraryPageRequest) => Promise<Result<LibraryPage>>
     /**
-     * Names the tracks to run on, by id only. Resolves with the tracks the main
-     * process accepted; a track that cannot be processed right now is left out.
+     * Starts a run of the named functions on the tracks, which are named by id only.
+     * Resolves with the tracks the main process took into the run; a track that
+     * cannot be processed right now is left out.
      */
-    run: (request: RunRequest) => Promise<Result<RunTargets>>
+    run: (request: RunRequest) => Promise<Result<RunStarted>>
     /** Calls the listener while a scan runs. Returns the function that stops it. */
     onScanProgress: (listener: (progress: ScanProgress) => void) => () => void
+  }
+  pipeline: {
+    state: () => Promise<PipelineState>
+    /** No new job starts; the running ones finish. Does nothing without a run. */
+    pause: () => Promise<void>
+    resume: () => Promise<void>
+    /** Ends the run at once; nothing it computed is kept for approval. */
+    cancel: () => Promise<void>
+    /** Calls the listener as a run goes on, and once more when it has ended. */
+    onProgress: (listener: (progress: RunProgress) => void) => () => void
   }
 }

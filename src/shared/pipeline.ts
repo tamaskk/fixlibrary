@@ -67,3 +67,11 @@ export interface RunProgress {
   /** An estimate of the time left, or null while too little has finished to tell. */
   remainingMs: number | null
 }
+
+/** What the page needs to know about runs when it opens. */
+export interface PipelineState {
+  /** The names of the functions that can be asked for, in the order to offer them. */
+  functions: string[]
+  /** The run that is active now, or null. */
+  progress: RunProgress | null
+}

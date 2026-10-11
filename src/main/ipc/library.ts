@@ -3,12 +3,14 @@ import { z } from 'zod'
 import type { AppDatabase } from '../db/connection'
 import { countTracks } from '../db/tracks'
 import { listLibraryPage, resolveRunTargets } from '../pipeline/library'
+import type { Orchestrator } from '../pipeline/orchestrator'
 import type { LibraryScanner } from '../pipeline/scanner'
 import { readSettings } from '../pipeline/settings'
 import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
 import { IPC_CHANNELS, IPC_EVENTS } from '@shared/ipc'
-import type { LibraryStatus, ScanProgress } from '@shared/library'
+import type { Result } from '@shared/errors'
+import type { LibraryStatus, RunStarted, ScanProgress } from '@shared/library'
 import { handleIpc } from './handle'
 import { createProgressThrottle } from './progress'
 
@@ -23,6 +25,7 @@ const logRun = createLogLimiter((line) => logger.info(line), { limit: 10, window
 export interface LibraryIpcDependencies {
   db: AppDatabase
   scanner: LibraryScanner
+  orchestrator: Orchestrator
   listMountedVolumes: () => ReadonlySet<string>
 }
 
@@ -36,6 +39,7 @@ export const sendScanProgress = createProgressThrottle<ScanProgress>((progress) 
 export function registerLibraryIpc({
   db,
   scanner,
+  orchestrator,
   listMountedVolumes
 }: LibraryIpcDependencies): void {
   handleIpc(IPC_CHANNELS.libraryStatus, noArguments, (): LibraryStatus => ({
@@ -56,14 +60,16 @@ export function registerLibraryIpc({
     listLibraryPage(db, page, listMountedVolumes())
   )
 
-  handleIpc(IPC_CHANNELS.libraryRun, oneUnknown, (_event, request) => {
-    const targets = resolveRunTargets(db, request, listMountedVolumes())
-    // T-009: hand the tracks to the orchestrator. Until then a run only says which
-    // tracks it would process.
-    if (targets.ok) {
-      const { trackIds, skipped } = targets.value
-      logRun(`Run requested for ${trackIds.length} tracks (${skipped} left out)`)
-    }
-    return targets
+  handleIpc(IPC_CHANNELS.libraryRun, oneUnknown, (_event, request): Result<RunStarted> => {
+    // The page names ids and functions; which tracks may run is decided here, and
+    // again by the orchestrator when it builds the batch.
+    const plan = resolveRunTargets(db, request, listMountedVolumes())
+    if (!plan.ok) return plan
+    const { trackIds, skipped, stages } = plan.value
+    if (trackIds.length === 0) return { ok: false, code: 'INVALID_INPUT' }
+    const started = orchestrator.start({ trackIds, stages })
+    if (!started.ok) return started
+    logRun(`Run requested for ${trackIds.length} tracks (${skipped} left out)`)
+    return { ok: true, value: { batchId: started.value.batchId, trackIds, skipped } }
   })
 }

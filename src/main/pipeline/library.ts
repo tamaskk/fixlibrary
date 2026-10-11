@@ -11,6 +11,11 @@ import {
   type LibraryTrack,
   type RunTargets
 } from '@shared/library'
+
+/** The tracks to run on and the functions that were asked for. */
+export interface RunPlan extends RunTargets {
+  stages: string[]
+}
 import { toOneLine } from '@shared/text'
 
 // As long as a file name and a path can be on macOS.
@@ -57,7 +62,7 @@ export function listLibraryPage(
 }
 
 /**
- * The tracks a run would process. The renderer only names ids; which of them exist
+ * The tracks a run processes. The renderer only names ids; which of them exist
  * and can be worked on is decided here. A track whose drive is not connected, or
  * whose file the last scan did not find, is never processed.
  */
@@ -65,7 +70,7 @@ export function resolveRunTargets(
   db: AppDatabase,
   request: unknown,
   mountedVolumes: ReadonlySet<string>
-): Result<RunTargets> {
+): Result<RunPlan> {
   // Before the schema looks at every element: a list far too long is refused at once.
   const ids = (request as { trackIds?: unknown } | null)?.trackIds
   if (Array.isArray(ids) && ids.length > MAX_RUN_TRACKS) return { ok: false, code: 'INVALID_INPUT' }
@@ -78,10 +83,16 @@ export function resolveRunTargets(
   )
   if (parsed.data.scope === 'library') {
     const trackIds = tracks.filter((track) => runnable.has(track.id)).map((track) => track.id)
-    return { ok: true, value: { trackIds, skipped: tracks.length - trackIds.length } }
+    return {
+      ok: true,
+      value: { trackIds, skipped: tracks.length - trackIds.length, stages: parsed.data.stages }
+    }
   }
 
   const asked = [...new Set(parsed.data.trackIds)]
   const trackIds = asked.filter((id) => runnable.has(id))
-  return { ok: true, value: { trackIds, skipped: asked.length - trackIds.length } }
+  return {
+    ok: true,
+    value: { trackIds, skipped: asked.length - trackIds.length, stages: parsed.data.stages }
+  }
 }

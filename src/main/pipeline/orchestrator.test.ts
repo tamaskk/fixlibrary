@@ -52,6 +52,7 @@ function fakeStage(name: string, options: FakeStageOptions = {}): Stage {
     phase: options.phase ?? 'compute',
     resource,
     dependsOn: options.dependsOn ?? [],
+    selectable: true,
     timeoutMs: options.timeoutMs ?? 60_000,
     run: async ({ signal }, track) => {
       started.push(`${name}:${track.id}`)
