@@ -14,3 +14,11 @@ export interface ScanSummary {
 
 export type ScanProgress =
   { phase: 'walking'; found: number } | { phase: 'reading'; done: number; total: number }
+
+export interface LibraryStatus {
+  /** False until a library folder is chosen in Settings. */
+  rootChosen: boolean
+  trackCount: number
+  /** True while a scan runs, also one the app started by itself. */
+  scanning: boolean
+}

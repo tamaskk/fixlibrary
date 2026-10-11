@@ -1,6 +1,7 @@
 // Single source of truth for the renderer <-> main contract.
 // Every channel is listed here; preload and main both derive their types from it.
 import type { Result } from './errors'
+import type { LibraryStatus, ScanProgress, ScanSummary } from './library'
 import type {
   FolderKind,
   KeyService,
@@ -27,7 +28,14 @@ export const IPC_CHANNELS = {
   secretsClear: 'secrets:clear',
   secretsTest: 'secrets:test',
   systemCheckTools: 'system:checkTools',
-  systemOpenLogFolder: 'system:openLogFolder'
+  systemOpenLogFolder: 'system:openLogFolder',
+  libraryStatus: 'library:status',
+  libraryScan: 'library:scan'
+} as const
+
+/** Channels on which the main process tells the renderer something without being asked. */
+export const IPC_EVENTS = {
+  libraryScanProgress: 'library:scanProgress'
 } as const
 
 export interface FixLibraryApi {
@@ -61,5 +69,15 @@ export interface FixLibraryApi {
   system: {
     checkTools: (force: boolean) => Promise<ToolCheck[]>
     openLogFolder: () => Promise<void>
+  }
+  library: {
+    status: () => Promise<LibraryStatus>
+    /**
+     * Scans the library folder and resolves when the scan is over. While a scan
+     * is running, also one started by the app, this joins it.
+     */
+    scan: () => Promise<Result<ScanSummary>>
+    /** Calls the listener while a scan runs. Returns the function that stops it. */
+    onScanProgress: (listener: (progress: ScanProgress) => void) => () => void
   }
 }
