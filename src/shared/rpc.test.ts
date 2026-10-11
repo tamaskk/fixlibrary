@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeRpcRequest, parseRpcLine, RPC_SCHEMAS, TAG_BATCH_SIZE } from './rpc'
+import { encodeRpcRequest, fileTagsSchema, parseRpcLine, RPC_SCHEMAS, TAG_BATCH_SIZE } from './rpc'
 
 describe('encodeRpcRequest', () => {
   it('writes one JSON-RPC 2.0 request per line', () => {
@@ -94,7 +94,7 @@ describe('RPC_SCHEMAS', () => {
     expect(parsed.success).toBe(false)
   })
 
-  it('accepts a tags.read result with a tagged and an unreadable file', () => {
+  it('accepts the tags of a tagged and of an unreadable file', () => {
     // Arrange
     const empty = {
       durationMs: null,
@@ -126,18 +126,21 @@ describe('RPC_SCHEMAS', () => {
     }
 
     // Act
-    const parsed = RPC_SCHEMAS['tags.read'].result.safeParse(result)
+    const parsed = result.files.map((file) => fileTagsSchema.safeParse(file).success)
 
     // Assert
-    expect(parsed.success).toBe(true)
+    expect(parsed).toEqual([true, true])
   })
 
   it.each([
     ['tag text longer than the sidecar may send', { title: 'x'.repeat(301) }],
     ['a year that is not a year', { year: 20245 }],
     ['a negative duration', { durationMs: -1 }],
-    ['a missing cover flag', { hasCover: undefined }]
-  ])('rejects a tags.read result with %s', (_name, change) => {
+    ['a missing cover flag', { hasCover: undefined }],
+    ['a duration of zero', { durationMs: 0 }],
+    ['tag text of more than one line', { title: 'Track\n[error] forged' }],
+    ['tag text that reverses the reading direction', { artist: 'Track\u202egnp.exe' }]
+  ])('rejects file tags with %s', (_name, change) => {
     // Arrange
     const file = {
       path: '/Music/a.mp3',
@@ -155,7 +158,7 @@ describe('RPC_SCHEMAS', () => {
     }
 
     // Act
-    const parsed = RPC_SCHEMAS['tags.read'].result.safeParse({ files: [file] })
+    const parsed = fileTagsSchema.safeParse(file)
 
     // Assert
     expect(parsed.success).toBe(false)

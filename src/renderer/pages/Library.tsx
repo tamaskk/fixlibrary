@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StatusLine } from '@/components/ui/status-line'
 import { formatCount } from '@/lib/format'
+import { scanPhaseLabel } from '@/lib/scan-phase'
 import { useAppStore } from '@/stores/app-store'
 import { useLibraryStore } from '@/stores/library-store'
 
@@ -54,10 +55,13 @@ export function Library(): React.JSX.Element {
       {ready !== null && (
         <>
           {scanning && <ScanProgressPanel progress={progress} />}
-          {/* One block, so the live regions take no room of their own while they are empty. */}
-          <div className="flex flex-col gap-2">
-            {/* Without a chosen folder the empty state below already says what is wrong. */}
-            <ScanResult outcome={scanning || !ready.rootChosen ? null : lastScan} />
+          <div>
+            {/* In the page before a scan starts, so the phase is announced when it changes. */}
+            <p role="status" className="sr-only">
+              {scanning ? scanPhaseLabel(progress) : ''}
+            </p>
+            {/* With no folder and no tracks the empty state below says what is wrong. */}
+            <ScanResult outcome={scanning || (!hasTracks && !ready.rootChosen) ? null : lastScan} />
             {hasTracks && (
               <p className="text-body text-text-muted">
                 <span className="font-mono text-data text-text tabular-nums">

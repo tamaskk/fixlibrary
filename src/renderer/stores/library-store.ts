@@ -42,12 +42,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
             : { ok: false, code: result.code }
         })
       }
-      applyStatus(await window.api.library.status())
     } catch {
       set({ lastScan: { ok: false, code: 'UNEXPECTED' } })
     } finally {
       stopListening?.()
       set({ scanning: false, progress: null })
+    }
+    // Asked on its own: if this fails, the result of the scan above still stands,
+    // and the page keeps the count it had.
+    try {
+      applyStatus(await window.api.library.status())
+    } catch {
+      // The next visit of the page asks again.
     }
   }
 
@@ -58,6 +64,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     lastScan: null,
 
     async load() {
+      // A retry from the error state shows that something is happening.
+      if (get().data.status === 'error') set({ data: { status: 'loading' } })
       try {
         const status = await window.api.library.status()
         applyStatus(status)

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import struct
+import wave
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,78 @@ def test_a_file_whose_tag_claims_to_be_huge_is_not_parsed(tmp_path: Path) -> Non
     result = tags.read_file_tags(str(path))
 
     assert result["readable"] is False
+
+
+def test_an_mp3_with_padding_before_its_first_frame_is_still_an_mp3(tmp_path: Path) -> None:
+    # Content alone does not say MP3 here; the file name does.
+    path = tmp_path / "padded.mp3"
+    path.write_bytes(b"\x00" * 4096 + (FIXTURES / "sine.mp3").read_bytes())
+
+    result = tags.read_file_tags(str(path))
+
+    assert result["readable"] is True
+    assert result["sampleRateHz"] == 44100
+
+
+def test_the_parser_is_chosen_by_the_file_name_not_by_the_content(tmp_path: Path) -> None:
+    wav_named_mp3 = copy_fixture("sine.wav", tmp_path, "really-a-wav.mp3")
+
+    result = tags.read_file_tags(str(wav_named_mp3))
+
+    assert result["readable"] is False
+
+
+def test_a_sound_of_a_few_samples_has_no_duration_instead_of_zero(tmp_path: Path) -> None:
+    path = tmp_path / "click.wav"
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(44100)
+        output.writeframes(b"\x00\x00" * 10)
+
+    result = tags.read_file_tags(str(path))
+
+    assert result["readable"] is True
+    assert result["durationMs"] is None
+
+
+@pytest.mark.parametrize("chunk", [b"id3 ", b"fmt "])
+def test_a_wav_chunk_that_claims_to_be_huge_is_not_read(tmp_path: Path, chunk: bytes) -> None:
+    # The chunk says 200 MB; the file does not hold them, but a reader that trusted
+    # the number would ask for them.
+    fmt = struct.pack("<4sLHHLLHH", b"fmt ", 16, 1, 1, 44100, 88200, 2, 16)
+    huge = chunk + struct.pack("<L", 200 * 1024 * 1024) + b"ID3\x03\x00\x00\x5f\x7f\x7f\x7f"
+    body = b"WAVE" + (fmt if chunk != b"fmt " else b"") + huge
+    path = tmp_path / "huge-chunk.wav"
+    path.write_bytes(b"RIFF" + struct.pack("<L", len(body)) + body)
+
+    result = tags.read_file_tags(str(path))
+
+    assert result["readable"] is False
+
+
+def test_a_file_reached_through_a_linked_folder_is_not_read(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    copy_fixture("sine.mp3", real)
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+
+    result = tags.read_file_tags(str(tmp_path / "linked" / "sine.mp3"))
+
+    assert result["readable"] is False
+
+
+def test_unreadable_files_are_logged_as_one_line_without_their_names(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    paths = [str(tmp_path / f"secret-name-{index}.mp3") for index in range(3)]
+
+    with caplog.at_level("WARNING"):
+        tags.read_tags(paths)
+
+    assert len(caplog.records) == 1
+    assert "3 of 3" in caplog.text
+    assert "secret-name" not in caplog.text
 
 
 def test_a_link_and_a_pipe_are_not_read(tmp_path: Path) -> None:

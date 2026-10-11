@@ -20,7 +20,7 @@ import { logger, startFileLogging } from './services/logger'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import { listMountedVolumes } from './services/volumes'
 import { AppError } from '@shared/errors'
-import { TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
+import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
 
 let pythonBridge: PythonBridge | null = null
 let stoppingSidecar = false
@@ -141,6 +141,13 @@ function registerLibrary(): void {
         { timeoutMs: TAG_BATCH_TIMEOUT_MS }
       )
       return files
+    },
+    isEngineAlive: async () => {
+      if (!pythonBridge) return false
+      return pythonBridge.call('ping', {}, { timeoutMs: ENGINE_CHECK_TIMEOUT_MS }).then(
+        () => true,
+        () => false
+      )
     }
   })
   registerLibraryIpc({ db, scanner })

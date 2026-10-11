@@ -6,9 +6,12 @@ export interface ScanSummary {
   added: number
   updated: number
   unchanged: number
-  /** Tracks of this library whose file is no longer there. Their rows are kept. */
+  /**
+   * All tracks of this library whose file is not there, not only the ones this scan
+   * noticed. Their rows are kept. Always 0 for a scan that was not complete.
+   */
   missing: number
-  /** Files of a known format that could not be read; they are listed without tags. */
+  /** Files found in this scan that cannot be read; they are listed without tags. */
   unreadable: number
   /**
    * False when part of the library could not be looked at. Such a scan marks

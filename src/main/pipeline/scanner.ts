@@ -19,7 +19,7 @@ import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
 import { AppError, type ErrorCode, type Result } from '@shared/errors'
 import type { ScanProgress, ScanSummary } from '@shared/library'
-import { TAG_BATCH_SIZE, type FileTags } from '@shared/rpc'
+import { fileTagsSchema, TAG_BATCH_SIZE, type FileTags } from '@shared/rpc'
 import { toOneLine } from '@shared/text'
 import {
   isUnsuitableLibraryRoot,
@@ -40,9 +40,6 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, AudioFormat>> = {
 
 // The walk reports how far it is after this many files, so a slow drive shows progress.
 const WALK_PROGRESS_STEP = 200
-// When a batch fails its files are read one by one. This many failures in a row mean
-// that the sidecar is the problem, not the files.
-const MAX_SINGLE_FAILURES_IN_A_ROW = 3
 const MAX_LOGGED_ERROR_LENGTH = 500
 
 // Failures of the sidecar that one bad file in a batch can cause.
@@ -54,8 +51,13 @@ const logSkipped = createLogLimiter((line) => logger.warn(line), { limit: 20, wi
 export interface ScanDependencies {
   db: AppDatabase
   environment: SettingsEnvironment
-  /** Reads one batch through the sidecar: one entry per path, in input order. */
-  readTags: (paths: string[]) => Promise<FileTags[]>
+  /**
+   * Reads one batch through the sidecar: one entry per path, in input order. The
+   * entries are untrusted; the scanner checks each of them.
+   */
+  readTags: (paths: string[]) => Promise<unknown[]>
+  /** Whether the sidecar answers at all, asked after a read has failed. Never rejects. */
+  isEngineAlive: () => Promise<boolean>
   listMountedVolumes: () => ReadonlySet<string>
   onProgress?: (progress: ScanProgress) => void
   /** The path with its links resolved. Replaced in tests that need a path on a volume. */
@@ -206,17 +208,27 @@ function isBatchFailure(error: unknown): error is AppError {
   )
 }
 
+/** What became of one file: its tags, and whether reading it ran out of time. */
+interface ReadFile {
+  tags: FileTags
+  timedOut: boolean
+}
+
 /** Asks for the tags of the files and checks that the answer is about exactly them. */
 async function readChecked(
   files: readonly FoundFile[],
   readTags: ScanDependencies['readTags']
 ): Promise<FileTags[]> {
-  const tags = await readTags(files.map((file) => file.diskPath))
-  const matches =
-    tags.length === files.length &&
-    files.every((file, index) => tags[index]?.path === file.diskPath)
-  if (!matches) throw new AnswerMismatch()
-  return tags
+  const entries = await readTags(files.map((file) => file.diskPath))
+  if (entries.length !== files.length) throw new AnswerMismatch()
+  return files.map((file, index) => {
+    // An entry that does not fit the contract (a value out of range, tag text that is
+    // not one clean line) makes that one file unreadable, not the whole batch.
+    const parsed = fileTagsSchema.safeParse(entries[index])
+    if (!parsed.success) return unreadableTags(file.diskPath)
+    if (parsed.data.path !== file.diskPath) throw new AnswerMismatch()
+    return parsed.data
+  })
 }
 
 /**
@@ -224,41 +236,33 @@ async function readChecked(
  * one, so that a single file the sidecar cannot cope with is recorded as unreadable
  * instead of stopping this scan and every later one at the same place.
  *
- * A sidecar that is not running fails every call the same way. That is told apart
- * from bad files by how the single reads go: several failures in a row, or a crash
- * with no file read at all, end the scan with the sidecar's error.
+ * After a single file fails, the sidecar is asked whether it is alive. If it is, the
+ * file was the cause. If it is not, the scan ends with the sidecar's error.
  */
 async function readBatch(
   batch: readonly FoundFile[],
-  readTags: ScanDependencies['readTags'],
+  dependencies: Pick<ScanDependencies, 'readTags' | 'isEngineAlive'>,
   stillReachable: () => Promise<boolean>
-): Promise<FileTags[]> {
+): Promise<ReadFile[]> {
+  const { readTags, isEngineAlive } = dependencies
   try {
-    return await readChecked(batch, readTags)
+    return (await readChecked(batch, readTags)).map((tags) => ({ tags, timedOut: false }))
   } catch (error) {
     if (!isBatchFailure(error) || !(await stillReachable())) throw error
     logger.warn(`Scan: a batch failed (${error.code}); reading its files one by one`)
   }
 
-  const tags: FileTags[] = []
-  let failuresInARow = 0
-  let anyRead = false
-  let lastFailure: AppError | null = null
+  const read: ReadFile[] = []
   for (const file of batch) {
     try {
-      const [single] = await readChecked([file], readTags)
-      tags.push(single ?? unreadableTags(file.diskPath))
-      failuresInARow = 0
-      anyRead = true
+      const [tags] = await readChecked([file], readTags)
+      read.push({ tags: tags ?? unreadableTags(file.diskPath), timedOut: false })
     } catch (error) {
-      failuresInARow += 1
-      if (!isBatchFailure(error) || failuresInARow >= MAX_SINGLE_FAILURES_IN_A_ROW) throw error
-      lastFailure = error
-      tags.push(unreadableTags(file.diskPath))
+      if (!isBatchFailure(error) || !(await isEngineAlive())) throw error
+      read.push({ tags: unreadableTags(file.diskPath), timedOut: error.code === 'TIMEOUT' })
     }
   }
-  if (!anyRead && lastFailure?.code === 'PYTHON_CRASHED') throw lastFailure
-  return tags
+  return read
 }
 
 function tagFields(tags: FileTags): TrackChanges {
@@ -280,7 +284,7 @@ function fileFields(file: FoundFile): TrackChanges {
 }
 
 async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSummary>> {
-  const { db, environment, readTags, listMountedVolumes, onProgress } = dependencies
+  const { db, environment, listMountedVolumes, onProgress } = dependencies
   const resolvePath = dependencies.resolvePath ?? realpath
   const fail = (code: ErrorCode): Result<ScanSummary> => ({ ok: false, code })
 
@@ -337,7 +341,8 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
         known.fileSizeBytes === file.sizeBytes &&
         known.fileMtimeMs === file.mtimeMs &&
         // A file that could not be read is tried again: the cause may have been the
-        // drive or the reader, not the file.
+        // drive or the reader, not the file. A file that ran out of time (`skipped`)
+        // is not, until it changes: trying it costs minutes on every scan.
         known.stageStatus.scan !== 'failed'
       if (!same) {
         toRead.push(file)
@@ -361,14 +366,17 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     for (let start = 0; start < toRead.length; start += TAG_BATCH_SIZE) {
       onProgress?.({ phase: 'reading', done: start, total: toRead.length })
       const batch = toRead.slice(start, start + TAG_BATCH_SIZE)
-      const tags = await readBatch(batch, readTags, stillReachable)
+      const read = await readBatch(batch, dependencies, stillReachable)
 
       const inserts: NewTrack[] = []
       const updates: { id: number; changes: TrackChanges }[] = []
       batch.forEach((file, index) => {
-        const fileTags = tags[index] ?? unreadableTags(file.diskPath)
+        const { tags: fileTags, timedOut } = read[index] ?? {
+          tags: unreadableTags(file.diskPath),
+          timedOut: false
+        }
         if (!fileTags.readable) summary.unreadable += 1
-        const scanStatus = fileTags.readable ? ('done' as const) : ('failed' as const)
+        const scanStatus = fileTags.readable ? 'done' : timedOut ? 'skipped' : 'failed'
         const known = stored.get(file.trackPath)
         if (known === undefined) {
           inserts.push({
@@ -379,6 +387,13 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
             ...tagFields(fileTags),
             stageStatus: { scan: scanStatus }
           })
+          return
+        }
+        const sameFile =
+          known.fileSizeBytes === file.sizeBytes && known.fileMtimeMs === file.mtimeMs
+        if (sameFile && known.stageStatus.scan === scanStatus && !known.fileMissing) {
+          // Tried again and still unreadable: nothing about the track has changed.
+          summary.unchanged += 1
           return
         }
         updates.push({

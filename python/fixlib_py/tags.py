@@ -10,9 +10,9 @@ import logging
 import os
 import re
 import stat
-from typing import Any
+from collections import Counter
+from typing import Any, BinaryIO
 
-import mutagen
 from mutagen.aiff import AIFF
 from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
@@ -26,12 +26,23 @@ MAX_PATHS = 50
 # With this limit the largest possible answer for one batch stays below the 1 MiB
 # line limit of the bridge, also when every character is written as an escape.
 MAX_TEXT_LENGTH = 300
-# A tag is read into memory whole, covers included. Anything larger than this is
-# not a tag a DJ tool wrote, and the file is reported as unreadable.
-MAX_ID3_SIZE = 16 * 1024 * 1024
+# The most a parser may read in one go. A tag is read into memory whole, covers
+# included, and so is a WAV or AIFF chunk; a file that asks for more than this was
+# not written by a DJ tool, and is reported as unreadable.
+MAX_READ_SIZE = 16 * 1024 * 1024
 
-# The formats the app handles. Anything else mutagen recognises is not a library track.
-_SUPPORTED = (MP3, WAVE, AIFF)
+# The parser is chosen by the file name, never by trying every format mutagen knows:
+# the content of a file must not decide which code reads it.
+_PARSERS: dict[str, type[MP3] | type[WAVE] | type[AIFF]] = {
+    ".mp3": MP3,
+    ".wav": WAVE,
+    ".aif": AIFF,
+    ".aiff": AIFF,
+}
+# Opens nothing that is reached through a link, in any part of the path. The app
+# only sends paths under a library root that has its links resolved already.
+# The two flags cannot be combined; the wider one is used where the system has it.
+_NO_LINKS = getattr(os, "O_NOFOLLOW_ANY", os.O_NOFOLLOW)
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 # Invisible characters that change the reading direction, so text cannot be made to
 # look like something else. Joiners stay: emoji and some scripts need them.
@@ -68,19 +79,32 @@ def _positive_int(value: object, scale: float = 1.0) -> int | None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     try:
-        scaled = value * scale
-    except OverflowError:
-        # A broken header can claim a number too large for a float.
+        rounded = round(value * scale)
+    except (OverflowError, ValueError):
+        # A broken header can claim a number too large for a float, or none at all.
         return None
-    # Also false for NaN and infinity.
-    return round(scaled) if 0 < scaled < 2**31 else None
+    # Checked after rounding: a few samples of audio must not become a duration of 0.
+    return rounded if 0 < rounded < 2**31 else None
 
 
-def _id3_size(header: bytes) -> int:
-    """The size an ID3v2 header claims for its tag, or 0 when there is no such header."""
-    if len(header) < 10 or header[:3] != b"ID3" or any(byte & 0x80 for byte in header[6:10]):
-        return 0
-    return (header[6] << 21) | (header[7] << 14) | (header[8] << 7) | header[9]
+class _BoundedReader:
+    """A file as mutagen sees it, on which no single read may exceed MAX_READ_SIZE."""
+
+    def __init__(self, file: BinaryIO, size: int) -> None:
+        self._file = file
+        self._size = size
+
+    def read(self, size: int | None = -1) -> bytes:
+        wanted = self._size - self._file.tell() if size is None or size < 0 else size
+        if wanted > MAX_READ_SIZE:
+            raise ValueError("the file asks for more than may be read at once")
+        return self._file.read(wanted)
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        return self._file.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._file.tell()
 
 
 def _unreadable(path: str) -> dict[str, Any]:
@@ -100,18 +124,17 @@ def _unreadable(path: str) -> dict[str, Any]:
 
 
 def _parse(path: str) -> dict[str, Any]:
+    parser = _PARSERS.get(os.path.splitext(path)[1].lower())
+    if parser is None:
+        return _unreadable(path)
     # Opened here, not by mutagen: a link is never followed, and something that is
     # not a regular file (a pipe would block forever) is never read.
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | _NO_LINKS)
     with os.fdopen(descriptor, "rb") as file:
-        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+        state = os.fstat(file.fileno())
+        if not stat.S_ISREG(state.st_mode):
             return _unreadable(path)
-        if _id3_size(file.read(10)) > MAX_ID3_SIZE:
-            return _unreadable(path)
-        file.seek(0)
-        audio = mutagen.File(file)
-        if not isinstance(audio, _SUPPORTED):
-            return _unreadable(path)
+        audio = parser(_BoundedReader(file, state.st_size))
 
         result = _unreadable(path)
         result["readable"] = True
@@ -129,14 +152,18 @@ def _parse(path: str) -> dict[str, Any]:
         return result
 
 
-def read_file_tags(path: str) -> dict[str, Any]:
-    """The tags of one file. Never raises: whatever goes wrong, the file is unreadable."""
+def read_file_tags(path: str, failures: Counter[str] | None = None) -> dict[str, Any]:
+    """The tags of one file. Never raises: whatever goes wrong, the file is unreadable.
+
+    The kind of each failure is counted in `failures`, for the caller to log once.
+    """
     try:
         return _parse(path)
     except Exception as error:
         # A damaged or hostile file can fail anywhere, in mutagen or while its values
-        # are read. Only the kind of error is logged: its text can hold the file name.
-        logger.warning("tags.read: a file could not be read (%s)", type(error).__name__)
+        # are read.
+        if failures is not None:
+            failures[type(error).__name__] += 1
         return _unreadable(path)
 
 
@@ -148,4 +175,16 @@ def read_tags(paths: list[str]) -> dict[str, list[dict[str, Any]]]:
     for path in paths:
         if not isinstance(path, str) or not os.path.isabs(path):
             raise ValueError("every path must be an absolute path")
-    return {"files": [read_file_tags(path) for path in paths]}
+    failures: Counter[str] = Counter()
+    files = [read_file_tags(path, failures) for path in paths]
+    if failures:
+        # One line per call, and only the kinds of error: the text of an error can
+        # hold a file name, and a folder of broken files must not fill the log.
+        kinds = ", ".join(f"{count} {name}" for name, count in sorted(failures.items()))
+        logger.warning(
+            "tags.read: %d of %d files could not be read (%s)",
+            sum(failures.values()),
+            len(paths),
+            kinds,
+        )
+    return {"files": files}
