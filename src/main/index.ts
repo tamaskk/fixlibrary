@@ -21,6 +21,7 @@ import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
 import { resolveToolLocations } from './services/binaries'
 import { readEnvFile } from './services/env-file'
+import { describeError } from './services/error-text'
 import { createFileOps } from './services/file-ops'
 import { keychainCipher } from './services/keychain'
 import { logger, startFileLogging } from './services/logger'
@@ -170,6 +171,7 @@ function registerLibraryAndPipeline(): void {
     environment,
     listMountedVolumes,
     onProgress: sendScanProgress,
+    isChangingFiles: () => orchestrator?.changingFiles() ?? false,
     readTags: async (paths) => {
       if (!pythonBridge) throw new AppError('PYTHON_CRASHED', 'the sidecar is not running')
       const { files } = await pythonBridge.call(
@@ -208,6 +210,7 @@ function registerLibraryAndPipeline(): void {
     listMountedVolumes
   })
 
+  let startupDone = false
   const stages = availableStages()
   // A mistake in the stages is a bug of this build: better to stop here than to run them.
   validateStages(stages)
@@ -226,6 +229,8 @@ function registerLibraryAndPipeline(): void {
     listMountedVolumes,
     mode: () => readSettings(db).library.mode,
     batchFiles,
+    // Until the startup work below is over, and during every scan.
+    libraryBusy: () => !startupDone || scanner.isRunning(),
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })
@@ -259,21 +264,24 @@ function registerLibraryAndPipeline(): void {
   void (async () => {
     try {
       await batchFiles.removeTempFiles()
-    } catch (error) {
-      logger.error('The temp files of interrupted writes could not be removed', error)
-    }
-    if (readSettings(db).library.rootFolder !== null) {
-      const result = await scanner.scan()
-      if (result.ok) {
-        const { found, added, updated, missing, unreadable } = result.value
-        logger.info(
-          `Startup scan: ${found} files, ${added} new, ${updated} changed, ${missing} missing, ${unreadable} unreadable`
-        )
-      } else {
-        logger.warn(`Startup scan did not finish: ${result.code}`)
+      if (readSettings(db).library.rootFolder !== null) {
+        const result = await scanner.scan()
+        if (result.ok) {
+          const { found, added, updated, missing, unreadable } = result.value
+          logger.info(
+            `Startup scan: ${found} files, ${added} new, ${updated} changed, ${missing} missing, ${unreadable} unreadable`
+          )
+        } else {
+          logger.warn(`Startup scan did not finish: ${result.code}`)
+        }
       }
+    } catch (error) {
+      logger.error(`The startup work on the library stopped: ${describeError(error)}`)
+    } finally {
+      // Whatever happened above, the interrupted run is taken up and the app is usable.
+      startupDone = true
+      takeUpRun()
     }
-    takeUpRun()
   })()
 }
 

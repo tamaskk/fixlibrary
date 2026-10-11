@@ -27,6 +27,7 @@ import {
   type NewJob
 } from '../db/jobs'
 import { getTrackById, getTracksByIds, type Track } from '../db/tracks'
+import { describeError } from '../services/error-text'
 import { logger } from '../services/logger'
 import { AppError, TRACK_ERROR_MESSAGES, type Result, type TrackError } from '@shared/errors'
 import {
@@ -61,6 +62,11 @@ export interface OrchestratorDependencies {
   mode: () => BatchMode
   /** How the apply phase changes files, and how a batch is undone. */
   batchFiles: BatchFiles
+  /**
+   * True while something else works on the files of the library, such as a scan or
+   * the cleanup at startup: no batch is applied or undone then.
+   */
+  libraryBusy?: () => boolean
   /** May be called very often; whoever passes it on limits how often. */
   onProgress?: (progress: RunProgress) => void
   /** True while jobs run or may start by themselves; the app must not sleep then. */
@@ -99,6 +105,8 @@ export interface Orchestrator {
    */
   shutdown: () => void
   progress: () => RunProgress | null
+  /** True while files of the library are being changed, or are about to be. */
+  changingFiles: () => boolean
   /** Resolves when no run is active any more; at once if there is none. */
   whenFinished: () => Promise<void>
 }
@@ -366,6 +374,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const done of waiters) done()
   }
 
+  // True while the apply phase is being prepared, a batch is being undone or old
+  // backups are being deleted: each takes time, and nothing else may start in between.
+  let busyWithFiles = false
+  // The deleting of older backups that is going on, or null.
+  let pruning: Promise<void> | null = null
+
   function endPhaseIfDone(): void {
     const active = run
     if (!active || active.unfinished > 0) return
@@ -379,9 +393,15 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     leave(active, status)
     if (status === 'applied') {
       // Only the last batch can be undone: the backups of the ones before it go.
-      void dependencies.batchFiles
+      // An apply or an undo that is asked for meanwhile waits for this to end.
+      pruning = dependencies.batchFiles
         .pruneOlderBackups(active.batchId)
-        .catch((error: unknown) => logger.error('Older backups could not be deleted', error))
+        .catch((error: unknown) =>
+          logger.error(`Older backups could not be deleted: ${describeError(error)}`)
+        )
+        .finally(() => {
+          pruning = null
+        })
     }
   }
 
@@ -576,9 +596,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     updateBusy()
   }
 
-  // True while the apply phase is being prepared or a batch is being undone: both
-  // take time, and nothing else may start in between.
-  let busyWithFiles = false
+  const libraryBusy = (): boolean => dependencies.libraryBusy?.() ?? false
 
   function isActive(): boolean {
     return run !== null || busyWithFiles || findActiveBatch(db) !== undefined
@@ -640,8 +658,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     },
 
     async applyBatch(batchId) {
+      await pruning
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
-      if (isActive()) return { ok: false, code: 'RUN_ACTIVE' }
+      if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
       const batch = getBatch(db, batchId)
       if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
 
@@ -660,6 +679,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         busyWithFiles = false
       }
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
+      // A scan may have started while the room was measured.
+      if (libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
 
       setBatchStatus(db, batchId, 'applying')
       logger.info(`Batch ${batchId}: the apply phase started`)
@@ -668,9 +689,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     },
 
     async undoLast() {
+      await pruning
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
       // Never while a batch is being worked on: its files are changing.
-      if (isActive()) return { ok: false, code: 'RUN_ACTIVE' }
+      if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
       busyWithFiles = true
       try {
         return await dependencies.batchFiles.undoLast()
@@ -771,6 +793,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       for (const done of waiters) done()
     },
 
+    changingFiles: () => busyWithFiles || pruning !== null || run?.phase === 'apply',
     progress: () => (run ? snapshot(run, currentState(run)) : null),
 
     whenFinished: () =>

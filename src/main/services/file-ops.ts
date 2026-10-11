@@ -1,28 +1,46 @@
 // The only code that copies, renames, overwrites or deletes a file of the library.
 // It knows nothing about batches or tracks: what may be done to which file, and
 // when, is decided by `pipeline/batch-files.ts`. This module makes sure that a
-// change either happens completely or not at all, and never outside its folders.
+// change either happens completely or not at all, never outside its folders, and
+// never over a file that is already there unless it was asked to replace exactly that.
+import { randomBytes } from 'crypto'
 import { constants } from 'fs'
 import {
   copyFile,
+  link,
   lstat,
   mkdir,
+  open,
   opendir,
   realpath,
   rename,
   rm,
   rmdir,
   stat,
-  statfs
+  statfs,
+  unlink
 } from 'fs/promises'
-import { basename, dirname, extname, isAbsolute, join, sep } from 'path'
+import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep } from 'path'
 import { AppError } from '@shared/errors'
+import { describeError } from './error-text'
 import { logger } from './logger'
 
-/** A file that is still being written carries this name: `.<name>.fixlib-tmp`. */
+/** A file that is still being written carries a name like `.<name>.<random>.fixlib-tmp`. */
 const TEMP_SUFFIX = '.fixlib-tmp'
+// The longest name a file may get, in UTF-16 units as APFS and exFAT count them: it
+// leaves room for ` (999)` and for the temp name of a later write.
+const MAX_NAME_LENGTH = 220
+// How much of a file's name its temp file carries; the rest is cut off.
+const MAX_TEMP_STEM_LENGTH = 200
 // After this many taken names something else is wrong than a name that is in use.
 const MAX_NAME_ATTEMPTS = 1000
+// The file systems of a Mac's drives never hold more in one name.
+const NAME_LIMIT = 255
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.aif', '.aiff']
+
+// Control characters, line and paragraph separators, and the invisible characters
+// that turn the reading direction around.
+const UNSAFE_NAME_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}؜‎‏‪-‮⁦-⁩]/u
 
 export interface FileOpsOptions {
   /**
@@ -36,9 +54,14 @@ export interface FileOps {
   /**
    * Copies a file to a path that must not exist yet, as a clone where the file
    * system can make one. The copy appears under its name only when it is complete
-   * and as large as the source.
+   * and as large as the source, and never in the place of another file.
    */
   copy: (from: string, to: string, signal?: AbortSignal) => Promise<void>
+  /**
+   * Makes `to` a byte-identical copy of `from`, replacing what is there, in one step.
+   * This is how a backup is put back.
+   */
+  restore: (from: string, to: string, signal?: AbortSignal) => Promise<void>
   /**
    * Replaces the content of `target` with what `write` puts into the temp file it
    * is given. `target` changes in one step, after `write` has succeeded; if `write`
@@ -50,11 +73,9 @@ export interface FileOps {
     signal?: AbortSignal
   ) => Promise<void>
   /**
-   * Makes `to` a byte-identical copy of `from`, replacing what is there, in one step.
-   * This is how a backup is put back.
+   * Renames a file. Never replaces another file: if the new name is taken, it fails,
+   * also when two renames to one name run at the same time. See `freeName`.
    */
-  restore: (from: string, to: string, signal?: AbortSignal) => Promise<void>
-  /** Renames a file. The new name must be free; see `freeName`. */
   move: (from: string, to: string) => Promise<void>
   /**
    * `path` if nothing is there, else the first of `name (2).ext`, `name (3).ext`, …
@@ -64,13 +85,21 @@ export interface FileOps {
   freeName: (path: string, ownPath?: string) => Promise<{ path: string; collided: boolean }>
   /** Deletes one file. Says whether there was one. Never a folder. */
   remove: (path: string) => Promise<boolean>
-  /** Deletes a folder if it is empty; does nothing otherwise. */
+  /** Deletes a folder if it is empty and is not one of the allowed folders themselves. */
   removeEmptyFolder: (path: string) => Promise<void>
+  /** Creates one of the allowed folders if it is not there. Refuses a link in its place. */
+  createRoot: (path: string) => Promise<void>
   exists: (path: string) => Promise<boolean>
   /** True when both paths name one file on disk, however they are spelled. */
   sameFile: (first: string, second: string) => Promise<boolean>
   /** True when `path` is `folder` or lies inside it, by what they are on disk. */
   isInside: (path: string, folder: string) => Promise<boolean>
+  /**
+   * Where `path` lies under `folder`, by what both are on disk: a root that is
+   * spelled in another letter case or Unicode form than the path still matches.
+   * Null when `path` is not inside `folder`.
+   */
+  relativeTo: (folder: string, path: string) => Promise<string | null>
   /** A value that is equal for two paths exactly when they are on the same volume. */
   volumeOf: (path: string) => Promise<string>
   sizeOf: (path: string) => Promise<number>
@@ -78,20 +107,41 @@ export interface FileOps {
   freeBytes: (path: string) => Promise<number>
   /**
    * Deletes the temp files that an interrupted write left under `root`. Returns how
-   * many. Links are not followed.
+   * many. Links are not followed, and other volumes mounted below are left alone.
    */
   removeTempFiles: (root: string) => Promise<number>
 }
 
 function tempPathOf(target: string): string {
-  return join(dirname(target), `.${basename(target)}${TEMP_SUFFIX}`)
+  // Unique, so two writes never share a temp file, and short enough for any name.
+  const stem = basename(target).slice(0, MAX_TEMP_STEM_LENGTH)
+  return join(dirname(target), `.${stem}.${randomBytes(4).toString('hex')}${TEMP_SUFFIX}`)
 }
 
 function isTempName(name: string): boolean {
   return name.startsWith('.') && name.endsWith(TEMP_SUFFIX) && name.length > TEMP_SUFFIX.length + 1
 }
 
-/** The folder as the disk names it, from its nearest ancestor that exists. */
+/**
+ * Why a name cannot be given to a file or a folder of the library, or null if it can.
+ * The text a name is built from (tags, lookups) is not to be trusted.
+ */
+export function unusableNameReason(name: string, kind: 'file' | 'folder'): string | null {
+  if (name.length === 0 || name === '.' || name === '..') return 'it is empty or a dot name'
+  if (name.length > MAX_NAME_LENGTH) return 'it is too long'
+  if (name.includes('/') || name.includes(':')) return 'it holds a path separator'
+  if (UNSAFE_NAME_CHARACTERS.test(name)) return 'it holds an invisible or control character'
+  // Hidden from the scanner, and a temp name would be deleted at the next start.
+  if (name.startsWith('.')) return 'it starts with a dot'
+  if (name.endsWith(' ') || name.endsWith('.')) return 'it ends with a space or a dot'
+  if (name !== name.normalize('NFC')) return 'it is not composed (NFC)'
+  if (kind === 'file' && !AUDIO_EXTENSIONS.includes(extname(name).toLowerCase())) {
+    return 'it is not an audio file name'
+  }
+  return null
+}
+
+/** The path as the disk names it, from its nearest ancestor that exists. */
 async function resolveExisting(path: string): Promise<string> {
   const missing: string[] = []
   for (let current = path; ; current = dirname(current)) {
@@ -117,24 +167,50 @@ function stoppedError(): AppError {
   return new AppError('WRITE_FAILED', 'the write was stopped')
 }
 
+function codeOf(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | null)?.code
+}
+
+/** True for a name that only differs in letter case or Unicode form from another. */
+function isRespelling(first: string, second: string): boolean {
+  const fold = (path: string): string => basename(path).normalize('NFC').toLowerCase()
+  return dirname(first) === dirname(second) && fold(first) === fold(second)
+}
+
 export function createFileOps(options: FileOpsOptions): FileOps {
+  /** The identities of the allowed folders that exist. */
+  async function rootIdentities(): Promise<Set<string>> {
+    const identities = new Set<string>()
+    for (const root of options.allowedRoots()) {
+      const identity = await identityOf(root)
+      if (identity !== null) identities.add(identity)
+    }
+    return identities
+  }
+
   /**
    * Throws unless `path` lies inside one of the allowed folders. Decided by what the
    * folders are on disk, not by how the path is spelled: a link in the path, `..`,
    * or another letter case cannot lead out.
    */
   async function assertAllowed(path: string): Promise<void> {
-    if (!isAbsolute(path)) throw new AppError('INVALID_INPUT', 'a file path must be absolute')
-    const parent = await resolveExisting(dirname(path))
-    for (const root of options.allowedRoots()) {
-      const rootIdentity = await identityOf(root)
-      if (rootIdentity === null) continue
-      for (let current = parent; ; current = dirname(current)) {
-        if ((await identityOf(current)) === rootIdentity) return
-        if (current === dirname(current)) break
-      }
+    if (!isAbsolute(path) || normalize(path) !== path) {
+      throw new AppError('INVALID_INPUT', 'a file path must be absolute and plain')
+    }
+    const roots = await rootIdentities()
+    for (let current = await resolveExisting(dirname(path)); ; current = dirname(current)) {
+      const identity = await identityOf(current)
+      if (identity !== null && roots.has(identity)) return
+      if (current === dirname(current)) break
     }
     throw new AppError('INVALID_INPUT', 'the path is outside the folders of the library')
+  }
+
+  /** A source that is copied must be a plain file: a link would bring in another file. */
+  async function assertRegularFile(path: string): Promise<number> {
+    const found = await lstat(path)
+    if (!found.isFile()) throw new AppError('WRITE_FAILED', 'the source is not a regular file')
+    return found.size
   }
 
   async function exists(path: string): Promise<boolean> {
@@ -146,10 +222,34 @@ export function createFileOps(options: FileOpsOptions): FileOps {
     }
   }
 
-  async function removeQuietly(path: string): Promise<void> {
-    await rm(path, { force: true }).catch((error: unknown) => {
-      logger.warn('A temp file could not be removed', error)
-    })
+  /** Makes sure what was written is on the disk before it gets its final name. */
+  async function flush(path: string): Promise<void> {
+    const handle = await open(path, 'r')
+    try {
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /**
+   * Gives `from` the name `to` only if nothing has that name. A hard link fails when
+   * the name is taken, in one step, so two writers cannot both win. Where the file
+   * system has no hard links (exFAT), the name is checked and the file renamed;
+   * callers that may collide take turns (see the lock in `pipeline/batch-files.ts`).
+   */
+  async function nameWithoutReplacing(from: string, to: string): Promise<void> {
+    try {
+      await link(from, to)
+    } catch (error) {
+      const code = codeOf(error)
+      if (code === 'EEXIST') throw new AppError('WRITE_FAILED', 'the name of a file is taken')
+      if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EOPNOTSUPP') throw error
+      if (await exists(to)) throw new AppError('WRITE_FAILED', 'the name of a file is taken')
+      await rename(from, to)
+      return
+    }
+    await unlink(from)
   }
 
   /** Writes through a temp file next to `target` and puts it in place in one step. */
@@ -161,22 +261,38 @@ export function createFileOps(options: FileOpsOptions): FileOps {
   ): Promise<void> {
     await assertAllowed(target)
     if (signal.aborted) throw stoppedError()
-    const temp = tempPathOf(target)
     await mkdir(dirname(target), { recursive: true })
-    // Left by a write that was interrupted earlier.
-    await rm(temp, { force: true })
+    // The folder may have been created just now, or swapped since the check.
+    await assertAllowed(target)
+    const temp = tempPathOf(target)
     try {
       await write(temp, signal)
       // Checked after the write and before the rename: once a write was told to stop,
       // nothing of it may appear under the final name.
       if (signal.aborted) throw stoppedError()
-      if (!mayOverwrite && (await exists(target))) {
-        throw new AppError('WRITE_FAILED', 'the target of a copy exists already')
-      }
-      await rename(temp, target)
+      await flush(temp)
+      if (mayOverwrite) await rename(temp, target)
+      else await nameWithoutReplacing(temp, target)
     } catch (error) {
-      await removeQuietly(temp)
+      await rm(temp, { force: true }).catch((cleanupError: unknown) => {
+        logger.warn(`A temp file could not be removed: ${describeError(cleanupError)}`)
+      })
       throw error
+    }
+  }
+
+  async function copyInto(temp: string, from: string, expected: number): Promise<void> {
+    try {
+      // A clone on APFS, which takes no time and no room.
+      await copyFile(from, temp, constants.COPYFILE_FICLONE_FORCE)
+    } catch {
+      // No clones on this file system (exFAT), or across two volumes: a plain copy.
+      await rm(temp, { force: true })
+      await copyFile(from, temp)
+    }
+    const copied = (await stat(temp)).size
+    if (copied !== expected) {
+      throw new AppError('WRITE_FAILED', `a copy has ${copied} bytes instead of ${expected}`)
     }
   }
 
@@ -184,59 +300,47 @@ export function createFileOps(options: FileOpsOptions): FileOps {
     async copy(from, to, signal = new AbortController().signal) {
       await assertAllowed(from)
       await assertAllowed(to)
-      if (await exists(to))
-        throw new AppError('WRITE_FAILED', 'the target of a copy exists already')
-      const expected = (await stat(from)).size
-      await writeThroughTemp(
-        to,
-        async (temp) => {
-          // A clone on APFS, which takes no time and no room; a plain copy elsewhere.
-          await copyFile(from, temp, constants.COPYFILE_FICLONE)
-          const copied = (await stat(temp)).size
-          if (copied !== expected) {
-            throw new AppError('WRITE_FAILED', `a copy has ${copied} bytes instead of ${expected}`)
-          }
-        },
-        signal,
-        false
-      )
+      const expected = await assertRegularFile(from)
+      await writeThroughTemp(to, (temp) => copyInto(temp, from, expected), signal, false)
+    },
+
+    async restore(from, to, signal = new AbortController().signal) {
+      await assertAllowed(from)
+      const expected = await assertRegularFile(from)
+      await writeThroughTemp(to, (temp) => copyInto(temp, from, expected), signal, true)
     },
 
     replace: (target, write, signal = new AbortController().signal) =>
       writeThroughTemp(target, write, signal, true),
 
-    async restore(from, to, signal = new AbortController().signal) {
-      await assertAllowed(from)
-      const expected = (await stat(from)).size
-      await writeThroughTemp(
-        to,
-        async (temp) => {
-          await copyFile(from, temp, constants.COPYFILE_FICLONE)
-          const copied = (await stat(temp)).size
-          if (copied !== expected) {
-            throw new AppError('WRITE_FAILED', `a copy has ${copied} bytes instead of ${expected}`)
-          }
-        },
-        signal,
-        true
-      )
-    },
-
     async move(from, to) {
       await assertAllowed(from)
       await assertAllowed(to)
-      // The same file under another spelling (letter case) may be renamed onto itself.
-      if ((await exists(to)) && (await identityOf(to)) !== (await identityOf(from))) {
-        throw new AppError('WRITE_FAILED', 'the new name of a file is taken')
-      }
+      if (to === from) return
       await mkdir(dirname(to), { recursive: true })
-      await rename(from, to)
+      await assertAllowed(to)
+      // The same file under another letter case or Unicode form: where the disk
+      // ignores that, the new name "exists" already and is the file itself.
+      if (isRespelling(from, to) && (await identityOf(to)) === (await identityOf(from))) {
+        await rename(from, to)
+        return
+      }
+      await nameWithoutReplacing(from, to)
     },
 
     async freeName(path, ownPath) {
       const own = ownPath === undefined ? null : await identityOf(ownPath)
-      const isFree = async (candidate: string): Promise<boolean> =>
-        !(await exists(candidate)) || (own !== null && (await identityOf(candidate)) === own)
+      const isFree = async (candidate: string): Promise<boolean> => {
+        // A name the file system would refuse is not free, whatever `lstat` says.
+        if (basename(candidate).length > NAME_LIMIT) return false
+        if (!(await exists(candidate))) return true
+        return (
+          own !== null &&
+          ownPath !== undefined &&
+          isRespelling(ownPath, candidate) &&
+          (await identityOf(candidate)) === own
+        )
+      }
       if (await isFree(path)) return { path, collided: false }
       const extension = extname(path)
       const stem = path.slice(0, path.length - extension.length)
@@ -264,8 +368,22 @@ export function createFileOps(options: FileOpsOptions): FileOps {
 
     async removeEmptyFolder(path) {
       await assertAllowed(join(path, 'x'))
+      const identity = await identityOf(path)
+      // The library, its clean copy and the backup folder stay, empty or not.
+      if (identity === null || (await rootIdentities()).has(identity)) return
       // Fails for a folder that holds anything, which is the point.
       await rmdir(path).catch(() => {})
+    },
+
+    async createRoot(path) {
+      if (!options.allowedRoots().includes(path)) {
+        throw new AppError('INVALID_INPUT', 'only a folder of the library may be created')
+      }
+      await mkdir(path, { recursive: true })
+      // A link in its place would send every file written here somewhere else.
+      if (!(await lstat(path)).isDirectory()) {
+        throw new AppError('WRITE_FAILED', 'a folder of the library is not a folder')
+      }
     },
 
     exists,
@@ -284,9 +402,15 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       }
     },
 
+    async relativeTo(folder, path) {
+      const part = relative(await resolveExisting(folder), await resolveExisting(path))
+      const outside =
+        part === '' || part === '..' || part.startsWith(`..${sep}`) || isAbsolute(part)
+      return outside ? null : part
+    },
+
     async volumeOf(path) {
-      const folder = await resolveExisting(path)
-      for (let current = folder; ; current = dirname(current)) {
+      for (let current = await resolveExisting(path); ; current = dirname(current)) {
         try {
           return String((await stat(current, { bigint: true })).dev)
         } catch (error) {
@@ -298,8 +422,7 @@ export function createFileOps(options: FileOpsOptions): FileOps {
     sizeOf: async (path) => (await stat(path)).size,
 
     async freeBytes(path) {
-      const folder = await resolveExisting(path)
-      for (let current = folder; ; current = dirname(current)) {
+      for (let current = await resolveExisting(path); ; current = dirname(current)) {
         try {
           const { bavail, bsize } = await statfs(current)
           return bavail * bsize
@@ -311,27 +434,34 @@ export function createFileOps(options: FileOpsOptions): FileOps {
 
     async removeTempFiles(root) {
       await assertAllowed(join(root, 'x'))
+      let rootState
+      try {
+        rootState = await lstat(root)
+      } catch {
+        // Not there: a drive that is away, or a folder that was never created.
+        return 0
+      }
+      // A link in the place of the folder is not walked: it could lead anywhere.
+      if (!rootState.isDirectory()) return 0
+
       let removed = 0
       const pending = [root]
       for (let folder = pending.pop(); folder !== undefined; folder = pending.pop()) {
-        let entries
         try {
-          entries = await opendir(folder)
-        } catch {
-          // Not there (a drive that is away) or not readable: nothing to clean here.
-          continue
-        }
-        try {
-          for await (const entry of entries) {
+          // Not into a folder that was swapped for a link since it was listed, and
+          // not onto another volume that is mounted below the library.
+          const state = await lstat(folder)
+          if (!state.isDirectory() || state.dev !== rootState.dev) continue
+          for await (const entry of await opendir(folder)) {
             const path = `${folder}${sep}${entry.name}`
             if (entry.isDirectory()) pending.push(path)
             else if (entry.isFile() && isTempName(entry.name)) {
-              await removeQuietly(path)
+              await rm(path)
               removed += 1
             }
           }
         } catch (error) {
-          logger.warn('A folder could not be searched for temp files', error)
+          logger.warn(`A folder could not be cleaned of temp files: ${describeError(error)}`)
         }
       }
       return removed

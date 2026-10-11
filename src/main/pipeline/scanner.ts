@@ -15,12 +15,12 @@ import {
   type TrackChanges,
   type TrackFileState
 } from '../db/tracks'
+import { describeError } from '../services/error-text'
 import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
 import { AppError, type ErrorCode, type Result } from '@shared/errors'
 import type { ScanProgress, ScanSummary } from '@shared/library'
 import { fileTagsSchema, TAG_BATCH_SIZE, type FileTags } from '@shared/rpc'
-import { toOneLine } from '@shared/text'
 import {
   isUnsuitableLibraryRoot,
   libraryFoldersOverlap,
@@ -40,7 +40,6 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, AudioFormat>> = {
 
 // The walk reports how far it is after this many files, so a slow drive shows progress.
 const WALK_PROGRESS_STEP = 200
-const MAX_LOGGED_ERROR_LENGTH = 500
 
 // Failures of the sidecar that one bad file in a batch can cause.
 const BATCH_FAILURE_CODES: readonly ErrorCode[] = ['PYTHON_ERROR', 'PYTHON_CRASHED', 'TIMEOUT']
@@ -60,6 +59,11 @@ export interface ScanDependencies {
   isEngineAlive: () => Promise<boolean>
   listMountedVolumes: () => ReadonlySet<string>
   onProgress?: (progress: ScanProgress) => void
+  /**
+   * True while a batch changes files of the library. No scan starts then: it would
+   * see files half renamed, and take them for missing tracks and new ones.
+   */
+  isChangingFiles?: () => boolean
   /** The path with its links resolved. Replaced in tests that need a path on a volume. */
   resolvePath?: (path: string) => Promise<string>
 }
@@ -86,15 +90,6 @@ interface WalkResult {
   files: FoundFile[]
   /** False when something could not be looked at, so files may exist that were not seen. */
   complete: boolean
-}
-
-/**
- * An error as one line of the app's own making. A file name may hold a line break
- * or text that looks like a log line, and a raw error carries the name in its stack.
- */
-function describeError(error: unknown): string {
-  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-  return toOneLine(text, MAX_LOGGED_ERROR_LENGTH)
 }
 
 /** Hidden entries: `._*` AppleDouble files, `.Trashes`, `.Spotlight-V100`, `.fseventsd`, … */
@@ -459,6 +454,9 @@ export function createLibraryScanner(dependencies: ScanDependencies): LibrarySca
   let running: Promise<Result<ScanSummary>> | null = null
   return {
     scan() {
+      if (running === null && dependencies.isChangingFiles?.()) {
+        return Promise.resolve({ ok: false, code: 'RUN_ACTIVE' })
+      }
       running ??= runScan(dependencies)
         .catch((error: unknown): Result<ScanSummary> => {
           logger.error(`The library scan failed: ${describeError(error)}`)

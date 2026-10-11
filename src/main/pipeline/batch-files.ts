@@ -1,19 +1,23 @@
 // The rules for changing the files of a batch: what is saved before the first change,
 // where the work happens in each mode, and how a batch is undone. The changes
 // themselves are made by `services/file-ops.ts`.
-import { basename, dirname, extname, join, relative } from 'path'
+import { basename, dirname, extname, join, sep } from 'path'
 import {
   deleteBackup,
+  deleteCreatedFile,
   deleteCreatedFiles,
-  deleteCreatedFilesOfOtherBatches,
   getBackup,
   insertBackup,
   listBackups,
-  listBackupsOfOtherBatches,
+  listBackupsOfOlderBatches,
   listCreatedFiles,
-  recordCreatedFile
+  listCreatedFilesOfTrack,
+  listOlderBatchesWithCreatedFiles,
+  recordCreatedFile,
+  type Backup
 } from '../db/backups'
 import {
+  cancelPreviewBatches,
   findLastWrittenBatch,
   getBatch,
   listBatchItemsBefore,
@@ -22,8 +26,18 @@ import {
   type BatchMode
 } from '../db/batches'
 import type { AppDatabase } from '../db/connection'
-import { getTrackById, restoreTrack, updateTrack, type Track } from '../db/tracks'
-import type { FileOps } from '../services/file-ops'
+import {
+  findTrackIdByPath,
+  getTrackById,
+  parseTrackSnapshot,
+  pathOfSnapshot,
+  restoreTrack,
+  updateTrack,
+  type Track,
+  type TrackSnapshot
+} from '../db/tracks'
+import { describeError } from '../services/error-text'
+import { unusableNameReason, type FileOps } from '../services/file-ops'
 import { logger } from '../services/logger'
 import { AppError, type Result } from '@shared/errors'
 import type { SpaceCheck } from '@shared/file-ops'
@@ -52,7 +66,7 @@ export interface TrackFiles {
   /**
    * Renames or moves the file, inside the folder the work happens in. If the name
    * is taken, the file gets ` (2)`, ` (3)`, …; `collided` says so. Returns where the
-   * file is now.
+   * file is now. The name must be one a library file may have.
    */
   move: (to: string) => Promise<{ path: string; collided: boolean }>
   /**
@@ -84,14 +98,51 @@ export interface BatchFiles {
   lastUndoable: () => number | null
   /** Puts the files and the tracks of the last batch that wrote back to what they were. */
   undoLast: () => Promise<Result<UndoSummary>>
-  /** Once a batch is applied, the backups of every earlier batch are deleted. */
+  /**
+   * Once a batch that wrote files is applied, the backups of the batches before it
+   * are deleted. Does nothing for a batch that wrote no file: the last batch that
+   * did must stay undoable.
+   */
   pruneOlderBackups: (keepBatchId: number) => Promise<void>
   /** Deletes what interrupted writes left in the folders of the library. */
   removeTempFiles: () => Promise<number>
 }
 
+/** Lets pieces of work that must not overlap take turns. */
+function createLock(): <T>(work: () => Promise<T>) => Promise<T> {
+  let last: Promise<unknown> = Promise.resolve()
+  return (work) => {
+    const run = last.then(work, work)
+    last = run.catch(() => {})
+    return run
+  }
+}
+
+/** What undo will do for one track, decided before anything is changed. */
+interface UndoPlan {
+  trackId: number
+  snapshot: TrackSnapshot
+  /** The backup to put back, or null for a track the batch only made a copy of. */
+  backup: Backup | null
+  /** Where the track's file is now, as the database says. */
+  currentPath: string
+  /** Where the track's file will be after the undo. */
+  restoredPath: string
+}
+
 export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFiles {
   const { db, fileOps, folders, listMountedVolumes } = dependencies
+
+  // Picking a free name and taking it are two steps: two tracks that want the same
+  // name must not both see it free. Every name is taken under this lock.
+  const withNames = createLock()
+  // The stages of one track take turns at its file.
+  const trackLocks = new Map<number, ReturnType<typeof createLock>>()
+  const withTrack = <T>(trackId: number, work: () => Promise<T>): Promise<T> => {
+    const lock = trackLocks.get(trackId) ?? createLock()
+    trackLocks.set(trackId, lock)
+    return lock(work)
+  }
 
   function readTrack(trackId: number): Track {
     const track = getTrackById(db, trackId, listMountedVolumes())
@@ -110,6 +161,16 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     return cleanLibraryFolder !== null && (await fileOps.isInside(path, cleanLibraryFolder))
   }
 
+  /** True when the path is in the library or in its clean copy, where tracks live. */
+  async function isTrackPlace(path: string): Promise<boolean> {
+    const { libraryRoot, cleanLibraryFolder, backupFolder } = folders()
+    if (backupFolder !== null && (await fileOps.isInside(path, backupFolder))) return false
+    for (const root of [libraryRoot, cleanLibraryFolder]) {
+      if (root !== null && (await fileOps.isInside(path, root))) return true
+    }
+    return false
+  }
+
   /**
    * After a crash the database may still name a file that was already renamed: the
    * new name is written down before the rename, the track after it. If the file is
@@ -119,8 +180,8 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   async function reconcile(batchId: number, track: Track): Promise<Track> {
     if (await fileOps.exists(track.path)) return track
     const candidates: string[] = []
-    for (const file of listCreatedFiles(db, batchId)) {
-      if (file.trackId === track.id && (await fileOps.exists(file.path))) candidates.push(file.path)
+    for (const file of listCreatedFilesOfTrack(db, batchId, track.id)) {
+      if (await fileOps.exists(file.path)) candidates.push(file.path)
     }
     const [found] = candidates
     if (candidates.length !== 1 || found === undefined) {
@@ -133,8 +194,17 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
 
   /** Saves the file as it is, before this batch changes it for the first time. */
   async function backUp(batchId: number, track: Track, signal: AbortSignal): Promise<void> {
-    if (getBackup(db, batchId, track.id)) return
+    const recorded = getBackup(db, batchId, track.id)
+    if (recorded) {
+      // The file may have been changed since: without its backup it must not be
+      // changed any further.
+      if (!(await fileOps.exists(recorded.backupPath))) {
+        throw new AppError('WRITE_FAILED', 'the backup of the track is gone')
+      }
+      return
+    }
     const folder = needFolder(folders().backupFolder, 'backup')
+    await fileOps.createRoot(folder)
     const backupPath = join(folder, String(batchId), `${track.id}${extname(track.path)}`)
     // A file without its record is from a run that stopped between the two. The
     // record comes before any change, so the file of the track is still untouched:
@@ -152,28 +222,39 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   ): Promise<string> {
     const { libraryRoot } = folders()
     const cleanFolder = needFolder(folders().cleanLibraryFolder, 'clean library')
-    // The same place under the clean library as under the library.
-    const inLibrary = libraryRoot !== null && (await fileOps.isInside(track.path, libraryRoot))
-    const wanted = join(
-      cleanFolder,
-      inLibrary && libraryRoot !== null ? relative(libraryRoot, track.path) : basename(track.path)
-    )
+    await fileOps.createRoot(cleanFolder)
+    // The same place under the clean library as under the library. Found by what
+    // the folders are on disk: the root and the track may be spelled differently.
+    const inLibrary =
+      libraryRoot === null ? null : await fileOps.relativeTo(libraryRoot, track.path)
+    const wanted = join(cleanFolder, inLibrary ?? basename(track.path))
+    if (!(await fileOps.isInside(wanted, cleanFolder))) {
+      throw new AppError('WRITE_FAILED', 'the copy of a track would land outside the clean library')
+    }
 
     // A copy this batch made already, by a run that stopped before the track was
     // told about it: nothing has changed it yet, so it is taken as it is.
     const size = await fileOps.sizeOf(track.path)
-    for (const file of listCreatedFiles(db, batchId)) {
-      if (file.trackId !== track.id || !(await fileOps.exists(file.path))) continue
+    for (const file of listCreatedFilesOfTrack(db, batchId, track.id)) {
+      if (!(await fileOps.exists(file.path))) continue
       if ((await fileOps.sizeOf(file.path)) !== size) continue
       updateTrack(db, track.id, { path: file.path })
       return file.path
     }
 
-    const { path } = await fileOps.freeName(wanted)
-    recordCreatedFile(db, { batchId, trackId: track.id, path })
-    await fileOps.copy(track.path, path, signal)
-    updateTrack(db, track.id, { path })
-    return path
+    return withNames(async () => {
+      const { path } = await fileOps.freeName(wanted)
+      recordCreatedFile(db, { batchId, trackId: track.id, path })
+      try {
+        await fileOps.copy(track.path, path, signal)
+      } catch (error) {
+        // Not created after all: undo must not take a file at this path for ours.
+        deleteCreatedFile(db, batchId, path)
+        throw error
+      }
+      updateTrack(db, track.id, { path })
+      return path
+    })
   }
 
   /**
@@ -191,9 +272,10 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     if (batch.mode === 'clean_library' && !(await isCleanCopy(track.path))) {
       return copyToCleanLibrary(batch.id, track, signal)
     }
-    const createdHere = listCreatedFiles(db, batch.id).some((file) => file.trackId === trackId)
-    // A file this batch created itself needs no backup: undo deletes it.
-    if (!createdHere) await backUp(batch.id, track, signal)
+    // A file this batch created itself needs no backup: undo deletes it. Unless the
+    // batch backed the track up before it renamed it, which is then checked again.
+    const createdHere = listCreatedFilesOfTrack(db, batch.id, trackId).length > 0
+    if (!createdHere || getBackup(db, batch.id, trackId)) await backUp(batch.id, track, signal)
     return track.path
   }
 
@@ -205,6 +287,32 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     throw new AppError('INVALID_INPUT', 'the file is in no folder of the library')
   }
 
+  /** Throws unless every new part of the path is a name a library file may have. */
+  async function assertUsableTarget(root: string, to: string): Promise<void> {
+    const inRoot = await fileOps.relativeTo(root, to)
+    if (inRoot === null) {
+      throw new AppError('INVALID_INPUT', 'a file may only be moved inside its library')
+    }
+    const parts = inRoot.split(sep)
+    parts.forEach((part, index) => {
+      const reason = unusableNameReason(part, index === parts.length - 1 ? 'file' : 'folder')
+      if (reason !== null) throw new AppError('INVALID_INPUT', `a name is not usable: ${reason}`)
+    })
+  }
+
+  /**
+   * Removes the folders a deleted file leaves empty, from its own upward. Stops at
+   * the first one that holds anything; the folders of the library themselves stay.
+   */
+  async function removeEmptyFoldersAbove(path: string): Promise<void> {
+    let folder = dirname(path)
+    for (let depth = 0; depth < 64; depth += 1) {
+      await fileOps.removeEmptyFolder(folder)
+      if (await fileOps.exists(folder)) return
+      folder = dirname(folder)
+    }
+  }
+
   /** The tracks of a batch that the apply phase will write. */
   function writableTracks(batchId: number): Track[] {
     const mounted = listMountedVolumes()
@@ -214,35 +322,147 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
       .filter((track): track is Track => track !== undefined)
   }
 
+  /**
+   * Works out what undo has to do, and checks all of it, before anything changes.
+   * Returns null when the records of the batch cannot be trusted or acted on.
+   */
+  async function planUndo(batchId: number): Promise<UndoPlan[] | null> {
+    const { backupFolder } = folders()
+    const backups = new Map<number, Backup>()
+    for (const backup of listBackups(db, batchId)) {
+      if (backup.trackId !== null) backups.set(backup.trackId, backup)
+    }
+    const touched = new Set<number>(backups.keys())
+    for (const file of listCreatedFiles(db, batchId)) {
+      if (file.trackId !== null) touched.add(file.trackId)
+    }
+
+    const refuse = (why: string): null => {
+      logger.error(`Undo of batch ${batchId} refused: ${why}`)
+      return null
+    }
+    const found: (Omit<UndoPlan, 'restoredPath'> & { wanted: string })[] = []
+    for (const item of listBatchItemsBefore(db, batchId)) {
+      // Only the tracks whose file the batch touched: another track of the batch
+      // may have changed since for reasons of its own, such as a rescan.
+      if (!touched.has(item.trackId)) continue
+      const snapshot = parseTrackSnapshot(item.before)
+      const snapshotPath = pathOfSnapshot(item.before)
+      if (snapshot === null || snapshotPath === null) {
+        return refuse(`the record of track ${item.trackId} is not readable`)
+      }
+      const track = getTrackById(db, item.trackId, listMountedVolumes())
+      if (!track) return refuse(`track ${item.trackId} is not in the library any more`)
+      // A file that was renamed just before the app stopped is found again first.
+      const current = await reconcile(batchId, track).catch(() => track)
+
+      const backup = backups.get(item.trackId) ?? null
+      if (backup !== null) {
+        // The records say what to copy over what: neither may point anywhere but
+        // from the backup folder into the library.
+        const fromBackups =
+          backupFolder !== null && (await fileOps.isInside(backup.backupPath, backupFolder))
+        if (!fromBackups) return refuse(`the backup of track ${item.trackId} is not a backup`)
+        if (!(await fileOps.exists(backup.backupPath))) {
+          return refuse(`the backup of track ${item.trackId} is gone`)
+        }
+      }
+      // Where the file was before the batch: the place it was backed up from, or,
+      // for a track the batch only copied, where the record of the batch says.
+      const wanted = backup?.originalPath ?? snapshotPath
+      if (!(await isTrackPlace(wanted))) {
+        return refuse(`the old place of track ${item.trackId} is outside the library`)
+      }
+      found.push({ trackId: item.trackId, snapshot, backup, currentPath: current.path, wanted })
+    }
+
+    // The files this undo deletes anyway: under a name the batch gave them, with the
+    // original safe in its backup and due back somewhere else. Their names are free
+    // for another track of the batch, as when two tracks swapped names.
+    const leaving = new Map<string, number>()
+    for (const each of found) {
+      if (each.backup === null || each.currentPath === each.wanted) continue
+      if (await fileOps.sameFile(each.currentPath, each.wanted)) continue
+      const created = listCreatedFilesOfTrack(db, batchId, each.trackId)
+      if (created.some((file) => file.path === each.currentPath)) {
+        leaving.set(each.currentPath, each.trackId)
+      }
+    }
+
+    const given = new Set<string>()
+    /** True when restoring a track's file to the path would take something away. */
+    const taken = async (
+      path: string,
+      plan: { trackId: number; currentPath: string }
+    ): Promise<boolean> => {
+      if (given.has(path)) return true
+      const owner = findTrackIdByPath(db, path)
+      if (owner === plan.trackId) return false
+      if (leaving.has(path)) return false
+      // Another track has the path, whether its file is there or not.
+      if (owner !== undefined) return true
+      if (!(await fileOps.exists(path))) return false
+      // The track's own file, changed where it was or renamed only in letter case.
+      return !(await fileOps.sameFile(path, plan.currentPath))
+    }
+
+    const plans: UndoPlan[] = []
+    for (const { wanted, ...plan } of found) {
+      let restoredPath = wanted
+      // A file is only ever put where nothing is lost by it: at its old path, or
+      // under the next free name beside it.
+      if (plan.backup !== null && (await taken(wanted, plan))) {
+        const extension = extname(wanted)
+        const stem = wanted.slice(0, wanted.length - extension.length)
+        let number = 2
+        restoredPath = `${stem} (${number})${extension}`
+        while (await taken(restoredPath, plan)) {
+          number += 1
+          if (number > 999) return refuse(`no free name for the file of track ${plan.trackId}`)
+          restoredPath = `${stem} (${number})${extension}`
+        }
+      }
+      given.add(restoredPath)
+      plans.push({ ...plan, restoredPath })
+    }
+    return plans
+  }
+
   return {
     forTrack(batch, trackId, signal) {
-      // One at a time: the stage of a track is the only one that works on its file.
       let prepared: Promise<string> | null = null
-      const workingPath = (): Promise<string> => (prepared ??= prepare(batch, trackId, signal))
+      const working = (): Promise<string> => (prepared ??= prepare(batch, trackId, signal))
 
       return {
-        workingPath,
+        workingPath: () => withTrack(trackId, working),
 
-        async move(to) {
-          const from = await workingPath()
-          const root = await workingRoot(from)
-          if (!(await fileOps.isInside(to, root))) {
-            throw new AppError('INVALID_INPUT', 'a file may only be moved inside its library')
-          }
-          const free = await fileOps.freeName(to, from)
-          if (free.path === from) return { path: from, collided: false }
-          // Written down first: if the app stops right after the rename, undo and the
-          // next run still know about the new name.
-          recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path })
-          await fileOps.move(from, free.path)
-          updateTrack(db, trackId, { path: free.path })
-          prepared = Promise.resolve(free.path)
-          return free
-        },
+        move: (to) =>
+          withTrack(trackId, async () => {
+            const from = await working()
+            const root = await workingRoot(from)
+            await assertUsableTarget(root, to)
+            return withNames(async () => {
+              const free = await fileOps.freeName(to, from)
+              if (free.path === from) return { path: from, collided: false }
+              // A stage that was told to stop renames nothing any more.
+              if (signal.aborted) throw new AppError('WRITE_FAILED', 'the move was stopped')
+              // Written down first: if the app stops right after the rename, undo and
+              // the next run still know about the new name.
+              recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path })
+              try {
+                await fileOps.move(from, free.path)
+              } catch (error) {
+                deleteCreatedFile(db, batch.id, free.path)
+                throw error
+              }
+              updateTrack(db, trackId, { path: free.path })
+              prepared = Promise.resolve(free.path)
+              return free
+            })
+          }),
 
-        async replaceContent(write) {
-          await fileOps.replace(await workingPath(), write, signal)
-        }
+        replaceContent: (write) =>
+          withTrack(trackId, async () => fileOps.replace(await working(), write, signal))
       }
     },
 
@@ -263,7 +483,8 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
         const target = copiesToClean ? cleanLibraryFolder : backupFolder
         // Without the folder the apply phase fails for the track; nothing is copied.
         if (target === null) continue
-        const size = track.fileSizeBytes ?? (await fileOps.sizeOf(track.path).catch(() => 0))
+        // Read from the disk: the stored size may be old, or not a size at all.
+        const size = Math.max(0, await fileOps.sizeOf(track.path).catch(() => 0))
         needed.set(target, (needed.get(target) ?? 0) + size)
       }
 
@@ -298,66 +519,84 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     async undoLast() {
       const batch = findLastWrittenBatch(db)
       if (!batch) return { ok: false, code: 'NOTHING_TO_UNDO' }
-      const backups = listBackups(db, batch.id)
-      const created = listCreatedFiles(db, batch.id)
 
       try {
-        // Checked before anything changes: a backup that is gone cannot be put back,
-        // and half an undo would be worse than none.
-        for (const backup of backups) {
-          if (!(await fileOps.exists(backup.backupPath))) {
-            logger.error(`Undo of batch ${batch.id}: the backup of track ${backup.trackId} is gone`)
-            return { ok: false, code: 'WRITE_FAILED' }
-          }
-        }
+        // Everything is decided and checked before the first file changes: half an
+        // undo would be worse than none.
+        const plans = await planUndo(batch.id)
+        if (plans === null) return { ok: false, code: 'WRITE_FAILED' }
 
-        for (const backup of backups) {
-          await fileOps.restore(backup.backupPath, backup.originalPath)
-        }
-
+        let restored = 0
         let removed = 0
-        for (const file of created) {
-          // A file that only got another letter case is the original itself, now
-          // restored: it must stay.
-          let isRestored = false
-          for (const backup of backups) {
-            if (await fileOps.sameFile(file.path, backup.originalPath)) isRestored = true
+        const createdBy = (trackId: number): string[] =>
+          listCreatedFilesOfTrack(db, batch.id, trackId).map((file) => file.path)
+        // First the files whose name another track of the batch gets back: restoring
+        // onto them and deleting them afterwards would delete what was restored.
+        const targets = new Set(plans.map((plan) => plan.restoredPath))
+        const gone = new Set<number>()
+        for (const plan of plans) {
+          if (plan.backup === null || plan.currentPath === plan.restoredPath) continue
+          if (!targets.has(plan.currentPath)) continue
+          if (!createdBy(plan.trackId).includes(plan.currentPath)) continue
+          if (await fileOps.remove(plan.currentPath)) removed += 1
+          gone.add(plan.trackId)
+        }
+        for (const plan of plans) {
+          if (plan.backup !== null) {
+            await fileOps.restore(plan.backup.backupPath, plan.restoredPath)
+            restored += 1
           }
-          if (isRestored) continue
-          if (await fileOps.remove(file.path)) removed += 1
-          await fileOps.removeEmptyFolder(dirname(file.path))
+          if (plan.currentPath === plan.restoredPath || gone.has(plan.trackId)) continue
+          if (await fileOps.sameFile(plan.currentPath, plan.restoredPath)) {
+            // Renamed only in letter case: the restored file is that file, and it
+            // gets its old spelling back.
+            await fileOps.move(plan.currentPath, plan.restoredPath)
+            continue
+          }
+          // The file the batch left behind: a copy in the clean library, or the file
+          // under its new name. Only what the batch wrote down as its own is deleted.
+          const created = createdBy(plan.trackId)
+          if (!created.includes(plan.currentPath)) continue
+          if (await fileOps.remove(plan.currentPath)) removed += 1
+          // Every folder the file passed through on its way, if it is empty now.
+          for (const path of created) await removeEmptyFoldersAbove(path)
         }
 
-        // Only the tracks whose file the batch touched: another track of the batch
-        // may have changed since for reasons of its own, such as a rescan.
-        const touched = new Set(
-          [
-            ...backups.map((backup) => backup.trackId),
-            ...created.map((file) => file.trackId)
-          ].filter((id): id is number => id !== null)
-        )
         db.transaction((tx) => {
-          for (const item of listBatchItemsBefore(tx, batch.id)) {
-            if (touched.has(item.trackId)) restoreTrack(tx, item.trackId, item.before)
+          // First out of each other's way: one track of the batch may get back the
+          // path another one has now, and a path belongs to one track at a time.
+          for (const plan of plans) {
+            updateTrack(tx, plan.trackId, { path: `/.fixlib-undo/${batch.id}/${plan.trackId}` })
+          }
+          for (const plan of plans) {
+            restoreTrack(tx, plan.trackId, plan.snapshot, plan.restoredPath)
           }
           deleteCreatedFiles(tx, batch.id)
           setBatchStatus(tx, batch.id, 'undone')
+          // What a batch proposed for the files as they were is of no use for the
+          // files as they are again.
+          cancelPreviewBatches(tx)
         })
         logger.info(
-          `Batch ${batch.id} undone: ${backups.length} files restored, ${removed} files removed`
+          `Batch ${batch.id} undone: ${restored} files restored, ${removed} files removed`
         )
-        return { ok: true, value: { batchId: batch.id, restored: backups.length, removed } }
+        return { ok: true, value: { batchId: batch.id, restored, removed } }
       } catch (error) {
         // Whatever was put back stays put back, and undo can be asked for again: it
         // restores from the same backups.
-        logger.error(`Undo of batch ${batch.id} stopped`, error)
+        logger.error(`Undo of batch ${batch.id} stopped: ${describeError(error)}`)
         return { ok: false, code: error instanceof AppError ? error.code : 'WRITE_FAILED' }
       }
     },
 
     async pruneOlderBackups(keepBatchId) {
+      // A batch that wrote nothing leaves nothing to go back to: the last batch
+      // that did write keeps its backups, and stays the one that undo undoes.
+      if (findLastWrittenBatch(db)?.id !== keepBatchId) return
+
       let deleted = 0
-      for (const backup of listBackupsOfOtherBatches(db, keepBatchId)) {
+      const failed = new Set<number>()
+      for (const backup of listBackupsOfOlderBatches(db, keepBatchId)) {
         try {
           await fileOps.remove(backup.backupPath)
           await fileOps.removeEmptyFolder(dirname(backup.backupPath))
@@ -365,10 +604,16 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
           deleted += 1
         } catch (error) {
           // The record stays with its file, to be tried again after the next batch.
-          logger.error(`The backup ${backup.id} of an older batch could not be deleted`, error)
+          failed.add(backup.batchId)
+          logger.error(
+            `The backup ${backup.id} of an older batch could not be deleted: ${describeError(error)}`
+          )
         }
       }
-      deleteCreatedFilesOfOtherBatches(db, keepBatchId)
+      // A batch keeps the notes about its files for as long as it keeps a backup.
+      for (const batchId of listOlderBatchesWithCreatedFiles(db, keepBatchId)) {
+        if (!failed.has(batchId)) deleteCreatedFiles(db, batchId)
+      }
       if (deleted > 0)
         logger.info(`Deleted ${deleted} backups of batches older than ${keepBatchId}`)
     },
@@ -381,7 +626,7 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
         try {
           removed += await fileOps.removeTempFiles(folder)
         } catch (error) {
-          logger.warn('A folder of the library could not be cleaned of temp files', error)
+          logger.warn(`A folder of the library could not be cleaned: ${describeError(error)}`)
         }
       }
       if (removed > 0) logger.info(`Removed ${removed} temp files that an interrupted write left`)

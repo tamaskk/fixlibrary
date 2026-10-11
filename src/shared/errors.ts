@@ -24,6 +24,8 @@ export const ERROR_CODES = [
   'NOT_ENOUGH_SPACE',
   // Undo was asked for, but no batch that changed files is left to undo.
   'NOTHING_TO_UNDO',
+  // The backup folder would change while the last batch can still be undone from it.
+  'BACKUPS_IN_USE',
   // Something failed that no code above describes; the detail is in the log.
   'UNEXPECTED'
 ] as const
@@ -85,5 +87,6 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   RUN_ACTIVE: 'Another run is in progress',
   NOT_ENOUGH_SPACE: 'There is not enough free space',
   NOTHING_TO_UNDO: 'There is no batch to undo',
+  BACKUPS_IN_USE: 'The backup folder is in use',
   UNEXPECTED: 'Unexpected error'
 }

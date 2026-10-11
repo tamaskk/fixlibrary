@@ -1,4 +1,4 @@
-import { and, eq, ne } from 'drizzle-orm'
+import { and, eq, lt } from 'drizzle-orm'
 import type { AppDatabase } from './connection'
 import { backups, batchFiles } from './schema'
 
@@ -26,9 +26,12 @@ export function listBackups(db: AppDatabase, batchId: number): Backup[] {
   return db.select().from(backups).where(eq(backups.batchId, batchId)).all()
 }
 
-/** The backups of every batch but this one: what is thrown away once it is applied. */
-export function listBackupsOfOtherBatches(db: AppDatabase, keepBatchId: number): Backup[] {
-  return db.select().from(backups).where(ne(backups.batchId, keepBatchId)).all()
+/**
+ * The backups of the batches that came before this one: what is thrown away once it
+ * is applied. Never those of a later batch, which may have started in the meantime.
+ */
+export function listBackupsOfOlderBatches(db: AppDatabase, batchId: number): Backup[] {
+  return db.select().from(backups).where(lt(backups.batchId, batchId)).all()
 }
 
 /** Removes the record only; the file is the caller's to remove first. */
@@ -57,7 +60,37 @@ export function deleteCreatedFiles(db: AppDatabase, batchId: number): void {
   db.delete(batchFiles).where(eq(batchFiles.batchId, batchId)).run()
 }
 
-/** Forgets what every batch but this one created; they cannot be undone any more. */
-export function deleteCreatedFilesOfOtherBatches(db: AppDatabase, keepBatchId: number): void {
-  db.delete(batchFiles).where(ne(batchFiles.batchId, keepBatchId)).run()
+/** Takes back the note about one file: it was not created after all. */
+export function deleteCreatedFile(db: AppDatabase, batchId: number, path: string): void {
+  db.delete(batchFiles)
+    .where(and(eq(batchFiles.batchId, batchId), eq(batchFiles.path, path)))
+    .run()
+}
+
+/** What a batch created for one track. */
+export function listCreatedFilesOfTrack(
+  db: AppDatabase,
+  batchId: number,
+  trackId: number
+): CreatedFile[] {
+  return db
+    .select()
+    .from(batchFiles)
+    .where(and(eq(batchFiles.batchId, batchId), eq(batchFiles.trackId, trackId)))
+    .all()
+}
+
+/** The batches before this one that still have a note about a file they created. */
+export function listOlderBatchesWithCreatedFiles(db: AppDatabase, batchId: number): number[] {
+  return db
+    .selectDistinct({ batchId: batchFiles.batchId })
+    .from(batchFiles)
+    .where(lt(batchFiles.batchId, batchId))
+    .all()
+    .map((row) => row.batchId)
+}
+
+/** True while any batch has a backup: the folder they are in must stay where it is. */
+export function hasBackups(db: AppDatabase): boolean {
+  return db.select({ id: backups.id }).from(backups).limit(1).get() !== undefined
 }

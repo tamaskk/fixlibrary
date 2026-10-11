@@ -747,3 +747,19 @@ describe.skipIf(!existsSync(PYTHON_PATH))('scanning with the real sidecar', () =
     ])
   })
 })
+
+describe('a scan while a batch changes files', () => {
+  it('does not start: it would take half-renamed files for missing and new tracks', async () => {
+    // Arrange
+    writeFileSync(join(library, 'a.mp3'), 'a')
+    const scans = scanner({ isChangingFiles: () => true })
+
+    // Act
+    const result = await scans.scan()
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(scans.isRunning()).toBe(false)
+    expect(readCalls).toEqual([])
+  })
+})

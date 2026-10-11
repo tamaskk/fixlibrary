@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import {
   copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -15,7 +16,7 @@ import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFileOps, type FileOps } from './file-ops'
+import { createFileOps, unusableNameReason, type FileOps } from './file-ops'
 import { logger } from './logger'
 
 const FIXTURE = join(import.meta.dirname, '../../../tests/fixtures/synthetic/sine.mp3')
@@ -162,17 +163,51 @@ describe('replace', () => {
     expect(allFiles()).toEqual(['Music/a.mp3'])
   })
 
-  it('starts over when an earlier write of the same file was interrupted', async () => {
+  it('is not disturbed by a temp file that an earlier write of the same file left behind', async () => {
     // Arrange
     const target = addTrack('a.mp3')
     writeFileSync(join(library, '.a.mp3.fixlib-tmp'), 'left behind by a crash')
 
     // Act
     await files.replace(target, (temp) => writeFile(temp, 'new content'))
+    const cleaned = await files.removeTempFiles(library)
 
     // Assert
     expect(readFileSync(target, 'utf8')).toBe('new content')
+    expect(cleaned).toBe(1)
     expect(allFiles()).toEqual(['Music/a.mp3'])
+  })
+
+  it('lets two writes of one file run at the same time without losing either temp file', async () => {
+    // Arrange
+    const target = addTrack('a.mp3')
+    const slow = (text: string) => async (temp: string) => {
+      await writeFile(temp, text)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    // Act
+    const results = await Promise.allSettled([
+      files.replace(target, slow('first')),
+      files.replace(target, slow('second'))
+    ])
+
+    // Assert
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+    expect(['first', 'second']).toContain(readFileSync(target, 'utf8'))
+    expect(allFiles()).toEqual(['Music/a.mp3'])
+  })
+
+  it('writes a file whose name is as long as a name may be', async () => {
+    // Arrange
+    const target = addTrack(`${'á'.repeat(246)}.mp3`)
+
+    // Act
+    await files.replace(target, (temp) => writeFile(temp, 'new content'))
+
+    // Assert
+    expect(readFileSync(target, 'utf8')).toBe('new content')
+    expect(readdirSync(library)).toHaveLength(1)
   })
 })
 
@@ -288,6 +323,180 @@ describe('move and freeName', () => {
     // Assert: where the disk ignores letter case the two names are one file.
     expect(free.path).toBe(sameNameOtherCase)
     expect(readdirSync(library)).toEqual(['Artist - Title.mp3'])
+  })
+})
+
+describe('never in the place of another file', () => {
+  it('lets only one of ten files have a name that all ten are renamed to at the same time', async () => {
+    // Arrange
+    const tracks = Array.from({ length: 10 }, (_, index) => {
+      const path = join(library, `track-${index}.mp3`)
+      writeFileSync(path, `the audio of track ${index}`)
+      return path
+    })
+    const wanted = join(library, 'Artist - Title.mp3')
+
+    // Act
+    const results = await Promise.allSettled(tracks.map((path) => files.move(path, wanted)))
+
+    // Assert: one won, nine were refused, and the audio of all ten is still there.
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(9)
+    const contents = readdirSync(library).map((name) => readFileSync(join(library, name), 'utf8'))
+    expect(contents.sort()).toEqual(tracks.map((_, index) => `the audio of track ${index}`))
+  })
+
+  it('lets only one of several copies land on a name that all are copied to at the same time', async () => {
+    // Arrange
+    const sources = Array.from({ length: 6 }, (_, index) => {
+      const path = join(library, `track-${index}.mp3`)
+      writeFileSync(path, `the audio of track ${index}`)
+      return path
+    })
+    const target = join(backups, 'same.mp3')
+
+    // Act
+    const results = await Promise.allSettled(sources.map((path) => files.copy(path, target)))
+
+    // Assert
+    const won = results.findIndex((result) => result.status === 'fulfilled')
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(readFileSync(target, 'utf8')).toBe(`the audio of track ${won}`)
+    expect(allFiles(backups)).toEqual(['FixLibrary Backups/same.mp3'])
+  })
+
+  it('does not take a second name of the same file for the file itself', async () => {
+    // Arrange: two tracks that are hard links of one file.
+    const first = addTrack('a.mp3')
+    const second = join(library, 'b.mp3')
+    linkSync(first, second)
+
+    // Act
+    const move = files.move(first, second)
+
+    // Assert
+    await expect(move).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+    expect(readdirSync(library).sort()).toEqual(['a.mp3', 'b.mp3'])
+  })
+
+  it('refuses to copy what a link points at', async () => {
+    // Arrange
+    writeFileSync(join(outside, 'private.mp3'), 'not ours')
+    symlinkSync(join(outside, 'private.mp3'), join(library, 'link.mp3'))
+
+    // Act
+    const attempts = await Promise.allSettled([
+      files.copy(join(library, 'link.mp3'), join(backups, 'stolen.mp3')),
+      files.restore(join(library, 'link.mp3'), join(library, 'a.mp3'))
+    ])
+
+    // Assert
+    expect(attempts).toMatchObject([
+      { status: 'rejected', reason: { code: 'WRITE_FAILED' } },
+      { status: 'rejected', reason: { code: 'WRITE_FAILED' } }
+    ])
+    expect(allFiles(backups)).toEqual([])
+  })
+})
+
+describe('names', () => {
+  it.each([
+    ['Artist feat. X - Title (Mix) [8A Am - 124 - E7].mp3', 'file'],
+    ['Ünnep - Tűz.AIFF', 'file'],
+    ['Deep House', 'folder']
+  ] as const)('accepts %j as a %s name', (name, kind) => {
+    // Act
+    const reason = unusableNameReason(name, kind)
+
+    // Assert
+    expect(reason).toBeNull()
+  })
+
+  it.each([
+    ['a hidden name', '.38 Special - Hold On.mp3'],
+    ['the name of a temp file', '.Baby.mp3.fixlib-tmp'],
+    ['a line break', 'Song\n[info] Batch 7 undone.mp3'],
+    ['a character that reverses the reading direction', 'Song\u202e3pm.mp3'],
+    ['a path separator', 'AC/DC - Thunderstruck.mp3'],
+    ['a colon', 'Artist: Title.mp3'],
+    ['a trailing space', 'Song.mp3 '],
+    ['another kind of file', 'Song.txt'],
+    ['no extension', 'Song'],
+    ['a decomposed name', 'Tűz.mp3'.normalize('NFD')],
+    ['a name that is too long', `${'a'.repeat(230)}.mp3`],
+    ['a dot name', '..']
+  ])('refuses %s', (_what, name) => {
+    // Act
+    const reason = unusableNameReason(name, 'file')
+
+    // Assert
+    expect(reason).not.toBeNull()
+  })
+
+  it('counts a name that the disk would refuse as taken', async () => {
+    // Arrange
+    const tooLong = join(library, `${'a'.repeat(260)}.mp3`)
+
+    // Act
+    const free = files.freeName(tooLong)
+
+    // Assert
+    await expect(free).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+  })
+})
+
+describe('the folders themselves', () => {
+  it('never removes the library, its clean copy or the backup folder, even when empty', async () => {
+    // Act
+    await files.removeEmptyFolder(backups)
+    await files.removeEmptyFolder(library)
+
+    // Assert
+    expect(readdirSync(folder).sort()).toEqual(['Elsewhere', 'FixLibrary Backups', 'Music'])
+  })
+
+  it('creates the backup folder when it is not there yet, and no other folder', async () => {
+    // Arrange
+    rmSync(backups, { recursive: true })
+
+    // Act
+    await files.createRoot(backups)
+    const other = files.createRoot(join(folder, 'Anything'))
+
+    // Assert
+    expect(existsSync(backups)).toBe(true)
+    await expect(other).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect(existsSync(join(folder, 'Anything'))).toBe(false)
+  })
+
+  it('refuses a link in the place of the backup folder', async () => {
+    // Arrange
+    rmSync(backups, { recursive: true })
+    symlinkSync(outside, backups)
+
+    // Act
+    const create = files.createRoot(backups)
+
+    // Assert
+    await expect(create).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+  })
+
+  it('finds a path under a folder that is spelled in another letter case or Unicode form', async () => {
+    // Arrange
+    const decomposed = join(folder, 'Zenék'.normalize('NFD'))
+    mkdirSync(join(decomposed, 'House'), { recursive: true })
+    writeFileSync(join(decomposed, 'House', 'a.mp3'), 'x')
+    const composedPath = join(folder, 'Zenék'.normalize('NFC'), 'House', 'a.mp3')
+
+    // Act
+    const inRoot = await files.relativeTo(decomposed, composedPath)
+    const otherCase = await files.relativeTo(join(folder, 'music'), join(library, 'b.mp3'))
+    const notInside = await files.relativeTo(library, join(outside, 'c.mp3'))
+
+    // Assert
+    expect(inRoot).toBe(join('House', 'a.mp3'))
+    expect(otherCase).toBe('b.mp3')
+    expect(notInside).toBeNull()
   })
 })
 
@@ -427,6 +636,20 @@ describe('removeTempFiles', () => {
 
     // Assert
     expect(removed).toBe(0)
+  })
+
+  it('does not walk a link that stands in the place of the folder', async () => {
+    // Arrange
+    writeFileSync(join(outside, '.c.mp3.fixlib-tmp'), 'not ours')
+    const linkedFiles = createFileOps({ allowedRoots: () => [join(folder, 'Linked root')] })
+    symlinkSync(outside, join(folder, 'Linked root'))
+
+    // Act
+    const removed = await linkedFiles.removeTempFiles(join(folder, 'Linked root'))
+
+    // Assert
+    expect(removed).toBe(0)
+    expect(existsSync(join(outside, '.c.mp3.fixlib-tmp'))).toBe(true)
   })
 
   it('refuses to clean a folder outside the library', async () => {

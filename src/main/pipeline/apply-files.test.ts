@@ -432,3 +432,73 @@ describe('undo and runs', () => {
     expect(undone).toEqual({ ok: false, code: 'NOTHING_TO_UNDO' })
   })
 })
+
+describe('other work on the files of the library', () => {
+  function orchestratorWhile(busy: () => boolean): Orchestrator {
+    return createOrchestrator({
+      db: testDatabase.db,
+      stages: writingStages(100),
+      limits: () => ({ cpu: 4, gpu: 1, network: 4, claude: 1, io: 2 }),
+      listMountedVolumes: () => NO_VOLUMES,
+      mode: () => mode,
+      batchFiles,
+      libraryBusy: busy
+    })
+  }
+
+  it('keeps a batch from being applied or undone while the library is scanned', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    let scanning = false
+    const run = orchestratorWhile(() => scanning)
+    await applied(run, ids)
+    const batchId = await computed(run, ids)
+    const changed = ids.map((id) => sha256(pathOf(id)))
+    scanning = true
+
+    // Act
+    const applying = await run.applyBatch(batchId)
+    const undoing = await run.undoLast()
+
+    // Assert
+    expect(applying).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(undoing).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(ids.map((id) => sha256(pathOf(id)))).toEqual(changed)
+    expect(paths.some((path) => existsSync(path))).toBe(false)
+  })
+
+  it('says that files are being changed for as long as the apply phase runs, and not before', async () => {
+    // Arrange
+    const { ids } = addTracks(2)
+    const run = orchestratorWhile(() => false)
+    const batchId = await computed(run, ids)
+    const beforeApply = run.changingFiles()
+
+    // Act
+    await run.applyBatch(batchId)
+    const duringApply = run.changingFiles()
+    await run.whenFinished()
+    await vi.waitFor(() => expect(run.changingFiles()).toBe(false))
+
+    // Assert
+    expect(beforeApply).toBe(false)
+    expect(duringApply).toBe(true)
+  })
+
+  it('keeps the last written batch undoable after a batch that wrote no file', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(3)
+    const originals = paths.map(sha256)
+    const run = orchestrator()
+    const wrote = await applied(run, ids)
+    // Every track taken out: the batch is applied, and writes nothing.
+    await applied(run, ids, ids)
+
+    // Act
+    const undone = await run.undoLast()
+
+    // Assert
+    expect(undone).toMatchObject({ ok: true, value: { batchId: wrote, restored: 3 } })
+    expect(paths.map(sha256)).toEqual(originals)
+  })
+})
