@@ -59,7 +59,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
     main/                Electron main process
       index.ts           app lifecycle and window creation only
       ipc/               one file per domain; registers handlers, validates input, calls a pipeline or service
-      pipeline/          business logic: orchestrator, queue, stages/, naming, style, cues, playlists
+      pipeline/          business logic: orchestrator, queue, stages/, scanner, naming, style, cues, playlists
       services/          side-effect adapters: python-bridge, file-ops, claude-cli, binaries, keychain, logger, rekordbox-xml, lookup/
       db/                connection.ts, schema.ts, migrations/, one query module per table group (tracks.ts, settings.ts, …)
     preload/             contextBridge exposure of window.api. No logic.
@@ -71,7 +71,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
       stores/            Zustand stores, UI state and cached server state
       styles/globals.css design tokens
       lib/               pure renderer helpers
-    shared/              types and pure functions used by main, preload and renderer: ipc.ts, rpc.ts, errors.ts, library.ts, keys.ts
+    shared/              types and pure functions used by main, preload and renderer: ipc.ts, rpc.ts, errors.ts, library.ts, pipeline.ts, keys.ts
   python/
     fixlib_py/           sidecar package: server.py, logging_setup.py, analysis/, tags.py, convert.py, normalize.py
     tests/               pytest
@@ -194,6 +194,21 @@ Library page:
 - `library:list` returns one page (at most 500) of `LibraryTrack` rows in path order: what the table shows of a track and nothing more. The page loads all of them into `stores/library-store.ts`; search, filters and sorting are pure functions in `renderer/lib/library-view.ts` and run in the renderer, which is fast enough for the 3000 tracks the app is built for and makes range selection and "select all" trivial. The table itself is virtualized (`@tanstack/react-virtual`).
 - The selection (`renderer/lib/selection.ts`) lives in the store as a set of track ids. A search or filter that hides a selected row takes it out of the selection, so a run never processes a track the user cannot see selected; sorting keeps the selection. Tracks that are gone leave it when the rows are loaded again after a scan.
 - `library:run` takes track ids, or the whole library, and nothing else. `pipeline/library.ts` decides which of them a run may process: a track that is offline, whose file the last scan did not find, or that is not in the library is left out and counted. A track whose tags could not be read is not left out: its audio may still be fine. File and folder names are sent to the page as one clean line, for display only; the page never sends a name or a path back. The mounted volumes are looked up at most once a second for these calls, so one load of the table sees one state; the scanner always asks afresh. Until the orchestrator exists (T-009) the handler only answers with those tracks; nothing is processed.
+
+Pipeline runs:
+
+- A stage (`pipeline/stages/stage.ts`) is one step for one track: a name, a phase (`compute` or `apply`), the resource it needs, the stages it depends on, a timeout and `run`. `pipeline/stages/index.ts` lists the stages and checks at startup that they can be ordered: no circle, no unknown or duplicate name, no compute stage that waits for an apply stage. No stage exists before T-013.
+- A run is a batch: one `batch_items` row per track, holding the track as it was (`before`) and what the stages propose (`after`), and one `jobs` row per track and stage. Asking for a stage adds the stages it depends on. Only a track that is in the library, online and has its file becomes part of a batch; this is decided when the run starts, whatever the caller checked.
+- `pipeline/orchestrator.ts` runs the jobs. A job starts when the stages it depends on are done for the same track, and when its resource has room (`pipeline/queue.ts`): `cpu` is the worker count of the settings, read again whenever a job could start; `gpu` 1, `claude` 1, `io` 2, `network` 4.
+- A job goes through `pipeline/run-stage.ts`, so a failure or a timeout becomes a `TrackError` on the job and on the item of the batch (the first error of a track stays). The jobs that wait for a failed one are skipped; the other tracks go on.
+- Two phases. Compute ends with the batch in `preview`: nothing was written, and the apply jobs stay queued. `applyBatch` starts them, only for the items the user approved and did not take out, and ends with the batch `applied`. Only one batch waits for approval: starting a new run cancels an older one.
+- One batch is computed or applied at a time; a second start is answered with `RUN_ACTIVE`.
+- Pause: no new job starts and the running ones finish; the pause and its reason are stored on the batch. If the drive of a track is not mounted when its job would start, the run pauses itself (`offline`) instead of failing every track that is left.
+- Cancel ends the batch at once: in one transaction the batch becomes `cancelled` and every job that is not over becomes `skipped`, the running ones included. They get their abort signal, and whatever they still return is thrown away. A cancelled batch is never taken up again. A stage that writes files must therefore stop on its signal: a write that finishes after the cancel is not recorded on the job.
+- Restart: quitting tells the running jobs to stop and puts them back in line. At the next start the batch that was being computed or applied is taken up again: `done` jobs are not run again. A batch the user paused stays paused; one that had paused for a missing drive goes on, and pauses again if the drive is still away. After a crash the jobs that were running go back in line too, but the start counts: a job that was running in three crashes is recorded as failed, so a file that makes the app crash cannot do so forever.
+- The apply phase never writes a track that a stage failed for, approved or not.
+- What listens to a run (progress, the sleep blocker) cannot stop it by failing, and may act on the run from inside a report: the last report of a run goes out after the run is over.
+- Progress is reported as counts per stage and an estimate of the time left: per stage, how long its last 50 jobs took, times the jobs left, over how many run at once. There is no estimate while a stage with jobs left has not finished one.
 
 Python sidecar:
 

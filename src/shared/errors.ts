@@ -18,6 +18,8 @@ export const ERROR_CODES = [
   'LIBRARY_NOT_SET',
   'LIBRARY_UNAVAILABLE',
   'LIBRARY_ROOT_UNSUITABLE',
+  // A run was asked for while another one is being computed or applied.
+  'RUN_ACTIVE',
   // Something failed that no code above describes; the detail is in the log.
   'UNEXPECTED'
 ] as const
@@ -76,5 +78,6 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   LIBRARY_NOT_SET: 'No library folder is chosen',
   LIBRARY_UNAVAILABLE: 'The library folder cannot be reached',
   LIBRARY_ROOT_UNSUITABLE: 'This folder cannot be used as the library',
+  RUN_ACTIVE: 'Another run is in progress',
   UNEXPECTED: 'Unexpected error'
 }

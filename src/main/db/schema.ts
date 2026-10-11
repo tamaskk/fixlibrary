@@ -32,6 +32,10 @@ export const BATCH_STATUSES = [
   'cancelled'
 ] as const
 
+export const PAUSE_REASONS = ['user', 'offline'] as const
+export const JOB_PHASES = ['compute', 'apply'] as const
+export const JOB_STATUSES = ['queued', 'running', 'done', 'failed', 'skipped'] as const
+
 // SQLite has no enum type. The CHECK keeps a value that TypeScript would reject
 // out of the file as well. The values are the constants above, never user input.
 function oneOf(column: AnySQLiteColumn, values: readonly string[]): SQL {
@@ -149,6 +153,10 @@ export const batches = sqliteTable(
     type: text('type').notNull(),
     mode: text('mode', { enum: BATCH_MODES }).notNull(),
     status: text('status', { enum: BATCH_STATUSES }).notNull().default('computing'),
+    // Null while the batch is not paused. A run the user paused stays paused when the
+    // app is started again; one that paused itself because the drive was gone goes on.
+    // No CHECK: adding one to this table would rebuild it, and the backups hang on it.
+    pauseReason: text('pause_reason', { enum: PAUSE_REASONS }),
     createdAt,
     appliedAt: integer('applied_at', { mode: 'timestamp_ms' })
   },
@@ -179,6 +187,39 @@ export const batchItems = sqliteTable(
   (table) => [
     uniqueIndex('batch_items_batch_track_idx').on(table.batchId, table.trackId),
     index('batch_items_track_id_idx').on(table.trackId)
+  ]
+)
+
+// One stage for one track of a batch. The rows are what a run is resumed from after
+// the app was closed: `done` jobs are not run again, `running` ones go back to `queued`.
+export const jobs = sqliteTable(
+  'jobs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    batchId: integer('batch_id')
+      .notNull()
+      .references(() => batches.id, { onDelete: 'cascade' }),
+    trackId: integer('track_id')
+      .notNull()
+      .references(() => tracks.id, { onDelete: 'restrict' }),
+    stage: text('stage').notNull(),
+    phase: text('phase', { enum: JOB_PHASES }).notNull(),
+    status: text('status', { enum: JOB_STATUSES }).notNull().default('queued'),
+    // How often the job was started. A job that keeps being interrupted is given up.
+    attempts: integer('attempts').notNull().default(0),
+    // The TrackError of a failed job. Validated when read.
+    error: text('error', { mode: 'json' }).$type<unknown>(),
+    createdAt,
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    finishedAt: integer('finished_at', { mode: 'timestamp_ms' })
+  },
+  (table) => [
+    uniqueIndex('jobs_batch_track_stage_idx').on(table.batchId, table.trackId, table.stage),
+    index('jobs_batch_status_idx').on(table.batchId, table.status),
+    index('jobs_track_id_idx').on(table.trackId),
+    check('jobs_phase_known', oneOf(table.phase, JOB_PHASES)),
+    check('jobs_status_known', oneOf(table.status, JOB_STATUSES)),
+    check('jobs_attempts_not_negative', sql`${table.attempts} >= 0`)
   ]
 )
 
