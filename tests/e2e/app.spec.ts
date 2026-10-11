@@ -105,7 +105,7 @@ test('first start creates the database, and a later start keeps its data', async
     .prepare('insert into settings (key, value, updated_at) values (?, ?, ?)')
     .run('e2e.marker', '"kept"', Date.now())
   afterFirstRun.close()
-  expect(tables.count).toBe(12)
+  expect(tables.count).toBe(13)
 
   const secondRun = await launchApp()
   try {

@@ -15,6 +15,7 @@ const EXPECTED_TABLES = [
   'batches',
   'cues',
   'energy_calibration',
+  'jobs',
   'lookup_cache',
   'playlist_tracks',
   'playlists',
