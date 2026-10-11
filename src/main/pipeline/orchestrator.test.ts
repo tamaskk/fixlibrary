@@ -1255,3 +1255,68 @@ describe('progress', () => {
     expect(midway?.remainingMs).toBe(8000)
   })
 })
+
+describe('the usage limit of Claude', () => {
+  /** A stage that needs Claude, and is told "no room" until `room` is true. */
+  function claudeStage(room: { open: boolean }): Stage {
+    return {
+      ...fakeStage('style', { resource: 'claude' }),
+      run: async (_context, track) => {
+        started.push(`style:${track.id}`)
+        if (!room.open) throw new AppError('CLAUDE_LIMIT', 'the usage limit is reached')
+        finished.push(`style:${track.id}`)
+      }
+    }
+  }
+
+  it('holds the steps that need Claude, lets the others finish, and goes on after 15 minutes', async () => {
+    // Arrange
+    const trackIds = addTracks(3)
+    limits.claude = 20
+    const room = { open: false }
+    const run = orchestrator([claudeStage(room), fakeStage('bpmKey', { ms: 50 })])
+
+    // Act
+    const result = run.start({ trackIds, stages: ['style', 'bpmKey'] })
+    await vi.advanceTimersByTimeAsync(14 * 60 * 1000)
+    const batchId = result.ok ? result.value.batchId : -1
+    const waiting = {
+      report: run.progress(),
+      jobs: jobStatuses(batchId),
+      tries: started.filter((each) => each.startsWith('style')).length
+    }
+    room.open = true
+    await vi.advanceTimersByTimeAsync(2 * 60 * 1000)
+
+    // Assert: while waiting, no track failed and nothing was asked again.
+    expect(waiting.report).toMatchObject({ state: 'running', tracks: { failed: 0 } })
+    expect(waiting.report?.claudeRetryAt).not.toBeNull()
+    expect(waiting.jobs).toEqual({ 'style:queued': 3, 'bpmKey:done': 3 })
+    expect(waiting.tries).toBe(3)
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
+    expect(jobStatuses(batchId)).toEqual({ 'style:done': 3, 'bpmKey:done': 3 })
+    expect(progress.at(-1)).toMatchObject({ state: 'finished', claudeRetryAt: null })
+  })
+
+  it('waits again when there is still no room, and can be cancelled while it waits', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    limits.claude = 20
+    const run = orchestrator([claudeStage({ open: false })])
+
+    // Act
+    const result = run.start({ trackIds, stages: ['style'] })
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
+    const tries = started.length
+    run.cancel()
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+
+    // Assert: asked at the start, after 15 and after 30 minutes, and not after the cancel.
+    expect(tries).toBe(6)
+    expect(started).toHaveLength(6)
+    expect(getBatch(testDatabase.db, result.ok ? result.value.batchId : -1)?.status).toBe(
+      'cancelled'
+    )
+    expect(run.progress()).toBeNull()
+  })
+})

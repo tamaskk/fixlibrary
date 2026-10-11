@@ -18,6 +18,9 @@ export interface JobQueue<T> {
   /** No new job starts; the running ones finish. */
   pause: () => void
   resume: () => void
+  /** No new job of this resource starts; the others go on. */
+  pauseResource: (resource: Resource) => void
+  resumeResource: (resource: Resource) => void
   /** Takes every waiting job out and returns them. Running jobs are not touched. */
   clear: () => T[]
   /** How many jobs run now, of one resource or of all. */
@@ -36,17 +39,19 @@ export function createJobQueue<T>(options: JobQueueOptions<T>): JobQueue<T> {
     number
   >
   let paused = false
+  const pausedResources = new Set<Resource>()
 
   function startWhatFits(): void {
     if (paused) return
     const limits = options.limits()
     for (const resource of RESOURCES) {
+      if (pausedResources.has(resource)) continue
       // At least one at a time, whatever the setting says: a limit of zero, or one
       // that is not a number, would leave the jobs of this resource waiting forever.
       const asked = limits[resource]
       const limit = Number.isFinite(asked) ? Math.max(1, Math.trunc(asked)) : 1
       // Checked every time: the job that was just started may have paused the queue.
-      while (!paused && running[resource] < limit) {
+      while (!paused && !pausedResources.has(resource) && running[resource] < limit) {
         const job = waiting[resource].shift()
         if (job === undefined) break
         running[resource] += 1
@@ -76,6 +81,13 @@ export function createJobQueue<T>(options: JobQueueOptions<T>): JobQueue<T> {
     },
     resume() {
       paused = false
+      startWhatFits()
+    },
+    pauseResource(resource) {
+      pausedResources.add(resource)
+    },
+    resumeResource(resource) {
+      pausedResources.delete(resource)
       startWhatFits()
     },
     clear() {

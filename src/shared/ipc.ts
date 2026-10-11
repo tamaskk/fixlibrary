@@ -1,5 +1,6 @@
 // Single source of truth for the renderer <-> main contract.
 // Every channel is listed here; preload and main both derive their types from it.
+import type { ClaudeStatus, ClaudeTestResult } from './claude'
 import type { Result } from './errors'
 import type {
   LibraryPage,
@@ -48,6 +49,10 @@ export const IPC_CHANNELS = {
   secretsTest: 'secrets:test',
   systemCheckTools: 'system:checkTools',
   systemOpenLogFolder: 'system:openLogFolder',
+  systemClaudeStatus: 'system:claudeStatus',
+  systemPickClaude: 'system:pickClaude',
+  systemClearClaude: 'system:clearClaude',
+  systemTestClaude: 'system:testClaude',
   libraryStatus: 'library:status',
   libraryScan: 'library:scan',
   libraryFollowScan: 'library:followScan',
@@ -103,6 +108,17 @@ export interface FixLibraryApi {
   system: {
     checkTools: (force: boolean) => Promise<ToolCheck[]>
     openLogFolder: () => Promise<void>
+    /** Whether the `claude` command is there, up to date and logged in. Never its path. */
+    claudeStatus: (force: boolean) => Promise<ClaudeStatus>
+    /**
+     * Opens a file dialog in the main process to choose the `claude` command by hand.
+     * The renderer never sends a path. Resolves to null when the user cancels.
+     */
+    pickClaude: () => Promise<Result<ClaudeStatus> | null>
+    /** Back to the command the login shell finds. */
+    clearClaude: () => Promise<Result<ClaudeStatus>>
+    /** One real call with up to five tracks of the library, to see that Claude answers. */
+    testClaude: () => Promise<ClaudeTestResult>
   }
   library: {
     status: () => Promise<LibraryStatus>

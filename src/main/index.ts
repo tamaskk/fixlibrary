@@ -1,6 +1,6 @@
 import { app, dialog, powerSaveBlocker, shell, BrowserWindow } from 'electron'
 import { existsSync, realpathSync } from 'fs'
-import { cpus, homedir, tmpdir } from 'os'
+import { cpus, homedir, tmpdir, userInfo } from 'os'
 import { join, sep } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
 import { closeDatabase, getDatabase, initDatabase } from './db/connection'
@@ -12,6 +12,7 @@ import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/hand
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
+import { createClaude } from './pipeline/claude'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { commitManualEdits, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
@@ -22,6 +23,7 @@ import { createDemoStages } from './pipeline/stages/demo'
 import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
 import { resolveToolLocations } from './services/binaries'
+import { createClaudeCli } from './services/claude-cli'
 import { readEnvFile } from './services/env-file'
 import { describeError } from './services/error-text'
 import { createFileOps } from './services/file-ops'
@@ -124,7 +126,30 @@ function registerSettingsAndSystemIpc(): void {
     secrets,
     environment: { homeDir: homedir(), cpuCount: cpus().length }
   })
+  const claude = createClaude({
+    db,
+    cli: createClaudeCli({
+      // The app's own folder; every call runs in a new, empty folder inside it.
+      workDir: join(app.getPath('userData'), 'claude-workdir'),
+      homeDir: homedir(),
+      userName: userInfo().username
+    })
+  })
+  // Asked once at startup, so the log says whether Claude can be used; the Settings
+  // page reads the same answer.
+  void claude
+    .status(false)
+    .then((status) =>
+      logger.info(
+        status.ok
+          ? `Claude ready, version ${status.version}`
+          : `Claude cannot be used: ${status.reason}`
+      )
+    )
+    .catch((error: unknown) => logger.error(`Claude could not be checked: ${describeError(error)}`))
   registerSystemIpc({
+    db,
+    claude,
     toolChecker: createToolChecker(
       resolveToolLocations({
         isPackaged: app.isPackaged,

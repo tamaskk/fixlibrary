@@ -32,7 +32,14 @@ export function createRunProgressSender(
   }
 
   return (progress) => {
-    const kind = [progress.batchId, progress.phase, progress.state, progress.pauseReason].join(':')
+    const kind = [
+      progress.batchId,
+      progress.phase,
+      progress.state,
+      progress.pauseReason,
+      // That Claude's limit was reached, or that it is asked again, is news too.
+      progress.claudeRetryAt === null ? '' : 'limit'
+    ].join(':')
     const waitMs = lastSentAt === null ? 0 : PROGRESS_INTERVAL_MS - (now() - lastSentAt)
     if (kind !== lastKind || waitMs <= 0) {
       sendNow(progress, kind)

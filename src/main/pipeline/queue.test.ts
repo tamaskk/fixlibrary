@@ -115,6 +115,24 @@ describe('createJobQueue', () => {
     expect(finished).toEqual(['a', 'b', 'c', 'd'])
   })
 
+  it('holds the jobs of one resource while the others go on, and lets them go when told', async () => {
+    // Arrange
+    const jobs = queue()
+    jobs.pauseResource('claude')
+    jobs.add(job('style', 'claude', 10))
+    jobs.add(job('bpm', 'cpu', 10))
+
+    // Act
+    await vi.advanceTimersByTimeAsync(1000)
+    const whileHeld = [...finished]
+    jobs.resumeResource('claude')
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(whileHeld).toEqual(['bpm'])
+    expect(finished).toEqual(['bpm', 'style'])
+  })
+
   it('takes the waiting jobs out when cleared and leaves the running ones alone', async () => {
     // Arrange
     limits.cpu = 1

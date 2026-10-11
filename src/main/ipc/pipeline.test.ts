@@ -13,6 +13,7 @@ function progress(changes: Partial<RunProgress> = {}): RunProgress {
     state: 'running',
     outcome: null,
     pauseReason: null,
+    claudeRetryAt: null,
     counts: { total: 100, done: 0, failed: 0, skipped: 0, running: 1 },
     stages: [],
     tracks: { total: 20, failed: 0 },
@@ -133,5 +134,25 @@ describe('createRunProgressSender', () => {
       [2, 'compute'],
       [2, 'apply']
     ])
+  })
+
+  it('passes on at once that the Claude limit was reached, and that Claude is asked again', () => {
+    // Arrange
+    const sent: RunProgress[] = []
+    let time = 0
+    const send = createRunProgressSender(
+      (report) => sent.push(report),
+      () => time
+    )
+    send(progress())
+
+    // Act
+    time = 10
+    send(progress({ claudeRetryAt: 900_000 }))
+    time = 20
+    send(progress({ claudeRetryAt: null }))
+
+    // Assert
+    expect(sent.map((report) => report.claudeRetryAt)).toEqual([null, 900_000, null])
   })
 })

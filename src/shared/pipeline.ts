@@ -17,8 +17,9 @@ export const FIXED_RESOURCE_LIMITS: Omit<ResourceLimits, 'cpu'> = {
   gpu: 1,
   // Requests in flight. How often each lookup service may be asked is set per service.
   network: 4,
-  // The Claude subscription answers one call at a time.
-  claude: 1,
+  // As many as one call to Claude holds: the jobs that run together are asked about
+  // together. The calls themselves go one at a time (`pipeline/claude.ts`).
+  claude: 20,
   // Copies and renames on the external drive.
   io: 2
 }
@@ -58,6 +59,11 @@ export interface RunProgress {
   outcome: 'preview' | 'applied' | 'cancelled' | null
   /** Why the run is paused: by the user, or because the library's drive went away. */
   pauseReason: 'user' | 'offline' | null
+  /**
+   * Set while the Claude usage limit is reached: when the app asks Claude again, in
+   * ms since the epoch. The steps that need Claude wait; the others go on.
+   */
+  claudeRetryAt: number | null
   /** The jobs of the phase that is running. */
   counts: JobCounts
   /** The same per stage, in the order the stages run. */

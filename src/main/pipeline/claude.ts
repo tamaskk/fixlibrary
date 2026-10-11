@@ -5,10 +5,18 @@
 import { z } from 'zod'
 import type { AppDatabase } from '../db/connection'
 import { getSetting, setSetting } from '../db/settings'
+import { listStyles } from '../db/styles'
+import { listTracks } from '../db/tracks'
 import type { ClaudeCli, ClaudeRunOutcome } from '../services/claude-cli'
+import { createStyleTask, type StyleInput } from '../services/claude-prompts/style'
 import type { ClaudeTask } from '../services/claude-prompts/task'
 import { logger } from '../services/logger'
-import { CLAUDE_BATCH_SIZE, type ClaudeProblem, type ClaudeStatus } from '@shared/claude'
+import {
+  CLAUDE_BATCH_SIZE,
+  type ClaudeProblem,
+  type ClaudeStatus,
+  type ClaudeTestResult
+} from '@shared/claude'
 import { AppError, type Result } from '@shared/errors'
 import { CLAUDE_LIMIT_RETRY_MS } from '@shared/timeouts'
 
@@ -335,5 +343,53 @@ export function createClaude(dependencies: ClaudeDependencies): Claude {
         else lane.timer ??= setTimeout(() => flush(lane), gatherMs)
       })
     }
+  }
+}
+
+// What the test asks about when the library is still empty.
+const SAMPLE_TRACKS: readonly StyleInput[] = [
+  { artist: 'Daft Punk', title: 'Around the World', label: 'Virgin', year: 1997, bpm: 121 },
+  {
+    artist: 'Underworld',
+    title: 'Born Slippy .NUXX',
+    label: "Junior Boy's Own",
+    year: 1996,
+    bpm: 140
+  }
+]
+const TEST_TRACK_COUNT = 5
+
+/**
+ * One real call, asked for from Settings: the style of up to five tracks of the
+ * library, or of two well-known ones while the library is empty. Nothing of the
+ * answer is kept; the result only says whether Claude answered.
+ */
+export async function testClaude(
+  db: AppDatabase,
+  claude: Claude,
+  now: () => number = Date.now
+): Promise<ClaudeTestResult> {
+  const status = await claude.status(true)
+  if (!status.ok) return { ok: false, reason: status.reason }
+
+  const tracks = listTracks(db, { limit: TEST_TRACK_COUNT, offset: 0 }, new Set())
+  const inputs: StyleInput[] =
+    tracks.length === 0
+      ? [...SAMPLE_TRACKS]
+      : tracks.map(({ artist, title, label, year, bpm }) => ({ artist, title, label, year, bpm }))
+  const task = createStyleTask(listStyles(db).map((style) => style.name))
+  const startedAt = now()
+  const outcome = await claude.askBatch(
+    task,
+    inputs.map((input, index) => ({ ...input, id: index + 1 }))
+  )
+  if (outcome.kind === 'limit') return { ok: false, reason: 'limit' }
+  if (outcome.kind === 'unusable') return { ok: false, reason: outcome.reason }
+  if (outcome.answers.size === 0) return { ok: false, reason: 'noAnswer' }
+  return {
+    ok: true,
+    answered: outcome.answers.size,
+    asked: inputs.length,
+    durationMs: now() - startedAt
   }
 }
