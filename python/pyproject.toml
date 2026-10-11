@@ -1,0 +1,33 @@
+[project]
+name = "fixlib-py"
+version = "0.1.0"
+description = "FixLibrary audio sidecar"
+license = "AGPL-3.0-only"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "demucs>=4.1.0",
+    "essentia>=2.1b6.dev1389",
+    "mutagen>=1.48.1",
+    "numpy>=2.4.6",
+    "pillow>=12.3.0",
+    "pyloudnorm>=0.2.0",
+    "soundfile>=0.14.0",
+    "torch>=2.14.0",
+    "torchaudio>=2.11.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
+
+# The package sits directly in python/fixlib_py (docs/ARCHITECTURE.md §03), not in src/.
+[tool.uv.build-backend]
+module-root = ""
+
+# Apple Silicon only (docs/PRD.md §01). A universal lock drags torch back to the
+# last release that still shipped Intel macOS wheels.
+[tool.uv]
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+# Cooldown: nothing published after this date is resolved, so a compromised release
+# has time to be noticed and yanked. Move the date forward when upgrading on purpose.
+exclude-newer = "2026-09-27T00:00:00Z"
