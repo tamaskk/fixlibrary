@@ -191,6 +191,8 @@ Modals
 Progress
 
 - Long runs show a percent bar, counts per stage, elapsed time and an estimate. Never an indeterminate spinner for work longer than 3 seconds.
+- The bar (`ui/progress-bar.tsx`) is 4px high, radius-full, surface-hover with a primary fill, and is always named for assistive technology. The percent and the counts stand next to it in the Data role.
+- Work with no known end (finding the files of a scan) shows a rising count instead of a bar.
 
 Empty states
 
