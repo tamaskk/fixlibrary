@@ -1,1 +1,95 @@
 @import 'tailwindcss';
+
+/*
+ * Design tokens. Names and values mirror docs/DESIGN_SYSTEM.md; change both in the same commit.
+ * The default Tailwind palette is removed on purpose, so only token colors exist as utilities.
+ */
+@theme {
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-transparent: transparent;
+
+  --color-bg: #0b0b0d;
+  --color-surface: #16161a;
+  --color-surface-hover: #1f1f25;
+  --color-border: #2a2a31;
+  --color-text: #f2f2f3;
+  --color-text-muted: #9a9aa3;
+  --color-primary: #2563eb;
+  --color-primary-hover: #3b82f6;
+  --color-primary-text: #60a5fa;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #dc2626;
+  --color-danger-text: #f87171;
+
+  --color-cue-a: #22c55e;
+  --color-cue-b: #22d3ee;
+  --color-cue-c: #a855f7;
+  --color-cue-d: #ef4444;
+  --color-cue-e: #3b82f6;
+  --color-cue-f: #f97316;
+  --color-cue-g: #eab308;
+  --color-cue-h: #ec4899;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-h1: 24px;
+  --text-h1--line-height: 1.25;
+  --text-h1--font-weight: 600;
+  --text-h1--letter-spacing: -0.02em;
+  --text-h2: 18px;
+  --text-h2--line-height: 1.3;
+  --text-h2--font-weight: 600;
+  --text-h2--letter-spacing: -0.01em;
+  --text-h3: 15px;
+  --text-h3--line-height: 1.35;
+  --text-h3--font-weight: 600;
+  --text-body: 14px;
+  --text-body--line-height: 1.5;
+  --text-small: 13px;
+  --text-small--line-height: 1.45;
+  --text-label: 11px;
+  --text-label--line-height: 1.4;
+  --text-label--font-weight: 500;
+  --text-label--letter-spacing: 0.04em;
+  --text-data: 13px;
+  --text-data--line-height: 1.45;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  --container-modal: 480px;
+  --container-form: 720px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    color-scheme: dark;
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
