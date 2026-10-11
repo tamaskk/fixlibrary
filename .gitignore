@@ -10,10 +10,12 @@ release
 .env
 .env.*
 !.env.example
+*.pem
 
-# Claude Code personal files
+# Claude Code: personal files, not shared
 CLAUDE.local.md
 .claude/settings.local.json
+.claude/agent-memory-local/
 
 # Python sidecar
 python/.venv

@@ -12,3 +12,5 @@ HARNESS_BOOTSTRAP.md
 python
 test-results
 playwright-report
+.claude/hooks
+.claude/agent-memory
