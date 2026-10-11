@@ -24,7 +24,7 @@ async function openSettings(): Promise<{ app: ElectronApplication; page: Page }>
   const page = await app.firstWindow()
   // The smallest window the app supports.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1024, 640))
-  await page.getByRole('button', { name: 'Beállítások' }).click()
+  await page.getByRole('button', { name: 'Beállítások', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Beállítások', level: 1 })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Könyvtár' })).toBeVisible()
   return { app, page }
