@@ -678,3 +678,52 @@ describe('sizes', () => {
     expect(free).toBeGreaterThan(0)
   })
 })
+
+describe('what the second audit found', () => {
+  it('does not move a link: its target outside the library would get a second name inside', async () => {
+    // Arrange
+    writeFileSync(join(outside, 'private.mp3'), 'not a library file')
+    const link = join(library, 'link.mp3')
+    symlinkSync(join(outside, 'private.mp3'), link)
+
+    // Act
+    const move = files.move(link, join(library, 'moved.mp3'))
+
+    // Assert
+    await expect(move).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+    expect(allFiles(library)).not.toContain('Music/moved.mp3')
+  })
+
+  it('puts nothing in place when the write is told to stop after its content was written', async () => {
+    // Arrange
+    const target = addTrack('a.mp3')
+    const before = sha256(target)
+    const stop = new AbortController()
+
+    // Act: the stop arrives while the temp file is being synced to disk.
+    const replace = files.replace(
+      target,
+      async (temp) => {
+        await writeFile(temp, 'new content')
+        setImmediate(() => stop.abort())
+      },
+      stop.signal
+    )
+
+    // Assert
+    await expect(replace).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+    expect(sha256(target)).toBe(before)
+    expect(allFiles()).toEqual(['Music/a.mp3'])
+  })
+
+  it.each(['​', '⁠', '﻿', '­'])('refuses a name with the invisible character %j', (character) => {
+    // Arrange
+    const name = `Tra${character}ck.mp3`
+
+    // Act
+    const reason = unusableNameReason(name, 'file')
+
+    // Assert
+    expect(reason).not.toBeNull()
+  })
+})

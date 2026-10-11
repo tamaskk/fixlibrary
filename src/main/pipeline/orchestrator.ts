@@ -659,6 +659,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
     async applyBatch(batchId) {
       await pruning
+      await dependencies.batchFiles.settled()
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
       if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
       const batch = getBatch(db, batchId)
@@ -690,6 +691,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
     async undoLast() {
       await pruning
+      // A stage of a cancelled batch may still be finishing a copy or a rename.
+      await dependencies.batchFiles.settled()
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
       // Never while a batch is being worked on: its files are changing.
       if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
@@ -793,7 +796,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       for (const done of waiters) done()
     },
 
-    changingFiles: () => busyWithFiles || pruning !== null || run?.phase === 'apply',
+    changingFiles: () =>
+      busyWithFiles || pruning !== null || run?.phase === 'apply' || dependencies.batchFiles.busy(),
     progress: () => (run ? snapshot(run, currentState(run)) : null),
 
     whenFinished: () =>

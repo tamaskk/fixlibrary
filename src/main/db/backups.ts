@@ -48,7 +48,14 @@ export function recordCreatedFile(
   db: AppDatabase,
   file: { batchId: number; trackId: number; path: string }
 ): void {
-  db.insert(batchFiles).values(file).onConflictDoNothing().run()
+  db.insert(batchFiles)
+    .values(file)
+    // The name may have been another track's earlier in the batch: it is this one's now.
+    .onConflictDoUpdate({
+      target: [batchFiles.batchId, batchFiles.path],
+      set: { trackId: file.trackId }
+    })
+    .run()
 }
 
 export function listCreatedFiles(db: AppDatabase, batchId: number): CreatedFile[] {

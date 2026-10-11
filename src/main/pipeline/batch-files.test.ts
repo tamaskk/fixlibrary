@@ -256,20 +256,24 @@ describe('changing files in place', () => {
 })
 
 describe('after the app stopped in the middle of the apply phase', () => {
-  it('makes the backup again when its file exists without a record', async () => {
+  it('makes the backup beside a file that is in its place without a record, and deletes neither', async () => {
     // Arrange
     const { ids, paths } = addTracks(1)
     const [id] = ids as [number]
     const original = sha256(paths[0] as string)
     const batch = newBatch('in_place', ids)
+    const inThePlace = join(backups, String(batch.id), `${id}.mp3`)
     mkdirSync(join(backups, String(batch.id)))
-    writeFileSync(join(backups, String(batch.id), `${id}.mp3`), 'half a copy')
+    writeFileSync(inThePlace, 'a backup of another database')
 
     // Act
     await trackFiles(batch, id).replaceContent((temp) => writeFile(temp, 'changed'))
 
     // Assert
-    expect(sha256(join(backups, String(batch.id), `${id}.mp3`))).toBe(original)
+    const [backup] = listBackups(testDatabase.db, batch.id)
+    expect(readFileSync(inThePlace, 'utf8')).toBe('a backup of another database')
+    expect(backup?.backupPath).toBe(join(backups, String(batch.id), `${id} (2).mp3`))
+    expect(sha256(backup?.backupPath ?? '')).toBe(original)
   })
 
   it('finds a file that was renamed just before the stop, and goes on with it', async () => {
@@ -866,5 +870,175 @@ describe('a library whose folder is spelled differently in the settings', () => 
 
     // Assert
     expect(working).toBe(join(clean, 'House', 'Deep', 'track-01.mp3'))
+  })
+})
+
+describe('an undo that would lose the last copy of a file', () => {
+  it('is refused when a track that was renamed in place has no backup record any more', async () => {
+    // Arrange: as after the backups of the batch were only partly deleted.
+    const { ids } = addTracks(2)
+    const batch = newBatch('in_place', ids)
+    for (const id of ids) {
+      await trackFiles(batch, id).move(join(library, 'House', `Renamed ${id}.mp3`))
+    }
+    const renamed = ids.map((id) => sha256(pathOf(id)))
+    testDatabase.db
+      .delete(backupsTable)
+      .where(eq(backupsTable.trackId, ids[0] as number))
+      .run()
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+    // Act
+    const undone = await files.undoLast()
+
+    // Assert
+    expect(undone).toEqual({ ok: false, code: 'WRITE_FAILED' })
+    expect(ids.map((id) => sha256(pathOf(id)))).toEqual(renamed)
+  })
+
+  it('keeps the copy in the clean library when the original is not there any more', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const batch = newBatch('clean_library', ids)
+    for (const id of ids) await trackFiles(batch, id).workingPath()
+    const copies = ids.map(pathOf)
+    const kept = sha256(copies[0] as string)
+    // The user has the clean copy now, and removed the original.
+    rmSync(paths[0] as string)
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    // Act
+    const undone = await files.undoLast()
+
+    // Assert
+    expect(undone).toMatchObject({ ok: true, value: { removed: 1 } })
+    expect(sha256(copies[0] as string)).toBe(kept)
+    expect(ids.map(pathOf)).toEqual([copies[0], paths[1]])
+  })
+
+  it('makes no second copy of an original that an undo had put back before it stopped', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(1)
+    const id = ids[0] as number
+    const old = paths[0] as string
+    const original = sha256(old)
+    const batch = newBatch('in_place', ids)
+    await trackFiles(batch, id).move(join(library, 'House', 'Renamed.mp3'))
+    // What an undo leaves that stopped before the database was told.
+    await fileOps.restore(join(backups, String(batch.id), `${id}.mp3`), old)
+    rmSync(pathOf(id))
+
+    // Act
+    const undone = await files.undoLast()
+
+    // Assert
+    expect(undone).toMatchObject({ ok: true })
+    expect(filesUnder(library)).toEqual(['Music/track-01.mp3'])
+    expect(sha256(old)).toBe(original)
+    expect(pathOf(id)).toBe(old)
+  })
+
+  it('deletes the backups it has put back, with their records', async () => {
+    // Arrange
+    const { ids } = addTracks(2)
+    const batch = newBatch('in_place', ids)
+    for (const id of ids) {
+      await trackFiles(batch, id).replaceContent((temp) => writeFile(temp, `changed ${id}`))
+    }
+
+    // Act
+    await files.undoLast()
+
+    // Assert
+    expect(filesUnder(backups)).toEqual([])
+    expect(listBackups(testDatabase.db, batch.id)).toEqual([])
+  })
+})
+
+describe('records that name the wrong file', () => {
+  it('do not get a library file deleted as the backup of an older batch', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const older = newBatch('in_place', [ids[0] as number])
+    await trackFiles(older, ids[0] as number).replaceContent((temp) => writeFile(temp, 'x'))
+    setBatchStatus(testDatabase.db, older.id, 'applied')
+    testDatabase.db.update(backupsTable).set({ backupPath: paths[1] }).run()
+    const newer = newBatch('in_place', [ids[0] as number])
+    await trackFiles(newer, ids[0] as number).replaceContent((temp) => writeFile(temp, 'y'))
+    setBatchStatus(testDatabase.db, newer.id, 'applied')
+    const untouched = sha256(paths[1] as string)
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+    // Act
+    await files.pruneOlderBackups(newer.id)
+
+    // Assert
+    expect(sha256(paths[1] as string)).toBe(untouched)
+    expect(listBackups(testDatabase.db, older.id)).toHaveLength(1)
+  })
+
+  it('do not let a file take the name of a track whose file is missing', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const batch = newBatch('in_place', [ids[0] as number])
+    rmSync(paths[1] as string)
+
+    // Act
+    const moving = trackFiles(batch, ids[0] as number).move(paths[1] as string)
+
+    // Assert
+    await expect(moving).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+    expect(pathOf(ids[0] as number)).toBe(paths[0])
+    expect(existsSync(paths[1] as string)).toBe(false)
+    expect(listCreatedFiles(testDatabase.db, batch.id)).toEqual([])
+  })
+
+  it("know a name that passed from one track to another in a batch as the second track's", async () => {
+    // Arrange
+    const { ids } = addTracks(2)
+    const [first, second] = ids as [number, number]
+    const batch = newBatch('in_place', ids)
+    const shared = join(library, 'House', 'Shared.mp3')
+    await trackFiles(batch, first).move(shared)
+    await trackFiles(batch, first).move(join(library, 'House', 'Other.mp3'))
+
+    // Act
+    await trackFiles(batch, second).move(shared)
+
+    // Assert
+    const note = listCreatedFiles(testDatabase.db, batch.id).find((file) => file.path === shared)
+    expect(note?.trackId).toBe(second)
+  })
+})
+
+describe('work on a file that nobody waits for any more', () => {
+  it('is still counted until it has ended', async () => {
+    // Arrange
+    const { ids } = addTracks(1)
+    const batch = newBatch('in_place', ids)
+    let finish: () => void = () => {}
+    const writing = trackFiles(batch, ids[0] as number).replaceContent(async (temp) => {
+      await writeFile(temp, 'changed')
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+    })
+    await vi.waitFor(() => expect(finish).not.toHaveLength(0))
+
+    // Act
+    const whileWriting = files.busy()
+    let settled = false
+    const waiting = files.settled().then(() => {
+      settled = true
+    })
+    const settledEarly = settled
+    finish()
+    await writing
+    await waiting
+
+    // Assert
+    expect(whileWriting).toBe(true)
+    expect(settledEarly).toBe(false)
+    expect(files.busy()).toBe(false)
   })
 })

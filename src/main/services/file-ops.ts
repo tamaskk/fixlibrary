@@ -38,9 +38,12 @@ const MAX_NAME_ATTEMPTS = 1000
 const NAME_LIMIT = 255
 const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.aif', '.aiff']
 
-// Control characters, line and paragraph separators, and the invisible characters
-// that turn the reading direction around.
-const UNSAFE_NAME_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}؜‎‏‪-‮⁦-⁩]/u
+// Control characters, line and paragraph separators, the invisible characters that
+// turn the reading direction around, and the ones that take no room: two names that
+// differ only in those would look the same. Written as escapes, so that no editor
+// drops them unseen.
+const UNSAFE_NAME_CHARACTERS =
+  /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u200b\u2060\ufeff\u00ad]/u
 
 export interface FileOpsOptions {
   /**
@@ -271,6 +274,9 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       // nothing of it may appear under the final name.
       if (signal.aborted) throw stoppedError()
       await flush(temp)
+      // Syncing a large file takes a while: whoever stopped the write meanwhile may
+      // already be putting the file back to what it was.
+      if (signal.aborted) throw stoppedError()
       if (mayOverwrite) await rename(temp, target)
       else await nameWithoutReplacing(temp, target)
     } catch (error) {
@@ -282,14 +288,10 @@ export function createFileOps(options: FileOpsOptions): FileOps {
   }
 
   async function copyInto(temp: string, from: string, expected: number): Promise<void> {
-    try {
-      // A clone on APFS, which takes no time and no room.
-      await copyFile(from, temp, constants.COPYFILE_FICLONE_FORCE)
-    } catch {
-      // No clones on this file system (exFAT), or across two volumes: a plain copy.
-      await rm(temp, { force: true })
-      await copyFile(from, temp)
-    }
+    // A clone where the file system makes one, a plain copy elsewhere. The temp name
+    // is new: anything that is there already, such as a link, was put there by
+    // someone else and is not written through.
+    await copyFile(from, temp, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE)
     const copied = (await stat(temp)).size
     if (copied !== expected) {
       throw new AppError('WRITE_FAILED', `a copy has ${copied} bytes instead of ${expected}`)
@@ -319,6 +321,8 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       if (to === from) return
       await mkdir(dirname(to), { recursive: true })
       await assertAllowed(to)
+      // A link in the place of the file would bring in the file it points to.
+      await assertRegularFile(from)
       // The same file under another letter case or Unicode form: where the disk
       // ignores that, the new name "exists" already and is the file itself.
       if (isRespelling(from, to) && (await identityOf(to)) === (await identityOf(from))) {
