@@ -10,7 +10,7 @@ import {
   type RpcProgress
 } from '@shared/rpc'
 import { toOneLine } from '@shared/text'
-import { DEFAULT_RPC_TIMEOUT_MS } from '@shared/timeouts'
+import { DEFAULT_RPC_TIMEOUT_MS, JOB_CANCEL_TIMEOUT_MS } from '@shared/timeouts'
 import { createLineReader } from './line-reader'
 import { createLogLimiter } from './log-limiter'
 import { logger } from './logger'
@@ -56,12 +56,22 @@ export interface PythonBridgeOptions {
   shutdownGraceMs?: number
 }
 
+export interface CallOptions {
+  timeoutMs?: number
+  /**
+   * For a call that starts a long job in the sidecar: when the signal is aborted, the
+   * call is rejected at once and the sidecar is told to stop the job. `id` is the
+   * job id that was sent in the params of the call.
+   */
+  job?: { id: string; signal: AbortSignal }
+}
+
 export interface PythonBridge {
   start: () => void
   call: <M extends RpcMethod>(
     method: M,
     params: RpcMethods[M]['params'],
-    options?: { timeoutMs?: number }
+    options?: CallOptions
   ) => Promise<RpcMethods[M]['result']>
   stop: () => Promise<void>
   /** The sidecar's process id, or null while it is not running. */
@@ -304,11 +314,16 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
   function call<M extends RpcMethod>(
     method: M,
     params: RpcMethods[M]['params'],
-    callOptions: { timeoutMs?: number } = {}
+    callOptions: CallOptions = {}
   ): Promise<RpcMethods[M]['result']> {
     return new Promise((resolve, reject) => {
       if (state !== 'running' && state !== 'restarting') {
         reject(new AppError('PYTHON_CRASHED', `${method}: the sidecar is not running`))
+        return
+      }
+      const { job } = callOptions
+      if (job?.signal.aborted) {
+        reject(new AppError('UNEXPECTED', `${method}: stopped before it was sent`))
         return
       }
       const validParams = RPC_SCHEMAS[method].params.safeParse(params)
@@ -332,6 +347,22 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
         reject,
         timer
       })
+      job?.signal.addEventListener(
+        'abort',
+        () => {
+          const stopped = settle(id)
+          // Answered, timed out or rejected with the sidecar already.
+          if (!stopped) return
+          reject(new AppError('UNEXPECTED', `${method}: stopped`))
+          // A call that never reached the sidecar started no job there.
+          if (!stopped.sent) return
+          // Whatever the sidecar answers: the job's own result is no longer waited for.
+          call('job.cancel', { jobId: job.id }, { timeoutMs: JOB_CANCEL_TIMEOUT_MS }).catch(
+            (error: unknown) => log(`job.cancel for ${method} got no answer: ${String(error)}`)
+          )
+        },
+        { once: true }
+      )
       sendWaitingCalls()
     })
   }

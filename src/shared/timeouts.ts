@@ -27,3 +27,6 @@ export const TAG_BATCH_TIMEOUT_MS = 2 * MINUTE
  * for a sidecar that has just crashed to be started again.
  */
 export const ENGINE_CHECK_TIMEOUT_MS = 15 * SECOND
+
+/** How long a job in the sidecar may take to stop after it was told to. */
+export const JOB_CANCEL_TIMEOUT_MS = 5 * SECOND

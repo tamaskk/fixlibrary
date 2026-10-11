@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import threading
 from importlib.metadata import version
 from pathlib import Path
 
@@ -359,3 +360,54 @@ def test_the_server_exits_when_stdin_closes() -> None:
     )
 
     assert completed.returncode == 0
+
+
+def test_job_cancel_stops_a_running_job_within_five_seconds() -> None:
+    started = threading.Event()
+    outcome: list[str] = []
+
+    def long_job() -> None:
+        try:
+            with server.cancellable("job-1") as stop:
+                started.set()
+                # Stands in for a method that checks between its steps.
+                while not stop.wait(0.05):
+                    pass
+                server.raise_if_cancelled(stop)
+        except server.JobCancelled:
+            outcome.append("cancelled")
+
+    worker = threading.Thread(target=long_job)
+    worker.start()
+    assert started.wait(2)
+
+    response = call('{"jsonrpc":"2.0","id":1,"method":"job.cancel","params":{"jobId":"job-1"}}')
+    worker.join(5)
+
+    assert response["result"] == {"cancelled": True}
+    assert outcome == ["cancelled"]
+    assert not worker.is_alive()
+
+
+def test_job_cancel_says_when_no_such_job_is_running() -> None:
+    with server.cancellable("job-2"):
+        pass
+
+    finished = call('{"jsonrpc":"2.0","id":1,"method":"job.cancel","params":{"jobId":"job-2"}}')
+    unknown = call('{"jsonrpc":"2.0","id":2,"method":"job.cancel","params":{"jobId":"nope"}}')
+
+    assert finished["result"] == {"cancelled": False}
+    assert unknown["result"] == {"cancelled": False}
+
+
+def test_two_jobs_cannot_share_an_id() -> None:
+    with server.cancellable("job-3"):
+        with pytest.raises(ValueError):
+            with server.cancellable("job-3"):
+                pass
+
+
+def test_job_cancel_refuses_an_id_that_is_not_a_string() -> None:
+    response = call('{"jsonrpc":"2.0","id":1,"method":"job.cancel","params":{"jobId":7}}')
+
+    assert response["error"]["code"] == server.INTERNAL_ERROR

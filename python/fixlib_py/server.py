@@ -16,8 +16,9 @@ import re
 import signal
 import sys
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from typing import Any, TextIO
@@ -41,6 +42,14 @@ _executor_lock = threading.Lock()
 _cpu_pool: ProcessPoolExecutor | None = None
 _demucs_executor: ThreadPoolExecutor | None = None
 _writer: ProtocolWriter | None = None
+
+# The jobs that can be told to stop, by the id the app gave them.
+_jobs_lock = threading.Lock()
+_jobs: dict[str, threading.Event] = {}
+
+
+class JobCancelled(Exception):
+    """Raised inside a job that was told to stop."""
 
 
 def rpc(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -126,6 +135,45 @@ def report_progress(job_id: str, percent: float) -> None:
     _writer.send(
         {"jsonrpc": "2.0", "method": "progress", "params": {"jobId": job_id, "percent": percent}}
     )
+
+
+@contextmanager
+def cancellable(job_id: str) -> Iterator[threading.Event]:
+    """Makes the work inside the block a job that `job.cancel` can stop.
+
+    The block gets an event that is set once the app asks the job to stop. A long
+    method checks it between its steps, at least every few seconds, and then calls
+    `raise_if_cancelled` or returns: a job has to be gone within 5 seconds.
+    """
+    event = threading.Event()
+    with _jobs_lock:
+        if job_id in _jobs:
+            raise ValueError("a job with this id is already running")
+        _jobs[job_id] = event
+    try:
+        yield event
+    finally:
+        with _jobs_lock:
+            _jobs.pop(job_id, None)
+
+
+def raise_if_cancelled(event: threading.Event) -> None:
+    """Ends the job with JobCancelled if the app has asked it to stop."""
+    if event.is_set():
+        raise JobCancelled()
+
+
+@rpc("job.cancel")
+def cancel_job(job_id: str) -> dict[str, bool]:
+    """Ask a running job to stop. `cancelled` is false when no such job is running."""
+    if not isinstance(job_id, str):
+        raise ValueError("jobId must be a string")
+    with _jobs_lock:
+        event = _jobs.get(job_id)
+    if event is None:
+        return {"cancelled": False}
+    event.set()
+    return {"cancelled": True}
 
 
 @rpc("ping")
