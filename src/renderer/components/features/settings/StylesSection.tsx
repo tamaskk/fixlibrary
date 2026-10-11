@@ -8,7 +8,7 @@ import { useActionFeedback } from '@/lib/use-action-feedback'
 import { useSettingsStore } from '@/stores/settings-store'
 import { NEW_STYLE_COLOR, UNSORTED_STYLE_NAME, type Style, type StyleInput } from '@shared/settings'
 import { SettingsSection } from './SettingsSection'
-import { StatusLine } from './StatusLine'
+import { StatusLine } from '@/components/ui/status-line'
 
 // A draft row needs a stable key before the database has given it an id.
 type DraftStyle = StyleInput & { key: string }

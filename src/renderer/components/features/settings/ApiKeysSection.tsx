@@ -12,7 +12,7 @@ import type {
   SecretStatus
 } from '@shared/settings'
 import { SettingsSection } from './SettingsSection'
-import { StatusLine, type StatusTone } from './StatusLine'
+import { StatusLine, type StatusTone } from '@/components/ui/status-line'
 
 const KEYS: { name: SecretName; label: string }[] = [
   { name: 'acoustid', label: 'AcoustID API kulcs' },

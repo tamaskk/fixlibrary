@@ -294,6 +294,9 @@ def claim_stdin() -> TextIO:
 
 
 def main() -> None:
+    # The modules whose `@rpc` methods the sidecar serves; importing registers them.
+    from fixlib_py import tags  # noqa: F401
+
     protocol_output = claim_stdout()
     protocol_input = claim_stdin()
     configure_logging()

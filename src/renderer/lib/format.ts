@@ -16,3 +16,10 @@ export function parseDecimal(text: string): number | null {
   if (!/^-?\d+(\.\d+)?$/.test(normalized)) return null
   return Number(normalized)
 }
+
+const count = new Intl.NumberFormat('hu-HU', { maximumFractionDigits: 0 })
+
+/** A whole number in the hu-HU form, such as `12 984`. */
+export function formatCount(value: number): string {
+  return count.format(value)
+}

@@ -1,0 +1,32 @@
+// What the Library page and the main process say to each other about scanning.
+
+/** What one scan did. `found` counts the audio files seen on disk. */
+export interface ScanSummary {
+  found: number
+  added: number
+  updated: number
+  unchanged: number
+  /**
+   * All tracks of this library whose file is not there, not only the ones this scan
+   * noticed. Their rows are kept. Always 0 for a scan that was not complete.
+   */
+  missing: number
+  /** Files found in this scan that cannot be read; they are listed without tags. */
+  unreadable: number
+  /**
+   * False when part of the library could not be looked at. Such a scan marks
+   * nothing missing, because a file it did not see may still be there.
+   */
+  complete: boolean
+}
+
+export type ScanProgress =
+  { phase: 'walking'; found: number } | { phase: 'reading'; done: number; total: number }
+
+export interface LibraryStatus {
+  /** False until a library folder is chosen in Settings. */
+  rootChosen: boolean
+  trackCount: number
+  /** True while a scan runs, also one the app started by itself. */
+  scanning: boolean
+}

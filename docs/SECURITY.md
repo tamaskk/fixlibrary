@@ -20,7 +20,7 @@ There are no accounts and no personal data of other people.
 - Python sidecar → main: validate RPC results against the types in `src/shared/rpc.ts`. A crash or malformed line never takes the app down.
 - Online services (AcoustID, MusicBrainz, Discogs, Beatport, iTunes, Cover Art Archive, GitHub API): untrusted input. Validate before use; never render as HTML.
 - `claude` CLI output: untrusted. Validate with the JSON schema and the Zod schema; values are data, never commands or paths.
-- Files in the library: untrusted. File names and tags may contain any character; tag text and XML are escaped on write.
+- Files in the library: untrusted. File names and tags may contain any character; tag text and XML are escaped on write. Tag text read by a scan is cut to one line of at most 300 characters in the sidecar, without characters that reverse the reading direction, and the main process refuses anything longer. The main process checks every file's tags again and refuses text that is not one clean line. A scan never follows a link out of the library: the walk skips links and re-checks a folder before entering it, and the sidecar opens a file only if no part of its path is a link (`O_NOFOLLOW_ANY`). The sidecar picks the parser by the file's extension and never reads more than 16 MB at once. File system errors are logged as one line written by the app, never as the raw error, because a file name can hold a line break.
 - Downloaded executables and archives (yt-dlp, Python runtime, app updates): untrusted until their SHA-256 matches the published value.
 
 ## 03 Authentication and authorization
@@ -28,6 +28,7 @@ There are no accounts and no personal data of other people.
 - There is no login and no session. The only principal is the local macOS user.
 - The renderer has no privileges of its own: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, and a CSP of `default-src 'self'`.
 - The preload exposes named functions only. It never exposes `ipcRenderer`, a generic `invoke(channel, …)`, or a function that takes a file path to execute or a command to run.
+- An event from the main process reaches the page through a subscribe function of the preload that passes on the payload only; the page never gets the event object or a way to listen on a channel of its choice.
 - Navigation and new windows are denied; only `http(s)` links are handed to the OS browser. The window stays on the app's own page (`will-navigate`, `will-redirect` and webviews are blocked), so a dropped file or a changed `location` cannot load another document into the window that holds `window.api`.
 - Every IPC handler checks that the call comes from the main frame of the app's own page, and validates its arguments, before it runs.
 - Custom protocols (such as the planned `fixlib-audio`) serve only files that belong to a track in the database, resolved by track id, never by a path from the renderer.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDecimal, parseDecimal } from './format'
+import { formatCount, formatDecimal, parseDecimal } from './format'
 
 describe('formatDecimal', () => {
   it.each([
@@ -37,5 +37,19 @@ describe('parseDecimal', () => {
 
     // Assert
     expect(value).toBeNull()
+  })
+})
+
+describe('formatCount', () => {
+  it.each([
+    [0, '0'],
+    [984, '984'],
+    [12_984, '12\u00a0984']
+  ])('formats %d as %s', (value, expected) => {
+    // Act
+    const text = formatCount(value)
+
+    // Assert
+    expect(text).toBe(expected)
   })
 })

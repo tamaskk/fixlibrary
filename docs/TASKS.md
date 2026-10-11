@@ -12,7 +12,7 @@ Package 1: foundations.
 
 Package 2: pipeline frame.
 
-- [ ] T-008 (base, M) Library scan and track selection
+- [ ] T-008 (base, M) Library scan and track selection. Done: the scan (`pipeline/scanner.ts`, `tags.read`, scan at startup, "Újraolvasás" on the Library page). Open: the track table, selection and `library:list` / `library:run`, in a second pull request; the timing and the unplugged drive on the real external drive.
 - [ ] T-009 (base, L) Pipeline orchestrator and job queue
 - [ ] T-010 (base, M) File operations, backup and undo
 - [ ] T-011 (base, L) Batch preview frame

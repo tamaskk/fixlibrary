@@ -4,7 +4,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import type { SettingsSnapshot } from '@shared/settings'
 import { FolderField } from './FolderField'
 import { SettingsSection } from './SettingsSection'
-import { StatusLine } from './StatusLine'
+import { StatusLine } from '@/components/ui/status-line'
 
 export function LibrarySection({ snapshot }: { snapshot: SettingsSnapshot }): React.JSX.Element {
   const update = useSettingsStore((state) => state.update)

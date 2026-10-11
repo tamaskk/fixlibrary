@@ -191,6 +191,44 @@ function resolvePickedFolder(folder: string): string | null {
 const LIBRARY_FOLDER_KINDS: readonly FolderKind[] = ['libraryRoot', 'cleanLibrary', 'backup']
 
 /**
+ * True for a folder that must not be scanned as the library: the home folder or
+ * anything above it (`/`, `/Users`), and `/Volumes` itself. A scan of these would
+ * take in every audio file of the machine or of every drive. A whole drive is fine.
+ */
+export function isUnsuitableLibraryRoot(folder: string, environment: SettingsEnvironment): boolean {
+  const volumesRoot = join(sep, 'Volumes')
+  // The data volume shows the home folder a second time, under a path that is not
+  // above the first one.
+  const homeOnDataVolume = join(sep, 'System', 'Volumes', 'Data', environment.homeDir)
+  return (
+    isInsideOrSame(environment.homeDir, folder) ||
+    isInsideOrSame(homeOnDataVolume, folder) ||
+    (isInsideOrSame(folder, volumesRoot) && isInsideOrSame(volumesRoot, folder))
+  )
+}
+
+/**
+ * True when the library, its clean copy and its backup folder contain one another.
+ * Checked when a folder is chosen and again by whatever is about to use the folders,
+ * because what a path points to can change in between.
+ */
+export function libraryFoldersOverlap(
+  settings: Settings,
+  environment: SettingsEnvironment
+): boolean {
+  const { rootFolder, cleanLibraryFolder } = settings.library
+  const backup = resolveEffectiveSettings(settings, environment).backupFolder
+  const folders = [rootFolder, cleanLibraryFolder, backup].filter(
+    (path): path is string => path !== null
+  )
+  return folders.some((first, index) =>
+    folders
+      .slice(index + 1)
+      .some((second) => isInsideOrSame(first, second) || isInsideOrSame(second, first))
+  )
+}
+
+/**
  * Stores a folder the user picked in a dialog of the main process, or clears it with
  * null. The library, its clean copy and its backups must not contain one another:
  * otherwise a run would copy the library into itself, scan its own backups, or put
@@ -216,17 +254,14 @@ export function setFolder(
   if (kind === 'generatedXml') rekordbox.generatedXmlFolder = folder
   if (kind === 'exportedXml') rekordbox.exportedXmlFolder = folder
 
-  if (LIBRARY_FOLDER_KINDS.includes(kind)) {
-    const backup = resolveEffectiveSettings({ ...current, library }, environment).backupFolder
-    const folders = [library.rootFolder, library.cleanLibraryFolder, backup].filter(
-      (path): path is string => path !== null
-    )
-    const overlaps = folders.some((first, index) =>
-      folders
-        .slice(index + 1)
-        .some((second) => isInsideOrSame(first, second) || isInsideOrSame(second, first))
-    )
-    if (overlaps) return { ok: false, code: 'INVALID_INPUT' }
+  if (kind === 'libraryRoot' && folder !== null && isUnsuitableLibraryRoot(folder, environment)) {
+    return { ok: false, code: 'LIBRARY_ROOT_UNSUITABLE' }
+  }
+  if (
+    LIBRARY_FOLDER_KINDS.includes(kind) &&
+    libraryFoldersOverlap({ ...current, library }, environment)
+  ) {
+    return { ok: false, code: 'INVALID_INPUT' }
   }
 
   db.transaction((tx) => {

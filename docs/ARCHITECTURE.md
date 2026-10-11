@@ -71,7 +71,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
       stores/            Zustand stores, UI state and cached server state
       styles/globals.css design tokens
       lib/               pure renderer helpers
-    shared/              types and pure functions used by main, preload and renderer: ipc.ts, rpc.ts, errors.ts, keys.ts
+    shared/              types and pure functions used by main, preload and renderer: ipc.ts, rpc.ts, errors.ts, library.ts, keys.ts
   python/
     fixlib_py/           sidecar package: server.py, logging_setup.py, analysis/, tags.py, convert.py, normalize.py
     tests/               pytest
@@ -79,10 +79,10 @@ Do not add a dependency that overlaps with a row in this table without asking.
     runtime/             python-build-standalone CPython (gitignored)
     pyproject.toml, uv.lock   locked for arm64 macOS only
   resources/bin/         ffmpeg, fpcalc, mp3gain and their licences, from scripts/fetch-binaries.sh (gitignored)
-  scripts/               fetch-python-runtime.sh, fetch-binaries.sh, build-python.sh, build-dmg.sh
+  scripts/               fetch-python-runtime.sh, fetch-binaries.sh, make-synthetic-fixtures.py, build-python.sh, build-dmg.sh
   tests/
     e2e/                 Playwright tests against the built app
-    fixtures/synthetic/  generated audio (committed)
+    fixtures/synthetic/  generated audio (committed; scripts/make-synthetic-fixtures.py)
     fixtures/real/       real music (gitignored, never committed)
 ```
 
@@ -167,8 +167,27 @@ Settings and secrets:
 IPC handlers:
 
 - Every handler is registered through `handleIpc` (`src/main/ipc/handle.ts`). It runs the handler only for the app's own page (the main frame, at the renderer's URL) and only with arguments that fit a Zod schema. Anything else is rejected with a fixed message and logged by channel name. A handler that throws is logged in the main process, and the renderer gets a fixed message, never the error text. In development every page of the dev server's origin counts as the app's page.
+- The main process tells the renderer something unasked only on the channels of `IPC_EVENTS` in `src/shared/ipc.ts`. The preload exposes each as a subscribe function that hands the page the payload alone and returns the function that unsubscribes. Progress goes out at most four times a second (`ipc/progress.ts`).
 - Calls that can fail in an expected way return `Result<T>` from `src/shared/errors.ts` (`{ ok, value }` or `{ ok: false, code }`), because an error thrown across IPC loses its code. The renderer maps the code to Hungarian text.
 - The window's top-level document cannot navigate away from the app's page, and no webview can be attached. A frame inside the page gets no preload and is refused by the handlers.
+
+Library scan:
+
+- `pipeline/scanner.ts` walks the library folder and keeps the `tracks` table in step with it. It only reads: no library file is changed, moved or deleted by a scan. It runs when the app starts (if a library folder is chosen) and from the Library page; one scan runs at a time, and a second request joins the one that is running. `library:followScan` gives the page the result of a running scan without ever starting one.
+- The walk takes `.mp3`, `.wav`, `.aif` and `.aiff` files in any letter case. It skips every entry whose name starts with a dot (hidden files, `._*` AppleDouble files, `.Trashes`, `.Spotlight-V100`, `.fseventsd`), never follows a link, and leaves out the backup and clean library folders.
+- A track stores the size and modification time of its file as last scanned. A file with both unchanged is not read again. New and changed files go to the sidecar's `tags.read` in batches of 50 (`TAG_BATCH_SIZE`), which returns duration, bitrate, sample rate, the basic tags and whether a cover is embedded. A file that cannot be read is listed without tags, with `stageStatus.scan` set to `failed`.
+- A file that is gone is marked `fileMissing`; its row stays, because batches and backups may refer to it. Nothing is marked missing when a folder could not be read, or when the library is not reachable at the end of the scan.
+- Before it starts, and again before it marks anything missing, the scan checks that the folder is there and, for a path under `/Volumes`, that the volume is mounted: an unclean eject can leave an empty folder behind. A drive that goes away ends the scan with `LIBRARY_UNAVAILABLE`; what was stored until then stays.
+- The home folder, anything above it and `/Volumes` itself cannot be the library (`LIBRARY_ROOT_UNSUITABLE`). This and the rule that the library folders may not contain one another are checked when a folder is chosen and again by every scan.
+- A file that could not be read (`stageStatus.scan` is `failed`) is tried again by every scan, whether it changed or not; if it is still unreadable, the scan counts it as unchanged. A file whose read ran out of time is `skipped` instead and is not tried again until its size or modification time changes, because trying it costs minutes.
+- When a whole batch fails, its files are read one by one, so one file the sidecar cannot cope with is recorded as unreadable instead of stopping every scan at the same place. After a single file fails, the sidecar is asked whether it is alive (`ping`): if it answers, the file was the cause; if not, the scan ends with the sidecar's error.
+- Every entry of a `tags.read` answer is validated on its own (`fileTagsSchema`). An entry that does not fit makes that one file unreadable; an answer about other files than were asked for ends the scan.
+- The sidecar chooses the parser by the file's extension, never by its content, and opens the file itself: nothing reached through a link in any part of the path (`O_NOFOLLOW_ANY`), regular files only. No single read may exceed 16 MB, which bounds a tag, a cover and a WAV or AIFF chunk alike. Tag text is cut to one line of 300 characters without direction marks; with that limit the largest answer for a batch fits the 1 MiB line limit of the bridge.
+- Not covered: a compressed ID3 frame inside the read limit can inflate to much more memory, and a tag of very many tiny frames can take minutes to parse. Such a file is read once, runs into the batch timeout and is then `skipped`, but its sidecar thread works on until it is done. Parsing in a process that can be stopped would close both.
+- A scan that could not look at part of the library (a folder it may not read, an entry that vanished, a library that had tracks and shows no file at all) reports `complete: false` and marks nothing missing. `missing` in the result is the total of this library's tracks without a file, not only the ones this scan noticed.
+- Known limit: a file renamed only in letter case is a new track to the scan, and the old row is marked missing.
+- A path is stored composed (NFC), but a file is always opened by the name the disk gave during the walk.
+- The scanner reads the file system itself instead of going through a service: it only lists and stats, and `services/file-ops.ts` stays the only code that changes a library file.
 
 Python sidecar:
 

@@ -114,6 +114,6 @@ Ask with the specific question, the options you see, and your recommendation.
 
 - Never commit to main directly. Branches: feat/<slug>, fix/<issue>-<slug>, chore/<slug>, docs/<slug>.
 - Conventional Commits: `type(scope): summary` (feat, fix, refactor, test, docs, chore, perf).
-- One logical change per commit. Never commit secrets, .env files, build output or audio files.
+- One logical change per commit. Never commit secrets, .env files, build output or audio files; the one exception is the generated tones in `tests/fixtures/synthetic/` (`scripts/make-synthetic-fixtures.py`).
 - Do not push, force-push, rebase shared branches, or merge pull requests unless the user asks.
 - Pull request description: what changed, why, how it was verified, screenshots for UI.

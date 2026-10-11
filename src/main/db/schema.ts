@@ -69,6 +69,13 @@ export const tracks = sqliteTable(
     durationMs: integer('duration_ms'),
     bitrateKbps: integer('bitrate_kbps'),
     sampleRateHz: integer('sample_rate_hz'),
+    // What the file looked like when it was last scanned. A rescan skips a file whose
+    // size and modification time are unchanged; null means it was never scanned.
+    fileSizeBytes: integer('file_size_bytes'),
+    fileMtimeMs: integer('file_mtime_ms'),
+    // Set by a scan that no longer finds the file on a mounted volume. The row stays,
+    // because batches and backups may refer to it.
+    fileMissing: integer('file_missing', { mode: 'boolean' }).notNull().default(false),
     artist: text('artist'),
     title: text('title'),
     mix: text('mix'),

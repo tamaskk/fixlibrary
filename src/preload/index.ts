@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC_CHANNELS, type FixLibraryApi } from '@shared/ipc'
+import { IPC_CHANNELS, IPC_EVENTS, type FixLibraryApi } from '@shared/ipc'
 
 // The preload runs sandboxed: only `electron` may be required at runtime.
 // Never expose ipcRenderer itself, only the typed functions below.
@@ -26,6 +26,21 @@ const api: FixLibraryApi = {
   system: {
     checkTools: (force) => ipcRenderer.invoke(IPC_CHANNELS.systemCheckTools, force),
     openLogFolder: () => ipcRenderer.invoke(IPC_CHANNELS.systemOpenLogFolder)
+  },
+  library: {
+    status: () => ipcRenderer.invoke(IPC_CHANNELS.libraryStatus),
+    scan: () => ipcRenderer.invoke(IPC_CHANNELS.libraryScan),
+    followScan: () => ipcRenderer.invoke(IPC_CHANNELS.libraryFollowScan),
+    onScanProgress: (listener) => {
+      if (typeof listener !== 'function') throw new TypeError('The listener must be a function')
+      // The page gets the payload only, never the event with its sender.
+      const forward = (_event: unknown, progress: Parameters<typeof listener>[0]): void =>
+        listener(progress)
+      ipcRenderer.on(IPC_EVENTS.libraryScanProgress, forward)
+      return () => {
+        ipcRenderer.removeListener(IPC_EVENTS.libraryScanProgress, forward)
+      }
+    }
   }
 }
 

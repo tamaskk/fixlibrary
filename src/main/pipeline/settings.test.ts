@@ -9,6 +9,8 @@ import { DEFAULT_SETTINGS, DEFAULT_STYLES, type StyleInput } from '@shared/setti
 import {
   ensureDefaultStyles,
   getSettingsSnapshot,
+  isUnsuitableLibraryRoot,
+  libraryFoldersOverlap,
   resolveEffectiveSettings,
   saveStyles,
   setFolder,
@@ -419,6 +421,77 @@ describe('setFolder', () => {
 
     // Assert
     expect(results.map((result) => result.ok)).toEqual([true, true, true])
+  })
+})
+
+describe('unsuitable library roots', () => {
+  it('refuses the home folder and every folder above it as the library', () => {
+    // Arrange
+    const home = makeFolder('Users', 'dj')
+    const local: SettingsEnvironment = { homeDir: home, cpuCount: 8 }
+    const above = makeFolder('Users')
+
+    // Act
+    const results = [home, above].map((folder) =>
+      setFolder(testDatabase.db, 'libraryRoot', folder, local)
+    )
+
+    // Assert
+    expect(results).toEqual([
+      { ok: false, code: 'LIBRARY_ROOT_UNSUITABLE' },
+      { ok: false, code: 'LIBRARY_ROOT_UNSUITABLE' }
+    ])
+    expect(getSettingsSnapshot(testDatabase.db, local).settings.library.rootFolder).toBeNull()
+  })
+
+  it('accepts a folder inside the home folder', () => {
+    // Arrange
+    const home = makeFolder('Users', 'dj')
+    const music = makeFolder('Users', 'dj', 'Music')
+
+    // Act
+    const result = setFolder(testDatabase.db, 'libraryRoot', music, { homeDir: home, cpuCount: 8 })
+
+    // Assert
+    expect(result.ok).toBe(true)
+  })
+
+  it('refuses /Volumes itself, but not a folder on a drive', () => {
+    // Act
+    const volumes = isUnsuitableLibraryRoot('/Volumes', environment)
+    const drive = isUnsuitableLibraryRoot('/Volumes/DJ SSD', environment)
+    const root = isUnsuitableLibraryRoot('/', environment)
+
+    // Assert
+    expect([volumes, drive, root]).toEqual([true, false, true])
+  })
+
+  it('refuses the data volume, which holds the home folder under a second path', () => {
+    // Act
+    const dataVolume = isUnsuitableLibraryRoot('/System/Volumes/Data', environment)
+    const usersThere = isUnsuitableLibraryRoot('/System/Volumes/Data/Users', environment)
+
+    // Assert
+    expect([dataVolume, usersThere]).toEqual([true, true])
+  })
+
+  it('reports folders that came to overlap after they were chosen', () => {
+    // Arrange
+    const library = makeFolder('Music')
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      library: {
+        ...DEFAULT_SETTINGS.library,
+        rootFolder: library,
+        backupFolder: join(library, 'Backups')
+      }
+    }
+
+    // Act
+    const overlap = libraryFoldersOverlap(settings, environment)
+
+    // Assert
+    expect(overlap).toBe(true)
   })
 })
 

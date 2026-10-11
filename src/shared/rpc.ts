@@ -2,6 +2,39 @@
 // python/fixlib_py mirrors these methods by hand; change both sides in the same commit.
 import { z } from 'zod'
 
+/** How many files one `tags.read` call may name. The same limit is in fixlib_py/tags.py. */
+export const TAG_BATCH_SIZE = 50
+
+// Tag text comes out of a file, so it is untrusted. The sidecar cuts it to one line of
+// at most this length without characters that reverse the reading direction; main
+// does not take the sidecar's word for it and refuses anything else. The length limit
+// also keeps the largest possible answer for one batch below the line limit of the bridge.
+const UNSAFE_TAG_TEXT = /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u
+const tagText = z
+  .string()
+  .min(1)
+  .max(300)
+  .refine((text) => !UNSAFE_TAG_TEXT.test(text), { message: 'Tag text must be one clean line' })
+  .nullable()
+const positiveInt = z.number().int().positive().nullable()
+
+export const fileTagsSchema = z.object({
+  path: z.string().min(1),
+  /** False for a file that is missing, damaged or not one of the app's formats. */
+  readable: z.boolean(),
+  durationMs: positiveInt,
+  bitrateKbps: positiveInt,
+  sampleRateHz: positiveInt,
+  artist: tagText,
+  title: tagText,
+  album: tagText,
+  label: tagText,
+  year: z.number().int().min(1000).max(9999).nullable(),
+  hasCover: z.boolean()
+})
+
+export type FileTags = z.output<typeof fileTagsSchema>
+
 export const RPC_SCHEMAS = {
   ping: {
     params: z.object({}),
@@ -14,6 +47,12 @@ export const RPC_SCHEMAS = {
   shutdown: {
     params: z.object({}),
     result: z.null()
+  },
+  'tags.read': {
+    params: z.object({ paths: z.array(z.string().min(1)).min(1).max(TAG_BATCH_SIZE) }),
+    // One entry per path, in input order. Each entry is checked on its own with
+    // `fileTagsSchema` by the caller, so one bad entry cannot reject the others.
+    result: z.object({ files: z.array(z.unknown()).max(TAG_BATCH_SIZE) })
   }
 } as const
 

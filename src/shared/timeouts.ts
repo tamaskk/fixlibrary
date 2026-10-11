@@ -18,3 +18,12 @@ export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS
 
 /** For a sidecar call that belongs to no stage, such as `ping`. */
 export const DEFAULT_RPC_TIMEOUT_MS = 30 * SECOND
+
+/** For one `tags.read` batch of a library scan; an exFAT drive is slow at this. */
+export const TAG_BATCH_TIMEOUT_MS = 2 * MINUTE
+
+/**
+ * For asking the sidecar whether it is alive after a read has failed. Long enough
+ * for a sidecar that has just crashed to be started again.
+ */
+export const ENGINE_CHECK_TIMEOUT_MS = 15 * SECOND
