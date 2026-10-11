@@ -12,7 +12,6 @@ Package 1: foundations.
 
 Package 2: pipeline frame.
 
-- [ ] T-008 (base, M) Library scan and track selection. Done: the scan (`pipeline/scanner.ts`, `tags.read`, scan at startup, "Újraolvasás" on the Library page). Open: the track table, selection and `library:list` / `library:run`, in a second pull request; the timing and the unplugged drive on the real external drive.
 - [ ] T-009 (base, L) Pipeline orchestrator and job queue
 - [ ] T-010 (base, M) File operations, backup and undo
 - [ ] T-011 (base, L) Batch preview frame
@@ -93,6 +92,7 @@ Nothing planned. See docs/PRD.md §07 before proposing anything.
 - [x] T-001 (base, M) Project skeleton: electron-vite, sandboxed typed IPC, Tailwind v4, design tokens, UI primitives, Vitest, Playwright. Not done: the GitHub remote `tamaskk/fixlibrary` is not created yet.
 - [x] T-002 (base, S) Python environment spike on M1: Essentia + Demucs via uv and python-build-standalone. Result in `python/SPIKE.md`. Not done: the run on three real tracks compared with Rekordbox BPM and key; do it with T-013 at the latest.
 - [x] T-003 (base, M) Python sidecar and bridge: JSON-RPC over stdio, crash recovery. The bridge starts in development only; the packaged Python path comes with T-041.
-- [x] T-004 (base, M) Database schema: better-sqlite3 + Drizzle, migrations. Not done: the Library page does not show the offline state yet, because it lists no tracks before T-008; the data side (`offline` on every track read) is in place.
+- [x] T-004 (base, M) Database schema: better-sqlite3 + Drizzle, migrations. The Library table shows the offline state since T-008.
 - [x] T-006 (base, M) Settings page and Keychain-backed secrets. Not done: the "Teszt" button was not tried with real keys; the Claude CLI row of the Rendszer section comes with T-012; the packaged-app half of the `.env.local` rule is covered by a unit test only.
 - [x] T-007 (base, S) Logging and the skip-and-list error framework. Not done here: a batch that runs past a broken MP3 and lists it on the "Hibák" tab needs the orchestrator (T-009) and the preview (T-011); the stage runner they will use is in place and tested.
+- [x] T-008 (base, M) Library scan and track selection: `pipeline/scanner.ts`, `tags.read`, scan at startup, the virtualized track table with search, filters, sorting and selection, `library:list` and `library:run`. Not done: `library:run` only answers with the tracks a run would process, and the function chooser is missing, both until T-009; the cover column shows the cover state, thumbnails come with the cover task (F2); one state icon per row, the icons per function come with the stages; the 5 minute / 30 second scan limits, the unplugged drive and scrolling 3000 real rows were not measured on the real external drive.
