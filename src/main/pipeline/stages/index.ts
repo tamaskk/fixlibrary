@@ -61,7 +61,22 @@ export function withDependencies(
     ordered.push(stage)
     return true
   }
-  return names.every(add) ? ordered : null
+  if (!names.every(add)) return null
+  // The stages that write what the chosen ones propose come along by themselves: the
+  // user asks for a function, not for the step that writes its result. Such a stage
+  // cannot be asked for, and joins once everything it depends on is in the run.
+  for (let grown = true; grown;) {
+    grown = false
+    for (const stage of stages) {
+      const writes = stage.phase === 'apply' && !stage.selectable && stage.dependsOn.length > 0
+      if (!writes || added.has(stage.name)) continue
+      if (!stage.dependsOn.every((name) => added.has(name))) continue
+      added.add(stage.name)
+      ordered.push(stage)
+      grown = true
+    }
+  }
+  return ordered
 }
 
 /** The names of the stages the user can ask for, in the order they are defined. */

@@ -7,11 +7,13 @@ import { closeDatabase, getDatabase, initDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
+import { registerPreviewIpc } from './ipc/preview'
 import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
+import { commitManualEdits, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
 import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
 import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
@@ -231,6 +233,7 @@ function registerLibraryAndPipeline(): void {
     batchFiles,
     // Until the startup work below is over, and during every scan.
     libraryBusy: () => !startupDone || scanner.isRunning(),
+    beforeApply: (batchId) => commitManualEdits(db, batchId),
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })
@@ -255,6 +258,9 @@ function registerLibraryAndPipeline(): void {
     listMountedVolumes: createMountedVolumesCache(1000)
   })
   registerPipelineIpc({ orchestrator: runs, functions })
+  registerPreviewIpc(
+    createPreview({ db, stages, orchestrator: runs, batchFiles, listMountedVolumes })
+  )
 
   // In this order, so that no two of them work on the drive at the same time: what
   // interrupted writes left behind is removed, then the library is scanned for what

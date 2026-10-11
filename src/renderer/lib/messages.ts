@@ -15,6 +15,8 @@ export function errorMessage(code: ErrorCode): string {
       return 'Még nincs könyvtár mappa kiválasztva. A Beállításokban adhatod meg.'
     case 'LIBRARY_UNAVAILABLE':
       return 'A könyvtár mappája nem érhető el. Csatlakoztasd a lemezt, és próbáld újra.'
+    case 'RUN_ACTIVE':
+      return 'Most nem változtatható: egy futás dolgozik, vagy egy batch jóváhagyásra vár.'
     case 'BACKUPS_IN_USE':
       return 'A backup mappa most nem változhat: az utolsó batch még innen vonható vissza.'
     case 'PYTHON_CRASHED':

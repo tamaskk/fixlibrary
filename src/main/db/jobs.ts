@@ -106,3 +106,13 @@ export function recoverInterruptedJobs(
     return tx.select().from(jobs).where(interrupted).all()
   })
 }
+
+/** The names of the stages a batch runs, in no particular order. */
+export function listJobStageNames(db: AppDatabase, batchId: number): string[] {
+  return db
+    .selectDistinct({ stage: jobs.stage })
+    .from(jobs)
+    .where(eq(jobs.batchId, batchId))
+    .all()
+    .map((job) => job.stage)
+}

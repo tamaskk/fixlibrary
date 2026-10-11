@@ -9,26 +9,30 @@ export const STAGE_STATUSES = ['pending', 'done', 'failed', 'skipped'] as const
 export const MAX_TRACK_PAGE_SIZE = 500
 
 const stageStatusSchema = z.record(z.string(), z.enum(STAGE_STATUSES))
+const lockedFieldsSchema = z.array(z.string().min(1).max(40)).max(50)
 
 type TrackRow = typeof tracks.$inferSelect
 type TrackInsert = typeof tracks.$inferInsert
 
 export type StageStatus = z.output<typeof stageStatusSchema>
 /** The volume is derived from the path, so it cannot be set on its own. */
-export type NewTrack = Omit<TrackInsert, 'stageStatus' | 'volumeName'> & {
+export type NewTrack = Omit<TrackInsert, 'stageStatus' | 'lockedFields' | 'volumeName'> & {
   stageStatus?: StageStatus
+  lockedFields?: string[]
 }
 /** `originalPath` is where the file was first found; it never changes. */
 export type TrackChanges = Partial<
   Omit<NewTrack, 'id' | 'originalPath' | 'createdAt' | 'updatedAt'>
 >
-export type Track = Omit<TrackRow, 'stageStatus'> & {
+export type Track = Omit<TrackRow, 'stageStatus' | 'lockedFields'> & {
   stageStatus: StageStatus
+  /** The fields the user set by hand; an automatic run proposes nothing for them. */
+  lockedFields: string[]
   /** True while the track's volume is not mounted; such a track must not be processed. */
   offline: boolean
 }
 
-// 31 columns per row; this keeps one statement far below SQLite's bound-parameter limit.
+// 32 columns per row; this keeps one statement far below SQLite's bound-parameter limit.
 const INSERT_CHUNK_SIZE = 500
 // Ids are bound one by one in an `in (…)` list.
 const ID_CHUNK_SIZE = 500
@@ -45,6 +49,8 @@ function toTrack(row: TrackRow, mountedVolumes: ReadonlySet<string>): Track {
   return {
     ...row,
     stageStatus: readStageStatus(row.id, row.stageStatus),
+    // Unreadable reads as "nothing locked": the track stays usable.
+    lockedFields: lockedFieldsSchema.safeParse(row.lockedFields).data ?? [],
     offline: row.volumeName !== null && !mountedVolumes.has(row.volumeName)
   }
 }
@@ -257,7 +263,8 @@ const restorableTrackSchema = z
     truePeakDbtp: z.number().nullable(),
     acoustId: text,
     musicbrainzRecordingId: text,
-    stageStatus: stageStatusSchema
+    stageStatus: stageStatusSchema,
+    lockedFields: lockedFieldsSchema
   })
   .partial()
 

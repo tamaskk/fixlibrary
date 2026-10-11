@@ -6,6 +6,7 @@ import {
   deleteDiscardedBatches,
   findActiveBatch,
   getBatch,
+  getBatchItem,
   listBatchItemStates,
   mergeBatchItemProposal,
   setBatchItemError,
@@ -37,6 +38,7 @@ import {
   type ResourceLimits,
   type RunProgress
 } from '@shared/pipeline'
+import { readProposal } from '@shared/preview'
 import type { BatchFiles, UndoSummary } from './batch-files'
 import { createJobQueue } from './queue'
 import { runStage } from './run-stage'
@@ -67,6 +69,11 @@ export interface OrchestratorDependencies {
    * the cleanup at startup: no batch is applied or undone then.
    */
   libraryBusy?: () => boolean
+  /**
+   * Called once the apply phase of a batch is certain to start, right before it
+   * does: what the user decided in the preview is made the tracks' own here.
+   */
+  beforeApply?: (batchId: number) => void
   /** May be called very often; whoever passes it on limits how often. */
   onProgress?: (progress: RunProgress) => void
   /** True while jobs run or may start by themselves; the app must not sleep then. */
@@ -418,9 +425,13 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   function stageContext(active: Run, job: RunJob, signal: AbortSignal): StageContext {
+    const stored = getBatchItem(db, active.batchId, job.trackId)?.after
+    const record = typeof stored === 'object' && stored !== null ? stored : {}
     return {
       signal,
       batchId: active.batchId,
+      // The fields and warnings are read strictly; what else a stage stored is its own.
+      proposal: { ...(record as Record<string, unknown>), ...readProposal(stored) },
       // Only an apply stage gets a way to change the file of its track.
       files:
         job.stage.phase === 'apply'
@@ -495,7 +506,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       }
       const proposal = outcome.value?.proposal
       // The proposal first: a job recorded as done must have left its result behind.
-      if (proposal) mergeBatchItemProposal(db, active.batchId, job.trackId, proposal)
+      // A field the user set by hand in an earlier preview keeps its value.
+      if (proposal) {
+        mergeBatchItemProposal(db, active.batchId, job.trackId, proposal, track.lockedFields)
+      }
       finishJob(db, job.id, { status: 'done' })
       setStatus(active, job, 'done')
 
@@ -683,6 +697,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       // A scan may have started while the room was measured.
       if (libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
 
+      // If this fails, the batch stays in its preview and nothing has started.
+      dependencies.beforeApply?.(batchId)
       setBatchStatus(db, batchId, 'applying')
       logger.info(`Batch ${batchId}: the apply phase started`)
       begin({ ...batch, status: 'applying' }, 'apply', null)

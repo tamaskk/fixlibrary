@@ -103,6 +103,9 @@ export const tracks = sqliteTable(
     musicbrainzRecordingId: text('musicbrainz_recording_id'),
     // Processing state per function, as { [stage]: status }. Validated when read.
     stageStatus: text('stage_status', { mode: 'json' }).$type<unknown>().notNull().default({}),
+    // The names of the fields the user set by hand in a batch preview. No automatic
+    // run writes over them. Validated when read.
+    lockedFields: text('locked_fields', { mode: 'json' }).$type<unknown>().notNull().default([]),
     createdAt,
     updatedAt
   },

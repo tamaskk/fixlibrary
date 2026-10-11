@@ -107,7 +107,23 @@ describe('withDependencies', () => {
     const selected = withDependencies(stages, ['energy', 'naming', 'energy'])
 
     // Assert
-    expect(selected?.map((entry) => entry.name)).toEqual(['bpmKey', 'energy', 'lookup', 'naming'])
+    expect(selected?.map((entry) => entry.name)).toEqual([
+      'bpmKey',
+      'energy',
+      'lookup',
+      'naming',
+      'rename'
+    ])
+  })
+
+  it('brings the stage that writes along once everything it depends on is in the run', () => {
+    // Act
+    const withAll = withDependencies(stages, ['naming'])
+    const without = withDependencies(stages, ['energy'])
+
+    // Assert
+    expect(withAll?.map((entry) => entry.name)).toContain('rename')
+    expect(without?.map((entry) => entry.name)).toEqual(['bpmKey', 'energy'])
   })
 
   it('knows no stage of an unknown name', () => {
@@ -150,17 +166,48 @@ describe('the demo stages', () => {
     const [analyze] = createDemoStages(60_000)
     const stop = new AbortController()
     const track = { id: 1 } as Parameters<NonNullable<typeof analyze>['run']>[1]
+    const context = { signal: stop.signal, batchId: 1, files: null, proposal: {} }
 
     // Act
-    const quick = await createDemoStages(1)[0]?.run(
-      { signal: stop.signal, batchId: 1, files: null },
-      track
-    )
-    const stopped = analyze?.run({ signal: stop.signal, batchId: 1, files: null }, track)
+    const quick = await createDemoStages(1)[0]?.run(context, track)
+    const stopped = analyze?.run(context, track)
     stop.abort()
 
     // Assert
-    expect(quick).toEqual({ proposal: { demoAnalyzed: true } })
+    expect(quick).toEqual({
+      proposal: { fields: { energy: { value: 2, source: 'analysis' } } }
+    })
     await expect(stopped).rejects.toThrow('stopped')
+  })
+
+  it('name a file after its artist, title and mix, and again after an edit', async () => {
+    // Arrange
+    const [, lookup] = createDemoStages(1)
+    const track = {
+      id: 5,
+      path: '/Music/track-005.mp3',
+      artist: null,
+      title: null,
+      mix: null
+    } as Parameters<NonNullable<typeof lookup>['run']>[1]
+    const context = { signal: new AbortController().signal, batchId: 1, files: null, proposal: {} }
+
+    // Act
+    const proposed = await lookup?.run(context, track)
+    const again = lookup?.recompute?.(track, {
+      fileName: null,
+      artist: 'AC/DC',
+      title: 'Thunder',
+      mix: 'Live',
+      styleId: null,
+      energy: null
+    })
+
+    // Assert
+    expect(proposed?.proposal?.fields).toMatchObject({
+      title: { value: 'track 005', source: 'lookup', confidence: 0.6 },
+      fileName: { value: 'Demo Artist - track 005.mp3' }
+    })
+    expect(again?.fields?.fileName?.value).toBe('AC-DC - Thunder (Live).mp3')
   })
 })

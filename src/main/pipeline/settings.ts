@@ -3,6 +3,7 @@ import { realpathSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import type { z } from 'zod'
 import { hasBackups } from '../db/backups'
+import { findActiveBatch, findPreviewBatch } from '../db/batches'
 import type { AppDatabase } from '../db/connection'
 import { getSetting, setSetting } from '../db/settings'
 import { listStyles, replaceStyles } from '../db/styles'
@@ -263,6 +264,14 @@ export function setFolder(
     libraryFoldersOverlap({ ...current, library }, environment)
   ) {
     return { ok: false, code: 'INVALID_INPUT' }
+  }
+  // A batch that is being worked on, or waits for approval, was made for the folders
+  // as they are: its files and proposed names would not fit other ones.
+  if (
+    LIBRARY_FOLDER_KINDS.includes(kind) &&
+    (findActiveBatch(db) !== undefined || findPreviewBatch(db) !== undefined)
+  ) {
+    return { ok: false, code: 'RUN_ACTIVE' }
   }
   // Undo reads the backups from the folder in use. That folder also moves with the
   // library while no backup folder is chosen.

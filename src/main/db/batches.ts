@@ -1,4 +1,18 @@
-import { and, desc, eq, exists, gt, inArray, isNull, ne, notExists, or } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  notExists,
+  or
+} from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import {
@@ -12,6 +26,7 @@ import {
   type PAUSE_REASONS
 } from './schema'
 import { trackErrorSchema, type TrackError } from '@shared/errors'
+import { mergeProposal, readProposal, type Proposal } from '@shared/preview'
 
 export type BatchMode = (typeof BATCH_MODES)[number]
 export type BatchStatus = (typeof BATCH_STATUSES)[number]
@@ -24,8 +39,6 @@ export const ACTIVE_BATCH_STATUSES = ['computing', 'applying'] as const satisfie
 
 // 7 columns per row; this keeps one statement far below SQLite's bound-parameter limit.
 const INSERT_CHUNK_SIZE = 500
-
-const proposalSchema = z.record(z.string(), z.unknown())
 
 export interface NewBatch {
   type: string
@@ -125,25 +138,63 @@ export function deleteDiscardedBatches(db: AppDatabase): number {
     .run().changes
 }
 
+const recordSchema = z.record(z.string(), z.unknown())
+
+/** An `after` with its fields and warnings replaced; whatever else it holds stays. */
+function withProposal(after: unknown, proposal: Proposal): Record<string, unknown> {
+  const stored = recordSchema.safeParse(after)
+  const next: Record<string, unknown> = { ...(stored.success ? stored.data : {}) }
+  delete next['fields']
+  delete next['warnings']
+  if (Object.keys(proposal.fields ?? {}).length > 0) next['fields'] = proposal.fields
+  if ((proposal.warnings ?? []).length > 0) next['warnings'] = proposal.warnings
+  return next
+}
+
 /**
- * Adds what a stage proposes for a track to the item's `after`. Fields of an earlier
- * stage stay unless this one names them too.
+ * Adds what a stage proposes for a track to the item's `after`. What an earlier
+ * stage proposed stays unless this one names it too, and a field the user set by
+ * hand stays whatever a stage proposes (`lockedFields`, and the manual edits of this
+ * batch). `fields` and `warnings` are what the preview shows; they are stored only
+ * as far as they are valid.
  */
 export function mergeBatchItemProposal(
   db: AppDatabase,
   batchId: number,
   trackId: number,
-  proposal: Record<string, unknown>
+  proposal: Record<string, unknown>,
+  lockedFields: readonly string[]
 ): void {
   db.transaction((tx) => {
     const where = and(eq(batchItems.batchId, batchId), eq(batchItems.trackId, trackId))
     const item = tx.select({ after: batchItems.after }).from(batchItems).where(where).get()
     if (!item) throw new Error('The batch has no item for this track')
-    const current = proposalSchema.safeParse(item.after)
+    const stored = recordSchema.safeParse(item.after)
+    const merged = mergeProposal(readProposal(item.after), readProposal(proposal), lockedFields)
+    const after = withProposal({ ...(stored.success ? stored.data : {}), ...proposal }, merged)
+    tx.update(batchItems).set({ after }).where(where).run()
+  })
+}
+
+/**
+ * Replaces the fields and warnings proposed for a track. Returns false when the
+ * batch has no such item.
+ */
+export function setBatchItemProposal(
+  db: AppDatabase,
+  batchId: number,
+  trackId: number,
+  proposal: Proposal
+): boolean {
+  return db.transaction((tx) => {
+    const where = and(eq(batchItems.batchId, batchId), eq(batchItems.trackId, trackId))
+    const item = tx.select({ after: batchItems.after }).from(batchItems).where(where).get()
+    if (!item) return false
     tx.update(batchItems)
-      .set({ after: { ...(current.success ? current.data : {}), ...proposal } })
+      .set({ after: withProposal(item.after, proposal) })
       .where(where)
       .run()
+    return true
   })
 }
 
@@ -221,5 +272,123 @@ export function listBatchItemsBefore(db: AppDatabase, batchId: number): BatchIte
     .select({ trackId: batchItems.trackId, before: batchItems.before })
     .from(batchItems)
     .where(eq(batchItems.batchId, batchId))
+    .all()
+}
+
+/** The batch that waits for the user's approval, if there is one. */
+export function findPreviewBatch(db: AppDatabase): Batch | undefined {
+  return db
+    .select()
+    .from(batches)
+    .where(eq(batches.status, 'preview'))
+    .orderBy(desc(batches.id))
+    .get()
+}
+
+export type BatchItem = typeof batchItems.$inferSelect
+
+/** One item of a batch, or undefined. */
+export function getBatchItem(
+  db: AppDatabase,
+  batchId: number,
+  trackId: number
+): BatchItem | undefined {
+  return db
+    .select()
+    .from(batchItems)
+    .where(and(eq(batchItems.batchId, batchId), eq(batchItems.trackId, trackId)))
+    .get()
+}
+
+/** A page of the items of a batch, in the order they were added. */
+export function listBatchItems(
+  db: AppDatabase,
+  batchId: number,
+  page: { offset: number; limit: number }
+): BatchItem[] {
+  return db
+    .select()
+    .from(batchItems)
+    .where(eq(batchItems.batchId, batchId))
+    .orderBy(asc(batchItems.id))
+    .limit(page.limit)
+    .offset(page.offset)
+    .all()
+}
+
+export interface BatchItemCounts {
+  total: number
+  excluded: number
+  failed: number
+}
+
+export function countBatchItems(db: AppDatabase, batchId: number): BatchItemCounts {
+  const of = (...conditions: Parameters<typeof and>): number =>
+    db
+      .select({ total: count() })
+      .from(batchItems)
+      .where(and(eq(batchItems.batchId, batchId), ...conditions))
+      .get()?.total ?? 0
+  return {
+    total: of(),
+    excluded: of(eq(batchItems.excluded, true)),
+    failed: of(isNotNull(batchItems.error))
+  }
+}
+
+// Ids are bound one by one in an `in (…)` list.
+const ID_CHUNK_SIZE = 500
+
+/** Takes tracks out of a batch, or back in. Returns how many items changed. */
+export function setBatchItemsExcluded(
+  db: AppDatabase,
+  batchId: number,
+  trackIds: readonly number[],
+  excluded: boolean
+): number {
+  return db.transaction((tx) => {
+    let changed = 0
+    for (let start = 0; start < trackIds.length; start += ID_CHUNK_SIZE) {
+      changed += tx
+        .update(batchItems)
+        .set({ excluded })
+        .where(
+          and(
+            eq(batchItems.batchId, batchId),
+            inArray(batchItems.trackId, trackIds.slice(start, start + ID_CHUNK_SIZE))
+          )
+        )
+        .run().changes
+    }
+    return changed
+  })
+}
+
+/**
+ * Marks as approved every item the user left in and no stage failed for, and every
+ * other item as not approved. Only approved items are written by the apply phase.
+ */
+export function approveBatchItems(db: AppDatabase, batchId: number): void {
+  db.transaction((tx) => {
+    tx.update(batchItems).set({ approved: false }).where(eq(batchItems.batchId, batchId)).run()
+    tx.update(batchItems)
+      .set({ approved: true })
+      .where(
+        and(
+          eq(batchItems.batchId, batchId),
+          eq(batchItems.excluded, false),
+          isNull(batchItems.error)
+        )
+      )
+      .run()
+  })
+}
+
+/** The items of a batch that the apply phase will write. */
+export function listApprovedBatchItems(db: AppDatabase, batchId: number): BatchItem[] {
+  return db
+    .select()
+    .from(batchItems)
+    .where(and(eq(batchItems.batchId, batchId), eq(batchItems.approved, true)))
     .all()
 }

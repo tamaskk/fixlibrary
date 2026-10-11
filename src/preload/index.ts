@@ -54,6 +54,15 @@ const api: FixLibraryApi = {
     resume: () => ipcRenderer.invoke(IPC_CHANNELS.pipelineResume),
     cancel: () => ipcRenderer.invoke(IPC_CHANNELS.pipelineCancel),
     onProgress: (listener) => subscribe(IPC_EVENTS.pipelineProgress, listener)
+  },
+  preview: {
+    state: () => ipcRenderer.invoke(IPC_CHANNELS.previewState),
+    rows: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewRows, request),
+    edit: (edit) => ipcRenderer.invoke(IPC_CHANNELS.previewEdit, edit),
+    setExcluded: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewSetExcluded, request),
+    approve: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewApprove, batchId),
+    discard: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDiscard, batchId),
+    undoLast: () => ipcRenderer.invoke(IPC_CHANNELS.previewUndoLast)
   }
 }
 

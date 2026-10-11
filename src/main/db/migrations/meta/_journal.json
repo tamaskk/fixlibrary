@@ -29,6 +29,13 @@
       "when": 1791738439020,
       "tag": "0003_batch_files",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791743828452,
+      "tag": "0004_track_locked_fields",
+      "breakpoints": true
     }
   ]
 }
