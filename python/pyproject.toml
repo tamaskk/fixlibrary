@@ -24,6 +24,12 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+]
+
 # Apple Silicon only (docs/PRD.md §01). A universal lock drags torch back to the
 # last release that still shipped Intel macOS wheels.
 [tool.uv]
@@ -31,3 +37,17 @@ environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
 # Cooldown: nothing published after this date is resolved, so a compromised release
 # has time to be noticed and yanked. Move the date forward when upgrading on purpose.
 exclude-newer = "2026-09-27T00:00:00Z"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["runtime"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# The spike sets PYTORCH_ENABLE_MPS_FALLBACK before it imports torch.
+"spike/run_spike.py" = ["E402"]

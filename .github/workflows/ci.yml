@@ -21,4 +21,20 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
-      # Python checks (uv run pytest, ruff) join here with task 2, when python/ exists.
+
+  python:
+    # The lock in python/uv.lock is arm64 macOS only.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # Only the dev tools and the package itself: the sidecar tests need neither
+      # torch nor Essentia, and installing them would cost about 800 MB per run.
+      - run: uv sync --locked --only-group dev
+      - run: uv pip install --no-deps -e .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync pytest
