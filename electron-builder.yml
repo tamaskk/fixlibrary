@@ -1,0 +1,30 @@
+appId: com.tamaskk.fixlibrary
+productName: FixLibrary
+directories:
+  buildResources: build
+  output: release
+files:
+  - '!**/.vscode/*'
+  - '!**/.claude/*'
+  - '!src/*'
+  - '!docs/*'
+  - '!tests/*'
+  - '!python/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{vitest.config.ts,playwright.config.ts}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md,AGENTS.md,CLAUDE.md,CLAUDE.local.md,.mcp.json}'
+  - '!{.env,.env.*,.npmrc}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - '**/*.node'
+mac:
+  target:
+    - target: dmg
+      arch: arm64
+  category: public.app-category.music
+  identity: '-'
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+npmRebuild: false

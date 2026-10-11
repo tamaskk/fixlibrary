@@ -1,0 +1,36 @@
+node_modules
+dist
+out
+release
+.DS_Store
+.eslintcache
+*.log*
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Claude Code personal files
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Python sidecar
+python/.venv
+python/runtime
+python/wheels
+__pycache__
+.pytest_cache
+.ruff_cache
+
+# Downloaded or built binaries (scripts/fetch-binaries.sh)
+resources/bin/*
+build/python-runtime
+
+# Real music files never enter the repo
+tests/fixtures/real
+
+# Test output
+test-results
+playwright-report
+coverage

@@ -1,0 +1,14 @@
+out
+dist
+release
+node_modules
+package-lock.json
+LICENSE
+tsconfig.json
+tsconfig.*.json
+docs/source
+docs/prompts
+HARNESS_BOOTSTRAP.md
+python
+test-results
+playwright-report
