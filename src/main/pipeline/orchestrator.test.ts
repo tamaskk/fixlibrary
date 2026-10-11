@@ -925,7 +925,7 @@ describe('starting a run', () => {
     expect(started).toEqual([`bpmKey:${online}`])
   })
 
-  it('gives up an older batch that still waited for approval', async () => {
+  it('gives up an older batch that still waited for approval, and deletes it', async () => {
     // Arrange
     const trackIds = addTracks(1)
     const run = orchestrator([fakeStage('bpmKey')])
@@ -937,9 +937,61 @@ describe('starting a run', () => {
     await vi.runAllTimersAsync()
 
     // Assert
-    const statusOf = (result: typeof first): string | undefined =>
-      result.ok ? getBatch(testDatabase.db, result.value.batchId)?.status : undefined
-    expect([statusOf(first), statusOf(second)]).toEqual(['cancelled', 'preview'])
+    const batchOf = (result: typeof first): ReturnType<typeof getBatch> =>
+      result.ok ? getBatch(testDatabase.db, result.value.batchId) : undefined
+    expect(batchOf(first)).toBeUndefined()
+    expect(batchOf(second)?.status).toBe('preview')
+    expect(testDatabase.db.select().from(batchItems).all()).toHaveLength(1)
+  })
+
+  it('does not pile up batches when runs are started and cancelled again and again', async () => {
+    // Arrange
+    const trackIds = addTracks(50)
+    const run = orchestrator([fakeStage('bpmKey'), fakeStage('energy', { dependsOn: ['bpmKey'] })])
+
+    // Act
+    for (let turn = 0; turn < 10; turn += 1) {
+      run.start({ trackIds, stages: ['energy'] })
+      await vi.advanceTimersByTimeAsync(50)
+      run.cancel()
+    }
+    const last = run.start({ trackIds, stages: ['energy'] })
+
+    // Assert: only the run that is active has rows.
+    const batchId = last.ok ? last.value.batchId : -1
+    expect(
+      testDatabase.db
+        .select()
+        .from(batches)
+        .all()
+        .map((batch) => batch.id)
+    ).toEqual([batchId])
+    expect(testDatabase.db.select().from(batchItems).all()).toHaveLength(50)
+    expect(listJobs(testDatabase.db, batchId)).toHaveLength(100)
+  })
+
+  it('keeps a batch that was cancelled while it was being applied', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    const stages = [
+      fakeStage('naming'),
+      fakeStage('rename', { dependsOn: ['naming'], phase: 'apply', resource: 'io', ms: 500 })
+    ]
+    const run = orchestrator(stages)
+    const first = run.start({ trackIds, stages: ['rename'] })
+    const firstId = first.ok ? first.value.batchId : -1
+    await vi.runAllTimersAsync()
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    run.applyBatch(firstId)
+    await vi.advanceTimersByTimeAsync(100)
+    run.cancel()
+
+    // Act
+    run.start({ trackIds, stages: ['rename'] })
+    await vi.runAllTimersAsync()
+
+    // Assert: undo may need what that batch recorded.
+    expect(getBatch(testDatabase.db, firstId)?.status).toBe('cancelled')
   })
 })
 

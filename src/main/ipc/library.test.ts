@@ -157,8 +157,9 @@ describe('library:run', () => {
       await vi.advanceTimersByTimeAsync(100)
     }
 
-    // Assert: 50 turns in five seconds.
-    expect(batchCount()).toBe(3)
+    // Assert: 50 turns in five seconds. A batch that was cancelled unwritten is
+    // deleted by the next start, so only the last one is left.
+    expect(batchCount()).toBe(1)
     expect(results.filter((result) => (result as { ok: boolean }).ok)).toHaveLength(3)
   })
 })

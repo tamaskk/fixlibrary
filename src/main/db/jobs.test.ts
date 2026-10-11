@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   cancelPreviewBatches,
   createBatch,
+  deleteDiscardedBatches,
   findActiveBatch,
   getBatch,
   listBatchItemStates,
@@ -20,7 +21,7 @@ import {
   requeueJobs,
   skipJobs
 } from './jobs'
-import { batchItems, JOB_PHASES, jobs } from './schema'
+import { backups, batchItems, batches, JOB_PHASES, jobs } from './schema'
 import { deleteTrack, insertTracks } from './tracks'
 import type { TrackError } from '@shared/errors'
 import { JOB_PHASES as SHARED_JOB_PHASES } from '@shared/pipeline'
@@ -165,6 +166,99 @@ describe('batch status', () => {
     // Assert
     expect(getBatch(testDatabase.db, waiting)?.status).toBe('cancelled')
     expect(getBatch(testDatabase.db, applied)?.status).toBe('applied')
+  })
+})
+
+describe('deleteDiscardedBatches', () => {
+  function addJob(batchId: number, phase: 'compute' | 'apply', started: boolean): void {
+    insertJobs(testDatabase.db, [
+      { batchId, trackId: trackIds[0] as number, stage: `${phase}-stage`, phase }
+    ])
+    if (!started) return
+    const job = listJobs(testDatabase.db, batchId).at(-1)
+    markJobRunning(testDatabase.db, job?.id as number)
+  }
+
+  it('deletes a batch that was cancelled before anything was written, with its items and jobs', () => {
+    // Arrange
+    const cancelled = newBatch()
+    addJob(cancelled, 'compute', true)
+    addJob(cancelled, 'apply', false)
+    setBatchStatus(testDatabase.db, cancelled, 'cancelled')
+
+    // Act
+    const deleted = deleteDiscardedBatches(testDatabase.db)
+
+    // Assert
+    expect(deleted).toBe(1)
+    expect(getBatch(testDatabase.db, cancelled)).toBeUndefined()
+    expect(testDatabase.db.select().from(batchItems).all()).toEqual([])
+    expect(testDatabase.db.select().from(jobs).all()).toEqual([])
+  })
+
+  it('keeps every batch that is not cancelled', () => {
+    // Arrange
+    const ids = (['computing', 'preview', 'applying', 'applied', 'undone', 'failed'] as const).map(
+      (status) => {
+        const id = newBatch()
+        setBatchStatus(testDatabase.db, id, status)
+        return id
+      }
+    )
+
+    // Act
+    const deleted = deleteDiscardedBatches(testDatabase.db)
+
+    // Assert
+    expect(deleted).toBe(0)
+    expect(
+      testDatabase.db
+        .select()
+        .from(batches)
+        .all()
+        .map((batch) => batch.id)
+    ).toEqual(ids)
+  })
+
+  it('keeps a cancelled batch that had started to write, or has a backup', () => {
+    // Arrange
+    const startedApplying = newBatch()
+    addJob(startedApplying, 'apply', true)
+    setBatchStatus(testDatabase.db, startedApplying, 'cancelled')
+    const withBackup = newBatch()
+    testDatabase.db
+      .insert(backups)
+      .values({
+        batchId: withBackup,
+        trackId: trackIds[0] as number,
+        originalPath: '/Music/a.mp3',
+        backupPath: '/Backups/1/a.mp3'
+      })
+      .run()
+    setBatchStatus(testDatabase.db, withBackup, 'cancelled')
+
+    // Act
+    const deleted = deleteDiscardedBatches(testDatabase.db)
+
+    // Assert
+    expect(deleted).toBe(0)
+    expect(getBatch(testDatabase.db, startedApplying)).toBeDefined()
+    expect(getBatch(testDatabase.db, withBackup)).toBeDefined()
+  })
+
+  it('lets a track be deleted again once its discarded batch is gone', () => {
+    // Arrange
+    const cancelled = newBatch()
+    setBatchStatus(testDatabase.db, cancelled, 'cancelled')
+    const whileKept = (): unknown => deleteTrack(testDatabase.db, trackIds[0] as number)
+    expect(whileKept).toThrow(/FOREIGN KEY/)
+
+    // Act
+    deleteDiscardedBatches(testDatabase.db)
+    const removed = deleteTrack(testDatabase.db, trackIds[0] as number)
+
+    // Assert
+    expect(removed).toBe(true)
   })
 })
 

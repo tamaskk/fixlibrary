@@ -3,6 +3,7 @@
 import {
   cancelPreviewBatches,
   createBatch,
+  deleteDiscardedBatches,
   findActiveBatch,
   getBatch,
   listBatchItemStates,
@@ -568,6 +569,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       const batchId = db.transaction((tx) => {
         // Only one batch waits for approval: an older one is given up for the new run.
         cancelPreviewBatches(tx)
+        // What was given up before anything was written is of no use to undo, and
+        // would otherwise pile up: a row per track and job for every run ever started.
+        const discarded = deleteDiscardedBatches(tx)
+        if (discarded > 0) logger.info(`Deleted ${discarded} batches that were given up unwritten`)
         const id = createBatch(tx, {
           type: 'run',
           mode: dependencies.mode(),
