@@ -1,0 +1,20 @@
+// Every limit on how long a step may take, in one place. A value that is too short
+// turns slow but healthy tracks into errors, so tune them here and nowhere else.
+
+const SECOND = 1000
+const MINUTE = 60 * SECOND
+
+/** How long one pipeline stage may work on one track. */
+export const STAGE_TIMEOUTS_MS = {
+  lookup: 30 * SECOND,
+  bpmKey: 120 * SECOND,
+  energy: 120 * SECOND,
+  demucs: 15 * MINUTE,
+  convert: 120 * SECOND,
+  normalize: 120 * SECOND
+} as const
+
+export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS
+
+/** For a sidecar call that belongs to no stage, such as `ping`. */
+export const DEFAULT_RPC_TIMEOUT_MS = 30 * SECOND

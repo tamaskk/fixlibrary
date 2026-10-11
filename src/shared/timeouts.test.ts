@@ -1,0 +1,21 @@
+import { describe, expect, it } from 'vitest'
+import { DEFAULT_RPC_TIMEOUT_MS, STAGE_TIMEOUTS_MS } from './timeouts'
+
+describe('STAGE_TIMEOUTS_MS', () => {
+  it('holds the documented limit of every stage', () => {
+    // Assert
+    expect(STAGE_TIMEOUTS_MS).toEqual({
+      lookup: 30_000,
+      bpmKey: 120_000,
+      energy: 120_000,
+      demucs: 900_000,
+      convert: 120_000,
+      normalize: 120_000
+    })
+  })
+
+  it('gives a plain sidecar call thirty seconds', () => {
+    // Assert
+    expect(DEFAULT_RPC_TIMEOUT_MS).toBe(30_000)
+  })
+})
