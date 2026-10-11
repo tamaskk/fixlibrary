@@ -128,16 +128,19 @@ export function Library(): React.JSX.Element {
               }
             />
             <RunResult finished={runProgress === null ? runFinished : null} />
-            {waitingForApproval && runProgress === null && (
-              <div className="mb-2 flex items-center gap-4">
-                <StatusLine tone="warning">
-                  Egy batch jóváhagyásra vár. Amíg nem hagyod jóvá, egy fájl sem változik.
-                </StatusLine>
-                <Button variant="secondary" onClick={() => setPage('preview')}>
-                  Előnézet megnyitása
-                </Button>
-              </div>
-            )}
+            {/* In the page before a batch waits, so that it is announced when one does. */}
+            <div role="status">
+              {waitingForApproval && runProgress === null && (
+                <div className="mb-2 flex items-center gap-4">
+                  <StatusLine tone="warning">
+                    Egy batch jóváhagyásra vár. Amíg nem hagyod jóvá, egy fájl sem változik.
+                  </StatusLine>
+                  <Button variant="secondary" onClick={() => setPage('preview')}>
+                    Előnézet megnyitása
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
 
           {hasTracks && (list.status === 'idle' || list.status === 'loading') && (

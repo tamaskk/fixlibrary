@@ -178,7 +178,9 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
         }
         // A value that is not allowed is the user's to correct; anything else means
         // the batch is not what the page thinks it is.
-        if (result.code !== 'INVALID_INPUT') await resync()
+        // Nor is an approval that is on its way a reason to read anything again: it
+        // will say itself how it ended.
+        if (result.code !== 'INVALID_INPUT' && result.code !== 'RUN_ACTIVE') await resync()
         return false
       } catch {
         await resync()
@@ -197,7 +199,7 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
           excluded
         })
         if (!result.ok) {
-          await resync()
+          if (result.code !== 'RUN_ACTIVE') await resync()
           return
         }
         // Shown once main has taken it; the rows may have been edited meanwhile.

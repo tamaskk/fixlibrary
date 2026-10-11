@@ -126,10 +126,11 @@ export function BatchPreviewTable({
     setEditing({ trackId: row.trackId, columnId: column.id })
   }
 
-  function stopEditing(): void {
+  function stopEditing(backToTable: boolean): void {
     setEditing(null)
-    // Back to the table, so that the arrow keys go on from the cell.
-    scrollRef.current?.focus()
+    // Back to the table, so that the arrow keys go on from the cell. Not when the
+    // field was left for another control: the focus belongs there.
+    if (backToTable) scrollRef.current?.focus()
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
@@ -216,7 +217,7 @@ export function BatchPreviewTable({
                 key={column.id}
                 role="columnheader"
                 className={cn(
-                  'truncate text-label text-text-muted uppercase',
+                  'text-label whitespace-nowrap text-text-muted uppercase',
                   column.indent && 'pl-2',
                   column.numeric && 'text-right'
                 )}
@@ -265,7 +266,13 @@ export function BatchPreviewTable({
                     tabIndex={-1}
                     checked={!left}
                     disabled={row.error !== null}
-                    onCheckedChange={(checked) => onSetExcluded(row.trackId, checked !== true)}
+                    onCheckedChange={(checked) => {
+                      onSetExcluded(row.trackId, checked !== true)
+                      // The keys go on from this row: a click must not leave the focus
+                      // on a box the Tab key never stops at.
+                      setCursor({ trackId: row.trackId, columnId: cursorColumn?.id ?? null })
+                      scrollRef.current?.focus()
+                    }}
                   />
                 </span>
                 <span role="gridcell" className="flex">
@@ -311,9 +318,9 @@ export function BatchPreviewTable({
                           value={row.cells[column.edit.field].after}
                           styles={styles}
                           onCancel={stopEditing}
-                          onCommit={(value) => {
+                          onCommit={(value, byKey) => {
                             const { field } = column.edit as NonNullable<PreviewColumn['edit']>
-                            stopEditing()
+                            stopEditing(byKey)
                             if (value !== row.cells[field].after) {
                               void onEdit(row.trackId, field, value)
                             }

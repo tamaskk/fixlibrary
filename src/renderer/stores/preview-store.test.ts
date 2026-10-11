@@ -121,7 +121,7 @@ describe('the preview store', () => {
   it('reads the rows again when an edit was not taken for a reason other than its value', async () => {
     // Arrange
     const rows = vi.fn(async () => ({ ok: true as const, value: { rows: ROWS, total: 3 } }))
-    stubApi({ rows, edit: async () => ({ ok: false, code: 'RUN_ACTIVE' }) })
+    stubApi({ rows, edit: async () => ({ ok: false, code: 'UNEXPECTED' }) })
     await usePreviewStore.getState().load()
 
     // Act

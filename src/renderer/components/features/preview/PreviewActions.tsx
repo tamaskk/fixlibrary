@@ -32,6 +32,8 @@ export function PreviewActions({
   onDiscard
 }: PreviewActionsProps): React.JSX.Element {
   const [confirming, setConfirming] = React.useState<'approve' | 'discard' | null>(null)
+  const approveButton = React.useRef<HTMLButtonElement>(null)
+  const discardButton = React.useRef<HTMLButtonElement>(null)
   const left = counts.excluded + counts.failed
 
   return (
@@ -52,6 +54,7 @@ export function PreviewActions({
         )}
       </p>
       <Button
+        ref={discardButton}
         variant="secondary"
         disabled={busy !== null}
         loading={busy === 'discard'}
@@ -60,6 +63,7 @@ export function PreviewActions({
         Elvetés
       </Button>
       <Button
+        ref={approveButton}
         variant="primary"
         disabled={busy !== null || counts.applied === 0}
         loading={busy === 'approve'}
@@ -70,6 +74,12 @@ export function PreviewActions({
 
       <Dialog open={confirming === 'approve'} onOpenChange={(open) => !open && setConfirming(null)}>
         <DialogContent
+          // Opened from state, so nothing tells the dialog where the focus came from:
+          // it is sent back to the button by hand.
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            approveButton.current?.focus()
+          }}
           title="Jóváhagyod a változásokat?"
           description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad. ${MODE_NOTES[mode]}`}
         >
@@ -92,6 +102,10 @@ export function PreviewActions({
 
       <Dialog open={confirming === 'discard'} onOpenChange={(open) => !open && setConfirming(null)}>
         <DialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            discardButton.current?.focus()
+          }}
           title="Elveted a batch-et?"
           description="Amit a futás kiszámolt és amit itt szerkesztettél, elvész. A fájljaid nem változnak."
         >

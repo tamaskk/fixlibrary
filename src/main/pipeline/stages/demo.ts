@@ -34,7 +34,9 @@ function demoFileName(track: Track, values: Partial<Record<PreviewField, Preview
   const name = [artist, title].filter((text) => text !== '').join(' - ')
   const extension = extname(track.path)
   if (name === '') return basename(track.path)
-  return `${name}${mix === '' ? '' : ` (${mix})`}`.normalize('NFC').slice(0, 200).trim() + extension
+  const whole = `${name}${mix === '' ? '' : ` (${mix})`}`.normalize('NFC')
+  // Cut by character, never through the middle of one.
+  return [...whole].slice(0, 200).join('').trim() + extension
 }
 
 /** What the stand-in lookup "finds" for a track: made up from its file name. */

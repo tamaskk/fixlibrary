@@ -11,8 +11,12 @@ type CellEditorProps = {
   label: string
   value: PreviewValue
   styles: readonly Style[]
-  onCommit: (value: PreviewValue) => void
-  onCancel: () => void
+  /**
+   * `byKey` is true when the user saved with a key or a choice, false when the field
+   * was simply left: the focus is then already where the user put it.
+   */
+  onCommit: (value: PreviewValue, byKey: boolean) => void
+  onCancel: (byKey: boolean) => void
 }
 
 /** What was typed for an energy: a whole number, or nothing. Anything else is left to main to refuse. */
@@ -48,7 +52,7 @@ export function CellEditor({
   function handleKeyDown(event: React.KeyboardEvent): void {
     if (event.key === 'Escape') {
       event.preventDefault()
-      settle(onCancel)
+      settle(() => onCancel(true))
     }
   }
 
@@ -62,10 +66,10 @@ export function CellEditor({
           className="h-7 px-1"
           value={value === null ? '' : String(value)}
           onKeyDown={handleKeyDown}
-          onBlur={() => settle(onCancel)}
+          onBlur={() => settle(() => onCancel(false))}
           onChange={(event) => {
             const chosen = event.target.value
-            settle(() => onCommit(chosen === '' ? null : Number(chosen)))
+            settle(() => onCommit(chosen === '' ? null : Number(chosen), true))
           }}
         >
           <option value="">Nincs stílus</option>
@@ -79,8 +83,8 @@ export function CellEditor({
     )
   }
 
-  const commit = (): void =>
-    settle(() => onCommit(editor === 'energy' ? parseEnergy(text) : text.trim() || null))
+  const commit = (byKey: boolean): void =>
+    settle(() => onCommit(editor === 'energy' ? parseEnergy(text) : text.trim() || null, byKey))
 
   return (
     <div className="w-full">
@@ -94,11 +98,11 @@ export function CellEditor({
         value={text}
         onFocus={(event) => event.target.select()}
         onChange={(event) => setText(event.target.value)}
-        onBlur={commit}
+        onBlur={() => commit(false)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault()
-            commit()
+            commit(true)
           } else {
             handleKeyDown(event)
           }

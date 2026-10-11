@@ -8,7 +8,7 @@ import { Dialog, DialogClose, DialogContent, DialogFooter } from '@/components/u
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select } from '@/components/ui/select'
 import { StatusLine } from '@/components/ui/status-line'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatCount } from '@/lib/format'
 import { FILTER_LABELS } from '@/lib/preview-labels'
 import { useAppStore } from '@/stores/app-store'
@@ -44,6 +44,8 @@ export function BatchPreview(): React.JSX.Element {
   const runActive = usePipelineStore((state) => state.progress !== null)
   const loadPipeline = usePipelineStore((state) => state.load)
   const [confirmingUndo, setConfirmingUndo] = React.useState(false)
+  const heading = React.useRef<HTMLHeadingElement>(null)
+  const undoButton = React.useRef<HTMLButtonElement>(null)
   // True when the last value typed into a cell was not one the field can hold.
   const [valueRefused, setValueRefused] = React.useState(false)
 
@@ -64,9 +66,13 @@ export function BatchPreview(): React.JSX.Element {
   return (
     <main className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-6">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-h1">Előnézet</h1>
+        <h1 ref={heading} tabIndex={-1} className="text-h1 outline-none">
+          Előnézet
+        </h1>
         {canUndo && (
           <Button
+            ref={undoButton}
+            title={runActive ? 'Futás közben nem vonható vissza.' : undefined}
             variant="secondary"
             disabled={runActive || busy !== null}
             loading={busy === 'undo'}
@@ -78,7 +84,8 @@ export function BatchPreview(): React.JSX.Element {
       </div>
 
       {/* In the page before there is anything to say, so that it is announced. */}
-      <div role="status">
+      {/* It takes no room of its own: only what it holds is a row of the page. */}
+      <div role="status" className="contents">
         <PreviewNoticeLine notice={notice} />
         {editFailed && (
           <StatusLine tone="danger">
@@ -135,7 +142,11 @@ export function BatchPreview(): React.JSX.Element {
           )}
           {rows !== null && (
             <>
-              <Tabs value={tab} onValueChange={(value) => setTab(value as PreviewTab)}>
+              <Tabs
+                value={tab}
+                onValueChange={(value) => setTab(value as PreviewTab)}
+                className="flex min-h-0 flex-1 flex-col gap-4"
+              >
                 <TabsList aria-label="A batch nézetei">
                   <TabsTrigger value="changes">Változások</TabsTrigger>
                   <TabsTrigger value="errors">
@@ -145,64 +156,72 @@ export function BatchPreview(): React.JSX.Element {
                     </span>
                   </TabsTrigger>
                 </TabsList>
-              </Tabs>
-
-              <div className="flex items-end gap-4">
-                {tab === 'changes' && (
-                  <div className="w-64 shrink-0">
-                    <Select
-                      label="Szűrő"
-                      value={filter}
-                      onChange={(event) => setFilter(parseFilter(event.target.value))}
-                    >
-                      {PREVIEW_FILTERS.map((each) => (
-                        <option key={each} value={each}>
-                          {FILTER_LABELS[each]}
-                        </option>
-                      ))}
-                    </Select>
+                {/* One panel for whichever tab is chosen; the table in it is the Tab stop. */}
+                <TabsContent
+                  value={tab}
+                  tabIndex={-1}
+                  className="flex min-h-0 flex-1 flex-col gap-4"
+                >
+                  <div className="flex items-end gap-4">
+                    {tab === 'changes' && (
+                      <div className="w-64 shrink-0">
+                        <Select
+                          label="Szűrő"
+                          value={filter}
+                          onChange={(event) => setFilter(parseFilter(event.target.value))}
+                        >
+                          {PREVIEW_FILTERS.map((each) => (
+                            <option key={each} value={each}>
+                              {FILTER_LABELS[each]}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                    )}
+                    <p className="ml-auto flex h-8 shrink-0 items-center gap-1 text-small whitespace-nowrap text-text-muted">
+                      <span className="font-mono text-data text-text tabular-nums">
+                        {shown.length === rows.length
+                          ? formatCount(rows.length)
+                          : `${formatCount(shown.length)} / ${formatCount(rows.length)}`}
+                      </span>{' '}
+                      track
+                    </p>
                   </div>
-                )}
-                <p className="ml-auto flex h-8 shrink-0 items-center gap-1 text-small whitespace-nowrap text-text-muted">
-                  <span className="font-mono text-data text-text tabular-nums">
-                    {shown.length === rows.length
-                      ? formatCount(rows.length)
-                      : `${formatCount(shown.length)} / ${formatCount(rows.length)}`}
-                  </span>{' '}
-                  track
-                </p>
-              </div>
 
-              {shown.length === 0 ? (
-                <EmptyState
-                  className="flex-1 rounded-lg border border-border"
-                  message={
-                    tab === 'errors'
-                      ? 'Egy track sem maradt ki hiba miatt.'
-                      : 'Nincs a szűrőnek megfelelő sor.'
-                  }
-                  action={
-                    tab === 'changes' && filter !== 'all' ? (
-                      <Button variant="secondary" onClick={() => setFilter('all')}>
-                        Szűrők törlése
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              ) : (
-                <BatchPreviewTable
-                  label={tab === 'errors' ? 'Kimaradt trackek' : 'Változások'}
-                  rows={shown}
-                  columns={columns}
-                  styles={styles}
-                  onEdit={async (trackId, field, value) => {
-                    const taken = await edit(trackId, field, value)
-                    setValueRefused(!taken)
-                    return taken
-                  }}
-                  onSetExcluded={(trackId, excluded) => void setExcluded([trackId], excluded)}
-                />
-              )}
+                  {shown.length === 0 ? (
+                    <EmptyState
+                      className="flex-1 rounded-lg border border-border"
+                      message={
+                        tab === 'errors'
+                          ? 'Egy track sem maradt ki hiba miatt.'
+                          : filter === 'all'
+                            ? 'Ebben a batch-ben nincs sor.'
+                            : 'Nincs a szűrőnek megfelelő sor.'
+                      }
+                      action={
+                        tab === 'changes' && filter !== 'all' ? (
+                          <Button variant="secondary" onClick={() => setFilter('all')}>
+                            Szűrők törlése
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  ) : (
+                    <BatchPreviewTable
+                      label={tab === 'errors' ? 'Kimaradt trackek' : 'Változások'}
+                      rows={shown}
+                      columns={columns}
+                      styles={styles}
+                      onEdit={async (trackId, field, value) => {
+                        const taken = await edit(trackId, field, value)
+                        setValueRefused(!taken)
+                        return taken
+                      }}
+                      onSetExcluded={(trackId, excluded) => void setExcluded([trackId], excluded)}
+                    />
+                  )}
+                </TabsContent>
+              </Tabs>
 
               <PreviewActions
                 mode={batch.mode}
@@ -221,6 +240,12 @@ export function BatchPreview(): React.JSX.Element {
 
       <Dialog open={confirmingUndo} onOpenChange={setConfirmingUndo}>
         <DialogContent
+          // Back to the button, or to the top of the page once there is nothing left
+          // to undo and the button is gone.
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            ;(undoButton.current ?? heading.current)?.focus()
+          }}
           title="Visszavonod az utolsó batch-et?"
           description="A fájlok visszakerülnek abba az állapotba, amiben a batch előtt voltak, és amit a batch létrehozott, törlődik. A jóváhagyásra váró batch elvész."
         >

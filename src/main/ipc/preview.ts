@@ -2,17 +2,12 @@ import { z } from 'zod'
 import type { Preview } from '../pipeline/preview'
 import { IPC_CHANNELS } from '@shared/ipc'
 import { handleIpc } from './handle'
-import { createRateGate } from './progress'
 
 const noArguments = z.tuple([])
 // What a request holds is checked by the pipeline, which answers a bad one with
 // INVALID_INPUT; here only the number of arguments is fixed.
 const oneUnknown = z.tuple([z.unknown()])
 const batchId = z.tuple([z.number().int().positive()])
-
-// An approval or an undo copies files for a while; a page that asks in a loop gets
-// the same answer as while a run is active.
-const WRITE_INTERVAL_MS = 2000
 
 export function registerPreviewIpc(preview: Preview): void {
   handleIpc(IPC_CHANNELS.previewState, noArguments, () => preview.state())
@@ -23,12 +18,8 @@ export function registerPreviewIpc(preview: Preview): void {
   )
   handleIpc(IPC_CHANNELS.previewDiscard, batchId, (_event, id) => preview.discard(id))
 
-  const mayApprove = createRateGate(WRITE_INTERVAL_MS)
-  handleIpc(IPC_CHANNELS.previewApprove, batchId, (_event, id) =>
-    mayApprove() ? preview.approve(id) : ({ ok: false, code: 'RUN_ACTIVE' } as const)
-  )
-  const mayUndo = createRateGate(WRITE_INTERVAL_MS)
-  handleIpc(IPC_CHANNELS.previewUndoLast, noArguments, () =>
-    mayUndo() ? preview.undoLast() : ({ ok: false, code: 'RUN_ACTIVE' } as const)
-  )
+  // Neither needs a limit of its own: an approval is taken once per batch, an undo
+  // once per batch that wrote, and both are refused while the other is on its way.
+  handleIpc(IPC_CHANNELS.previewApprove, batchId, (_event, id) => preview.approve(id))
+  handleIpc(IPC_CHANNELS.previewUndoLast, noArguments, () => preview.undoLast())
 }

@@ -565,6 +565,31 @@ describe('a batch that goes through its preview', () => {
     expect(filesUnder(library)).toHaveLength(4)
   })
 
+  it('does not write a file name that the preview could not show', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const [tampered, other] = ids as [number, number]
+    const { run, preview } = previewed()
+    const batchId = await computeAll(run, ids)
+    testDatabase.db
+      .update(batchItems)
+      .set({ after: { fields: { fileName: { value: '../Elsewhere/x.mp3', source: 'lookup' } } } })
+      .where(eq(batchItems.trackId, tampered))
+      .run()
+    const shown = preview.rows({ batchId, offset: 0, limit: 10 })
+
+    // Act
+    await preview.approve(batchId)
+    await run.whenFinished()
+
+    // Assert: the row showed no new name, and the file kept the one it had.
+    const row = shown.ok ? shown.value.rows.find((each) => each.trackId === tampered) : undefined
+    expect(row?.cells.fileName.changed).toBe(false)
+    expect(pathOf(tampered)).toBe(paths[0])
+    expect(pathOf(other)).not.toBe(paths[1])
+    expect(filesUnder(folder).some((name) => name.includes('Elsewhere'))).toBe(false)
+  })
+
   it('keeps a title that was set by hand through the next automatic run', async () => {
     // Arrange
     const { ids } = addTracks(2)

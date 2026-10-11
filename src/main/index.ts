@@ -155,7 +155,8 @@ function startPythonSidecar(): void {
 
 /**
  * The stages a run can use. In development, `FIXLIB_DEMO_STAGES=1` adds two stages
- * that only wait, so a run can be tried and tested end to end while no real stage
+ * that propose made-up values and one that renames the file to the proposed name once
+ * the batch is approved, so a run can be tried and tested end to end while no real stage
  * exists. The packaged app never has them.
  */
 function availableStages(): Stage[] {

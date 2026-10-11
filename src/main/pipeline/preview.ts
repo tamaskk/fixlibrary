@@ -136,18 +136,20 @@ export function commitManualEdits(db: AppDatabase, batchId: number): void {
       if (manual.length === 0) continue
       const track = getTrackById(tx, item.trackId, new Set())
       if (!track) continue
-      const changes: TrackChanges = {
-        lockedFields: [...new Set([...track.lockedFields, ...manual])]
-      }
+      const committed = new Set<string>(manual)
+      const changes: TrackChanges = {}
       if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
       if (fields.title?.source === 'manual') changes.title = fields.title.value
       if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
       if (fields.energy?.source === 'manual') changes.energy = fields.energy.value
       if (fields.styleId?.source === 'manual') {
         const styleId = fields.styleId.value
-        // A style that was deleted since the edit cannot be the track's.
+        // A style that was deleted since the edit cannot be the track's, and a value
+        // the track did not get is not locked either.
         if (styleId === null || styleIds.has(styleId)) changes.primaryStyleId = styleId
+        else committed.delete('styleId')
       }
+      changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
       updateTrack(tx, item.trackId, changes)
     }
   })
@@ -188,8 +190,9 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
   /** The batch with this id, if it is the one that waits for approval and may change. */
   function waitingBatch(batchId: number): Result<{ id: number }> {
     if (approving) return { ok: false, code: 'RUN_ACTIVE' }
-    const batch = getBatch(db, batchId)
-    if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
+    // The one batch that waits, not merely one that is marked as waiting.
+    const batch = findPreviewBatch(db)
+    if (!batch || batch.id !== batchId) return { ok: false, code: 'INVALID_INPUT' }
     return { ok: true, value: batch }
   }
 

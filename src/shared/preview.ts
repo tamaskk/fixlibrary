@@ -38,17 +38,32 @@ export const LOW_CONFIDENCE_BELOW = 0.7
 // As long as tag text read by a scan may be.
 const MAX_FIELD_TEXT = 300
 
-// One line of text without control characters; an empty text is "no value".
+// What text of a field must not hold: control characters, line breaks, and the
+// invisible characters that turn the reading direction around or take no room. The
+// same rule as for tag text read by a scan, plus the zero-width ones.
+const UNSAFE_FIELD_TEXT =
+  /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u200b\u2060\ufeff]/u
+
+// One clean line; an empty text is "no value".
 const textValue = z
   .string()
   .max(MAX_FIELD_TEXT)
-  .regex(/^[^\p{Cc}\p{Zl}\p{Zp}]*$/u)
+  .refine((text) => !UNSAFE_FIELD_TEXT.test(text))
   .transform((text) => (text.trim() === '' ? null : text.trim()))
+  .nullable()
+
+// A file name is a name, never a path: no separator, and not a dot name. Which names
+// a library file may have beyond that is decided where the file is renamed.
+const fileNameValue = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((name) => !UNSAFE_FIELD_TEXT.test(name) && !/[/:]/.test(name) && !/^\.+$/.test(name))
   .nullable()
 
 /** What a value of each field may be. Used for proposals of stages and edits of the user alike. */
 export const previewValueSchemas = {
-  fileName: textValue,
+  fileName: fileNameValue,
   artist: textValue,
   title: textValue,
   mix: textValue,
@@ -90,10 +105,34 @@ export const proposalSchema = z.object({
 
 export type Proposal = z.output<typeof proposalSchema>
 
-/** The proposal a stored `after` holds; what cannot be read counts as no proposal. */
+const fieldSchemas = proposedFieldsSchema.shape
+
+/**
+ * The proposal a stored `after` or the result of a stage holds. Read part by part: a
+ * field or a warning that is not valid is left out, and the others stay. What is no
+ * object at all counts as no proposal.
+ */
 export function readProposal(after: unknown): Proposal {
-  const parsed = proposalSchema.safeParse(after)
-  return parsed.success ? parsed.data : {}
+  const record = z.record(z.string(), z.unknown()).safeParse(after)
+  if (!record.success) return {}
+  const proposal: Proposal = {}
+  const stored = z.record(z.string(), z.unknown()).safeParse(record.data['fields'])
+  if (stored.success) {
+    const fields: ProposedFields = {}
+    for (const field of PREVIEW_FIELDS) {
+      const parsed = fieldSchemas[field].safeParse(stored.data[field])
+      if (parsed.success && parsed.data !== undefined) {
+        Object.assign(fields, { [field]: parsed.data })
+      }
+    }
+    if (Object.keys(fields).length > 0) proposal.fields = fields
+  }
+  const warnings = z.array(z.unknown()).safeParse(record.data['warnings'])
+  if (warnings.success) {
+    const known = PREVIEW_WARNINGS.filter((warning) => warnings.data.includes(warning))
+    if (known.length > 0) proposal.warnings = known
+  }
+  return proposal
 }
 
 /**
@@ -179,10 +218,13 @@ const editTarget = {
   trackId: z.number().int().positive()
 }
 
+// Bounded before anything looks at it; what a field may hold is checked after.
+const editText = z.string().max(MAX_FIELD_TEXT).nullable()
+
 export const previewEditSchema = z.discriminatedUnion('field', [
-  z.strictObject({ ...editTarget, field: z.literal('artist'), value: z.string().nullable() }),
-  z.strictObject({ ...editTarget, field: z.literal('title'), value: z.string().nullable() }),
-  z.strictObject({ ...editTarget, field: z.literal('mix'), value: z.string().nullable() }),
+  z.strictObject({ ...editTarget, field: z.literal('artist'), value: editText }),
+  z.strictObject({ ...editTarget, field: z.literal('title'), value: editText }),
+  z.strictObject({ ...editTarget, field: z.literal('mix'), value: editText }),
   z.strictObject({ ...editTarget, field: z.literal('styleId'), value: z.number().nullable() }),
   z.strictObject({ ...editTarget, field: z.literal('energy'), value: z.number().nullable() })
 ])

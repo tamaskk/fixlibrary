@@ -16,7 +16,8 @@ function provenance(row: PreviewRow): string | null {
   if (sources.length === 0) return null
   const confidences = changed.flatMap((cell) => (cell.confidence === null ? [] : [cell.confidence]))
   const names = sources.map((source) => SOURCE_LABELS[source]).join(', ')
-  return confidences.length === 0 ? names : `${names} · ${formatPercent(Math.min(...confidences))}`
+  // The percent first: it is what must not be cut off in a narrow column.
+  return confidences.length === 0 ? names : `${formatPercent(Math.min(...confidences))} · ${names}`
 }
 
 /**
@@ -27,7 +28,7 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
   {
     id: 'fileName',
     header: 'Fájlnév',
-    track: 'minmax(160px, 3fr)',
+    track: 'minmax(160px, 4fr)',
     minWidth: 160,
     render: (row) => <DiffValue cell={row.cells.fileName} />,
     text: (row) => diffText(row.cells.fileName)
@@ -35,7 +36,7 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
   {
     id: 'artist',
     header: 'Artist',
-    track: 'minmax(96px, 2fr)',
+    track: 'minmax(96px, 1fr)',
     minWidth: 96,
     edit: { field: 'artist', editor: 'text' },
     render: (row) => <DiffValue cell={row.cells.artist} />,
@@ -44,7 +45,7 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
   {
     id: 'title',
     header: 'Title',
-    track: 'minmax(96px, 2fr)',
+    track: 'minmax(96px, 1fr)',
     minWidth: 96,
     edit: { field: 'title', editor: 'text' },
     render: (row) => <DiffValue cell={row.cells.title} />,

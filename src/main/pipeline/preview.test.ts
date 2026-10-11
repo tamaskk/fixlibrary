@@ -584,3 +584,53 @@ describe('the state of the preview', () => {
     expect(undone).toEqual({ ok: true, value: { restored: 3, removed: 1 } })
   })
 })
+
+describe('what the second look at the preview found', () => {
+  it('does not lock a style that the track did not get, because the style was deleted', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    replaceStyles(testDatabase.db, [{ name: 'House', color: '#22c55e', isHouse: true }])
+    const [style] = listStyles(testDatabase.db)
+    preview().edit({ batchId, trackId: id, field: 'styleId', value: style?.id ?? -1 })
+    preview().edit({ batchId, trackId: id, field: 'title', value: 'By Hand' })
+    replaceStyles(testDatabase.db, [])
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitManualEdits(testDatabase.db, batchId)
+
+    // Assert
+    expect(track(id)).toMatchObject({ primaryStyleId: null, lockedFields: ['title'] })
+  })
+
+  it('acts only on the batch that waits, not on an older one that is still marked so', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    const newer = createBatch(testDatabase.db, {
+      type: 'run',
+      mode: 'in_place',
+      items: [{ trackId: id, before: { ...track(id) } }]
+    })
+    setBatchStatus(testDatabase.db, newer, 'preview')
+
+    // Act
+    const edited = preview().edit({ batchId, trackId: id, field: 'title', value: 'x' })
+    const discarded = preview().discard(batchId)
+
+    // Assert
+    expect(edited).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(discarded).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(getBatch(testDatabase.db, newer)?.status).toBe('preview')
+  })
+
+  it('refuses a text of any length before it looks at it', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+
+    // Act
+    const edited = preview().edit({ batchId, trackId: id, field: 'title', value: 'x'.repeat(301) })
+
+    // Assert
+    expect(edited).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+})

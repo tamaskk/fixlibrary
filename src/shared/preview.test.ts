@@ -55,15 +55,47 @@ describe('readProposal', () => {
     })
   })
 
+  it('leaves out a field that is not valid, and keeps the others', () => {
+    // Arrange
+    const stored = {
+      fields: {
+        title: { value: 'One', source: 'lookup' },
+        energy: { value: 11, source: 'analysis' },
+        artist: { value: 'a\nb', source: 'id3' },
+        mix: { value: 'Live', source: 'guess' }
+      },
+      warnings: ['DUPLICATE', 'SCARY']
+    }
+
+    // Act
+    const proposal = readProposal(stored)
+
+    // Assert
+    expect(proposal).toEqual({
+      fields: { title: { value: 'One', source: 'lookup' } },
+      warnings: ['DUPLICATE']
+    })
+  })
+
   it.each([
-    ['a text that is not one line', { fields: { title: { value: 'a\nb', source: 'id3' } } }],
-    ['an energy out of range', { fields: { energy: { value: 11, source: 'analysis' } } }],
-    ['an unknown source', { fields: { title: { value: 'a', source: 'guess' } } }],
-    ['an unknown warning', { warnings: ['SCARY'] }],
-    ['something that is no object', 'nothing']
+    ['something that is no object', 'nothing'],
+    ['fields that are no object', { fields: 'x', warnings: 'y' }]
   ])('reads %s as no proposal at all', (_what, stored) => {
     // Act
     const proposal = readProposal(stored)
+
+    // Assert
+    expect(proposal).toEqual({})
+  })
+
+  it.each([
+    ['a path', '../Other/x.mp3'],
+    ['a name with a colon', 'a:b.mp3'],
+    ['a dot name', '..'],
+    ['a name that turns the reading direction around', 'a\u202eb.mp3']
+  ])('takes no file name that is %s', (_what, value) => {
+    // Act
+    const proposal = readProposal({ fields: { fileName: { value, source: 'lookup' } } })
 
     // Assert
     expect(proposal).toEqual({})
@@ -131,6 +163,17 @@ describe('the value of a field', () => {
     expect(trimmed).toBe('One')
     expect(empty).toBeNull()
   })
+
+  it.each(['a\u202eb', 'a\u200bb', 'a\u2066b', 'a\tb'])(
+    'cannot be text with an invisible character (%j)',
+    (text) => {
+      // Act
+      const parsed = previewValueSchemas.title.safeParse(text)
+
+      // Assert
+      expect(parsed.success).toBe(false)
+    }
+  )
 
   it.each([0, 11, 5.5])('cannot be the energy %s', (energy) => {
     // Act

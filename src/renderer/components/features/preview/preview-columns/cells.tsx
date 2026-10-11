@@ -35,7 +35,8 @@ export function DiffValue({
     <span className={cn('flex min-w-0 gap-2', role)}>
       {/* A value that was not there before has nothing to strike through. */}
       {before !== null && (
-        <del className="min-w-0 truncate text-text-muted line-through">{before}</del>
+        // The old value gives way first: the new one is what will be written.
+        <del className="min-w-0 shrink-4 truncate text-text-muted line-through">{before}</del>
       )}
       <ins className="min-w-0 truncate no-underline">{after ?? EMPTY}</ins>
     </span>

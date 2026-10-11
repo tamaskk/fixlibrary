@@ -431,12 +431,16 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   function stageContext(active: Run, job: RunJob, signal: AbortSignal): StageContext {
     const stored = getBatchItem(db, active.batchId, job.trackId)?.after
-    const record = typeof stored === 'object' && stored !== null ? stored : {}
+    const own: Record<string, unknown> =
+      typeof stored === 'object' && stored !== null ? { ...stored } : {}
+    // The fields and warnings reach a stage only as far as they are valid, the same
+    // way the preview showed them; what else a stage stored is its own.
+    delete own['fields']
+    delete own['warnings']
     return {
       signal,
       batchId: active.batchId,
-      // The fields and warnings are read strictly; what else a stage stored is its own.
-      proposal: { ...(record as Record<string, unknown>), ...readProposal(stored) },
+      proposal: { ...own, ...readProposal(stored) },
       // Only an apply stage gets a way to change the file of its track.
       files:
         job.stage.phase === 'apply'

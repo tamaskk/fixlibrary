@@ -349,7 +349,8 @@ describe('file state for rescans', () => {
         fileSizeBytes: 8_000_000,
         fileMtimeMs: 1_790_000_000_000,
         fileMissing: false,
-        stageStatus: { scan: 'done' }
+        stageStatus: { scan: 'done' },
+        lockedFields: []
       },
       {
         id: neverScanned,
@@ -358,7 +359,8 @@ describe('file state for rescans', () => {
         fileSizeBytes: null,
         fileMtimeMs: null,
         fileMissing: false,
-        stageStatus: {}
+        stageStatus: {},
+        lockedFields: []
       }
     ])
   })

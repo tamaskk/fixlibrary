@@ -402,11 +402,16 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
           summary.unchanged += 1
           return
         }
+        const fromTags = tagFields(fileTags)
+        // What the user set by hand in a preview stays, whatever the file's tags say:
+        // they may not have been written into the file yet.
+        if (known.lockedFields.includes('artist')) delete fromTags.artist
+        if (known.lockedFields.includes('title')) delete fromTags.title
         updates.push({
           id: known.id,
           changes: {
             ...fileFields(file),
-            ...tagFields(fileTags),
+            ...fromTags,
             fileMissing: false,
             // Only the scan's own entry changes; what other stages recorded stays.
             stageStatus: { ...known.stageStatus, scan: scanStatus }

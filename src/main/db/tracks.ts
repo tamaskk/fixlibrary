@@ -75,6 +75,8 @@ export interface TrackFileState {
   fileMtimeMs: number | null
   fileMissing: boolean
   stageStatus: StageStatus
+  /** The fields the user set by hand; a rescan does not replace them with the file's tags. */
+  lockedFields: string[]
 }
 
 /** Inserts all rows or none. Returns the new ids in input order. */
@@ -172,11 +174,16 @@ export function listTrackFileStates(db: AppDatabase): TrackFileState[] {
       fileSizeBytes: tracks.fileSizeBytes,
       fileMtimeMs: tracks.fileMtimeMs,
       fileMissing: tracks.fileMissing,
-      stageStatus: tracks.stageStatus
+      stageStatus: tracks.stageStatus,
+      lockedFields: tracks.lockedFields
     })
     .from(tracks)
     .all()
-    .map((row) => ({ ...row, stageStatus: readStageStatus(row.id, row.stageStatus) }))
+    .map((row) => ({
+      ...row,
+      stageStatus: readStageStatus(row.id, row.stageStatus),
+      lockedFields: lockedFieldsSchema.safeParse(row.lockedFields).data ?? []
+    }))
 }
 
 /** Applies all changes or none. A change for an id that does not exist is ignored. */

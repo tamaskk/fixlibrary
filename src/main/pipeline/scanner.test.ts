@@ -763,3 +763,23 @@ describe('a scan while a batch changes files', () => {
     expect(readCalls).toEqual([])
   })
 })
+
+describe('a field the user set by hand', () => {
+  it('keeps its value when the file changes and is scanned again', async () => {
+    // Arrange
+    const path = addFile('a.mp3')
+    const scans = scanner()
+    await scans.scan()
+    const [track] = storedTracks()
+    updateTrack(testDatabase.db, track?.id ?? -1, { title: 'By Hand', lockedFields: ['title'] })
+    writeFileSync(path, 'audio that was changed by another program')
+
+    // Act
+    const result = await scans.scan()
+
+    // Assert
+    expect(result.ok && result.value.updated).toBe(1)
+    // The title is the user's; the artist, which is not locked, follows the file.
+    expect(storedTracks()[0]).toMatchObject({ title: 'By Hand', artist: 'Artist' })
+  })
+})

@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import {
+  appendFileSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
@@ -36,7 +37,10 @@ function sha256(path: string): string {
 
 function addTracks(count: number, digits = 3): void {
   for (let number = 1; number <= count; number += 1) {
-    copyFileSync(FIXTURE, join(libraryFolder, trackName(number, digits)))
+    const path = join(libraryFolder, trackName(number, digits))
+    copyFileSync(FIXTURE, path)
+    // Every file differs, so that two files that were mixed up would show.
+    appendFileSync(path, trackName(number, digits))
   }
 }
 
@@ -106,6 +110,7 @@ test.afterEach(() => {
 test('a batch of 20 tracks is edited, filtered, approved without one row, and undone', async () => {
   addTracks(20)
   const untouched = sha256(join(libraryFolder, trackName(2)))
+  const first001 = sha256(join(libraryFolder, trackName(1)))
   const { app, page } = await launch()
   try {
     await computeBatch(app, page, 20)
@@ -141,6 +146,15 @@ test('a batch of 20 tracks is edited, filtered, approved without one row, and un
     await expect(actions.getByText('19 track alkalmazásra vár')).toBeVisible()
     await expect(actions.getByText('1 kizárva')).toBeVisible()
 
+    // A click on a checkbox leaves the keys with the table, on that row.
+    await row(page, trackName(3))
+      .getByRole('checkbox', { name: `${trackName(3)} alkalmazása` })
+      .click()
+    await expect(grid).toBeFocused()
+    await expect(actions.getByText('2 kizárva')).toBeVisible()
+    await page.keyboard.press('Space')
+    await expect(actions.getByText('1 kizárva')).toBeVisible()
+
     // Every fifth track was proposed with too little confidence.
     await page.getByLabel('Szűrő').selectOption('lowConfidence')
     await expect(page.getByText('4 / 20')).toBeVisible()
@@ -155,6 +169,10 @@ test('a batch of 20 tracks is edited, filtered, approved without one row, and un
     const dialog = page.getByRole('dialog', { name: 'Jóváhagyod a változásokat?' })
     await expect(dialog).toContainText('19 track fájljai változnak, 1 kimarad.')
     await expect(dialog).toContainText('Mód: helyben.')
+    // Giving up returns the focus to where it came from.
+    await page.keyboard.press('Escape')
+    await expect(actions.getByRole('button', { name: 'Jóváhagyás' })).toBeFocused()
+    await page.keyboard.press('Enter')
     await dialog.getByRole('button', { name: 'Jóváhagyás' }).click()
     await expect(page.getByText('A változások alkalmazva: 19 track.')).toBeVisible({
       timeout: 30_000
@@ -180,7 +198,8 @@ test('a batch of 20 tracks is edited, filtered, approved without one row, and un
     expect(readdirSync(libraryFolder).sort()).toEqual(
       Array.from({ length: 20 }, (_, index) => trackName(index + 1))
     )
-    expect(sha256(join(libraryFolder, trackName(1)))).toBe(untouched)
+    expect(sha256(join(libraryFolder, trackName(1)))).toBe(first001)
+    expect(sha256(join(libraryFolder, trackName(2)))).toBe(untouched)
   } finally {
     await app.close()
   }
