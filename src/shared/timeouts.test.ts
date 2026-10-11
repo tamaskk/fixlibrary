@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_RPC_TIMEOUT_MS, STAGE_TIMEOUTS_MS } from './timeouts'
+import { DEFAULT_RPC_TIMEOUT_MS, STAGE_TIMEOUTS_MS, TAG_BATCH_TIMEOUT_MS } from './timeouts'
 
 describe('STAGE_TIMEOUTS_MS', () => {
   it('holds the documented limit of every stage', () => {
@@ -17,5 +17,10 @@ describe('STAGE_TIMEOUTS_MS', () => {
   it('gives a plain sidecar call thirty seconds', () => {
     // Assert
     expect(DEFAULT_RPC_TIMEOUT_MS).toBe(30_000)
+  })
+
+  it('gives one batch of tag reading two minutes', () => {
+    // Assert
+    expect(TAG_BATCH_TIMEOUT_MS).toBe(120_000)
   })
 })

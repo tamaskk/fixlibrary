@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { encodeRpcRequest, parseRpcLine, RPC_SCHEMAS } from './rpc'
+import { encodeRpcRequest, parseRpcLine, RPC_SCHEMAS, TAG_BATCH_SIZE } from './rpc'
 
 describe('encodeRpcRequest', () => {
   it('writes one JSON-RPC 2.0 request per line', () => {
@@ -92,5 +92,85 @@ describe('RPC_SCHEMAS', () => {
 
     // Assert
     expect(parsed.success).toBe(false)
+  })
+
+  it('accepts a tags.read result with a tagged and an unreadable file', () => {
+    // Arrange
+    const empty = {
+      durationMs: null,
+      bitrateKbps: null,
+      sampleRateHz: null,
+      artist: null,
+      title: null,
+      album: null,
+      label: null,
+      year: null,
+      hasCover: false
+    }
+    const result = {
+      files: [
+        {
+          ...empty,
+          path: '/Music/a.mp3',
+          readable: true,
+          durationMs: 372_000,
+          bitrateKbps: 320,
+          sampleRateHz: 44_100,
+          artist: 'Előadó',
+          title: 'Tűz',
+          year: 2024,
+          hasCover: true
+        },
+        { ...empty, path: '/Music/b.mp3', readable: false }
+      ]
+    }
+
+    // Act
+    const parsed = RPC_SCHEMAS['tags.read'].result.safeParse(result)
+
+    // Assert
+    expect(parsed.success).toBe(true)
+  })
+
+  it.each([
+    ['tag text longer than the sidecar may send', { title: 'x'.repeat(501) }],
+    ['a year that is not a year', { year: 20245 }],
+    ['a negative duration', { durationMs: -1 }],
+    ['a missing cover flag', { hasCover: undefined }]
+  ])('rejects a tags.read result with %s', (_name, change) => {
+    // Arrange
+    const file = {
+      path: '/Music/a.mp3',
+      readable: true,
+      durationMs: 1000,
+      bitrateKbps: 320,
+      sampleRateHz: 44_100,
+      artist: null,
+      title: null,
+      album: null,
+      label: null,
+      year: null,
+      hasCover: false,
+      ...change
+    }
+
+    // Act
+    const parsed = RPC_SCHEMAS['tags.read'].result.safeParse({ files: [file] })
+
+    // Assert
+    expect(parsed.success).toBe(false)
+  })
+
+  it('limits a tags.read call to one batch of paths', () => {
+    // Arrange
+    const paths = Array.from({ length: TAG_BATCH_SIZE + 1 }, (_, index) => `/Music/${index}.mp3`)
+
+    // Act
+    const tooMany = RPC_SCHEMAS['tags.read'].params.safeParse({ paths })
+    const oneBatch = RPC_SCHEMAS['tags.read'].params.safeParse({ paths: paths.slice(1) })
+
+    // Assert
+    expect(tooMany.success).toBe(false)
+    expect(oneBatch.success).toBe(true)
   })
 })

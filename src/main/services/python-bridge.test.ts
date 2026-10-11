@@ -72,6 +72,22 @@ describe.skipIf(!existsSync(PYTHON_PATH))('python bridge with the real sidecar',
     expect(results.map((result) => result.value)).toEqual(values)
   })
 
+  it('reads the tags of a real file and reports a missing one as unreadable', async () => {
+    // Arrange
+    const sidecar = startBridge()
+    const fixture = join(import.meta.dirname, '../../../tests/fixtures/synthetic/sine.mp3')
+    const missing = join(import.meta.dirname, 'no-such-file.mp3')
+
+    // Act
+    const { files } = await sidecar.call('tags.read', { paths: [fixture, missing] })
+
+    // Assert
+    expect(files).toMatchObject([
+      { path: fixture, readable: true, bitrateKbps: 320, sampleRateHz: 44_100, hasCover: false },
+      { path: missing, readable: false }
+    ])
+  })
+
   it('rejects pending calls with PYTHON_CRASHED after kill -9 and answers again within 5 s', async () => {
     // Arrange
     const sidecar = startBridge()
