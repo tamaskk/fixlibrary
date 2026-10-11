@@ -113,17 +113,21 @@ export interface BatchItemState {
   trackId: number
   approved: boolean
   excluded: boolean
+  /** True when a stage failed for the track; such a track is never written. */
+  failed: boolean
 }
 
-/** Which tracks of the batch the user approved or took out. */
+/** Which tracks of the batch the user approved or took out, and which ones failed. */
 export function listBatchItemStates(db: AppDatabase, batchId: number): BatchItemState[] {
   return db
     .select({
       trackId: batchItems.trackId,
       approved: batchItems.approved,
-      excluded: batchItems.excluded
+      excluded: batchItems.excluded,
+      error: batchItems.error
     })
     .from(batchItems)
     .where(eq(batchItems.batchId, batchId))
     .all()
+    .map(({ error, ...item }) => ({ ...item, failed: error !== null }))
 }

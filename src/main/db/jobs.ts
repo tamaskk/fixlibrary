@@ -58,6 +58,23 @@ export function finishJob(
     .run()
 }
 
+/**
+ * Puts started jobs back in line without counting the start, for an app that is
+ * closed on purpose: only a start that ended in a crash counts as an attempt.
+ */
+export function requeueJobs(db: AppDatabase, ids: readonly number[]): void {
+  db.transaction((tx) => {
+    for (let start = 0; start < ids.length; start += ID_CHUNK_SIZE) {
+      tx.update(jobs)
+        .set({ status: 'queued', startedAt: null, attempts: sql`max(0, ${jobs.attempts} - 1)` })
+        .where(
+          and(inArray(jobs.id, ids.slice(start, start + ID_CHUNK_SIZE)), eq(jobs.status, 'running'))
+        )
+        .run()
+    }
+  })
+}
+
 /** Marks jobs that will not run: a stage they depend on failed, or the run was cancelled. */
 export function skipJobs(db: AppDatabase, ids: readonly number[]): void {
   db.transaction((tx) => {

@@ -50,10 +50,12 @@ export interface RunProgress {
   batchId: number
   phase: JobPhase
   /**
-   * `paused`: nothing new starts, what runs finishes. `cancelling`: the running jobs
-   * were told to stop. `finished`: the phase is over; the last report of a run.
+   * `paused`: nothing new starts, what runs finishes. `finished`: the phase is over;
+   * this is the last report of a run.
    */
-  state: 'running' | 'paused' | 'cancelling' | 'finished'
+  state: 'running' | 'paused' | 'finished'
+  /** How the phase ended; null until it has. `preview` waits for the user's approval. */
+  outcome: 'preview' | 'applied' | 'cancelled' | null
   /** Why the run is paused: by the user, or because the library's drive went away. */
   pauseReason: 'user' | 'offline' | null
   /** The jobs of the phase that is running. */

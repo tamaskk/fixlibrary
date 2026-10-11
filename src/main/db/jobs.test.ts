@@ -17,6 +17,7 @@ import {
   listJobs,
   markJobRunning,
   recoverInterruptedJobs,
+  requeueJobs,
   skipJobs
 } from './jobs'
 import { batchItems, JOB_PHASES, jobs } from './schema'
@@ -287,6 +288,38 @@ describe('jobs', () => {
       [often?.id, 'running', 3],
       [untouched?.id, 'queued', 0]
     ])
+  })
+
+  it('puts a started job back in line without counting the start, and touches no other job', () => {
+    // Arrange
+    const batchId = newBatch()
+    addJobs(batchId)
+    const [running, done] = listJobs(testDatabase.db, batchId)
+    markJobRunning(testDatabase.db, running?.id as number)
+    markJobRunning(testDatabase.db, done?.id as number)
+    finishJob(testDatabase.db, done?.id as number, { status: 'done' })
+
+    // Act
+    requeueJobs(testDatabase.db, [running?.id as number, done?.id as number])
+
+    // Assert
+    const stored = listJobs(testDatabase.db, batchId)
+    expect(stored.slice(0, 2).map((job) => [job.status, job.attempts])).toEqual([
+      ['queued', 0],
+      ['done', 1]
+    ])
+  })
+
+  it('says which tracks of a batch failed', () => {
+    // Arrange
+    const batchId = newBatch()
+    setBatchItemError(testDatabase.db, batchId, trackError(trackIds[1] as number))
+
+    // Act
+    const states = listBatchItemStates(testDatabase.db, batchId)
+
+    // Assert
+    expect(states.map((state) => state.failed)).toEqual([false, true, false])
   })
 
   it('removes the jobs with their batch, and keeps a track that a job refers to', () => {

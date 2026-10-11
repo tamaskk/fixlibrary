@@ -404,7 +404,7 @@ describe('cancel', () => {
     await vi.advanceTimersByTimeAsync(1500)
 
     // Act
-    await run.cancel()
+    run.cancel()
 
     // Assert
     expect(getBatch(testDatabase.db, batchId)?.status).toBe('cancelled')
@@ -415,7 +415,7 @@ describe('cancel', () => {
       'rename:skipped': 10
     })
     expect(run.progress()).toBeNull()
-    expect(progress.at(-1)?.state).toBe('finished')
+    expect(progress.at(-1)).toMatchObject({ state: 'finished', outcome: 'cancelled' })
   })
 
   it('does not wait for a stage that ignores being told to stop', async () => {
@@ -427,14 +427,11 @@ describe('cancel', () => {
     await vi.advanceTimersByTimeAsync(100)
 
     // Act
-    let cancelled = false
-    void run.cancel().then(() => {
-      cancelled = true
-    })
-    await vi.advanceTimersByTimeAsync(10)
+    run.cancel()
+    const endedAtOnce = run.progress() === null
 
     // Assert
-    expect(cancelled).toBe(true)
+    expect(endedAtOnce).toBe(true)
     expect(getBatch(testDatabase.db, batchId)?.status).toBe('cancelled')
     expect(jobStatuses(batchId)).toEqual({ 'stuck:skipped': 3 })
   })
@@ -449,7 +446,7 @@ describe('cancel', () => {
     await vi.runAllTimersAsync()
 
     // Act
-    await run.cancel()
+    run.cancel()
 
     // Assert
     expect(getBatch(testDatabase.db, batchId)).toMatchObject({ status: 'cancelled', paused: false })
@@ -460,7 +457,7 @@ describe('cancel', () => {
     const trackIds = addTracks(2)
     const run = orchestrator([fakeStage('bpmKey')])
     run.start({ trackIds, stages: ['bpmKey'] })
-    await run.cancel()
+    run.cancel()
 
     // Act
     const again = run.start({ trackIds, stages: ['bpmKey'] })
@@ -524,22 +521,22 @@ describe('closing the app and starting it again', () => {
     expect(finished).toHaveLength(8)
   })
 
-  it('gives up a job that was interrupted three times, and goes on with the rest', async () => {
+  it('gives up a job that was running in three crashes of the app, and goes on with the rest', async () => {
     // Arrange
     const trackIds = addTracks(2)
     limits.cpu = 1
     let batchId = -1
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const run = orchestrator(stages(), attempt === 0 ? testDatabase.db : testDatabase.reopen())
-      if (attempt === 0) {
+    for (let crash = 0; crash < 3; crash += 1) {
+      const run = orchestrator(stages(), crash === 0 ? testDatabase.db : testDatabase.reopen())
+      if (crash === 0) {
         const result = run.start({ trackIds, stages: ['energy'] })
         batchId = result.ok ? result.value.batchId : -1
       } else {
         run.recover()
       }
       await vi.advanceTimersByTimeAsync(50)
-      run.shutdown()
-      await vi.advanceTimersByTimeAsync(1000)
+      // The app is gone in the middle of the job: nothing of it happens any more.
+      vi.clearAllTimers()
     }
 
     // Act
@@ -562,6 +559,93 @@ describe('closing the app and starting it again', () => {
       stage: 'bpmKey',
       code: 'UNEXPECTED'
     })
+  })
+
+  it('does not count closing the app on purpose as an attempt', async () => {
+    // Arrange
+    const trackIds = addTracks(1)
+    let batchId = -1
+    for (let quit = 0; quit < 5; quit += 1) {
+      const run = orchestrator(stages(), quit === 0 ? testDatabase.db : testDatabase.reopen())
+      if (quit === 0) {
+        const result = run.start({ trackIds, stages: ['bpmKey'] })
+        batchId = result.ok ? result.value.batchId : -1
+      } else {
+        run.recover()
+      }
+      await vi.advanceTimersByTimeAsync(50)
+      run.shutdown()
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+
+    // Act
+    const last = orchestrator(stages(), testDatabase.reopen())
+    last.recover()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(listJobs(testDatabase.db, batchId)).toMatchObject([{ status: 'done', attempts: 1 }])
+  })
+
+  it('never takes a cancelled batch up again, also when the app is closed right after the cancel', async () => {
+    // Arrange
+    const trackIds = addTracks(4)
+    limits.cpu = 2
+    const first = orchestrator(stages())
+    const result = first.start({ trackIds, stages: ['energy'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.advanceTimersByTimeAsync(50)
+
+    // Act
+    first.cancel()
+    first.shutdown()
+    await vi.advanceTimersByTimeAsync(10_000)
+    const second = orchestrator(stages(), testDatabase.reopen())
+    second.recover()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('cancelled')
+    expect(jobStatuses(batchId)).toEqual({ 'bpmKey:skipped': 4, 'energy:skipped': 4 })
+    expect(second.progress()).toBeNull()
+    expect(finished).toEqual([])
+  })
+
+  it('goes on with the apply phase after a restart, still only for the approved tracks', async () => {
+    // Arrange
+    const [approved, other] = addTracks(2) as [number, number]
+    const applyStages = (): Stage[] => [
+      fakeStage('naming'),
+      fakeStage('rename', { dependsOn: ['naming'], phase: 'apply', resource: 'io', ms: 500 })
+    ]
+    const first = orchestrator(applyStages())
+    const result = first.start({ trackIds: [approved, other], stages: ['rename'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.runAllTimersAsync()
+    testDatabase.db
+      .update(batchItems)
+      .set({ approved: true })
+      .where(eq(batchItems.trackId, approved))
+      .run()
+    first.applyBatch(batchId)
+    await vi.advanceTimersByTimeAsync(100)
+    first.shutdown()
+    await vi.advanceTimersByTimeAsync(1000)
+    started = []
+
+    // Act
+    const second = orchestrator(applyStages(), testDatabase.reopen())
+    second.recover()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(started).toEqual([`rename:${approved}`])
+    expect(jobStatuses(batchId)).toEqual({
+      'naming:done': 2,
+      'rename:done': 1,
+      'rename:skipped': 1
+    })
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('applied')
   })
 
   it('finishes a batch whose last job ended just before the app closed', async () => {
@@ -601,6 +685,37 @@ describe('closing the app and starting it again', () => {
     // Assert
     expect(jobStatuses(batchId)).toEqual({ 'bpmKey:done': 2, 'old:skipped': 2 })
     expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
+  })
+})
+
+describe('what listens to a run', () => {
+  it('cannot stop a run by failing', async () => {
+    // Arrange
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const trackIds = addTracks(3)
+    const run = createOrchestrator({
+      db: testDatabase.db,
+      stages: [fakeStage('bpmKey')],
+      limits: () => limits,
+      listMountedVolumes: () => mounted,
+      mode: () => 'clean_library',
+      onProgress: () => {
+        throw new Error('Object has been destroyed')
+      },
+      onBusyChange: () => {
+        throw new Error('the sleep blocker failed')
+      }
+    })
+
+    // Act
+    const result = run.start({ trackIds, stages: ['bpmKey'] })
+    await vi.runAllTimersAsync()
+
+    // Assert
+    const batchId = result.ok ? result.value.batchId : -1
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
+    expect(jobStatuses(batchId)).toEqual({ 'bpmKey:done': 3 })
+    expect(run.progress()).toBeNull()
   })
 })
 
@@ -754,6 +869,59 @@ describe('the apply phase', () => {
     expect(batch?.appliedAt).toBeInstanceOf(Date)
   })
 
+  it('does not write a track that a compute stage failed for, even when it was approved', async () => {
+    // Arrange
+    const [fine, failed] = addTracks(2) as [number, number]
+    const run = orchestrator([
+      fakeStage('lookup', { fails: (trackId) => trackId === failed }),
+      // Does not wait for the lookup, so only the error on the item can hold it back.
+      fakeStage('rename', { phase: 'apply', resource: 'io' })
+    ])
+    const result = run.start({ trackIds: [fine, failed], stages: ['lookup', 'rename'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.runAllTimersAsync()
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    started = []
+
+    // Act
+    run.applyBatch(batchId)
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(started).toEqual([`rename:${fine}`])
+  })
+
+  it('throws away what a stage returns after the batch was cancelled while applying', async () => {
+    // Arrange
+    const [trackId] = addTracks(1) as [number]
+    const run = orchestrator([
+      fakeStage('naming'),
+      fakeStage('rename', {
+        dependsOn: ['naming'],
+        phase: 'apply',
+        resource: 'io',
+        ms: 500,
+        stubborn: true,
+        result: () => ({ proposal: { written: true } })
+      })
+    ])
+    const result = run.start({ trackIds: [trackId], stages: ['rename'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.runAllTimersAsync()
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    run.applyBatch(batchId)
+    await vi.advanceTimersByTimeAsync(100)
+
+    // Act
+    run.cancel()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('cancelled')
+    expect(jobStatuses(batchId)).toEqual({ 'naming:done': 1, 'rename:skipped': 1 })
+    expect(testDatabase.db.select().from(batchItems).all()[0]?.after).toEqual({})
+  })
+
   it('refuses to apply a batch that does not wait for approval', async () => {
     // Arrange
     const trackIds = addTracks(1)
@@ -763,7 +931,7 @@ describe('the apply phase', () => {
 
     // Act
     const whileComputing = run.applyBatch(batchId)
-    await run.cancel()
+    run.cancel()
     const afterCancel = run.applyBatch(batchId)
     const unknown = run.applyBatch(999_999)
 

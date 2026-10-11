@@ -40,10 +40,12 @@ export function createJobQueue<T>(options: JobQueueOptions<T>): JobQueue<T> {
     if (paused) return
     const limits = options.limits()
     for (const resource of RESOURCES) {
-      // At least one at a time, whatever the setting says: a limit of zero would
-      // leave the jobs of this resource waiting forever.
-      const limit = Math.max(1, Math.trunc(limits[resource]))
-      while (running[resource] < limit) {
+      // At least one at a time, whatever the setting says: a limit of zero, or one
+      // that is not a number, would leave the jobs of this resource waiting forever.
+      const asked = limits[resource]
+      const limit = Number.isFinite(asked) ? Math.max(1, Math.trunc(asked)) : 1
+      // Checked every time: the job that was just started may have paused the queue.
+      while (!paused && running[resource] < limit) {
         const job = waiting[resource].shift()
         if (job === undefined) break
         running[resource] += 1

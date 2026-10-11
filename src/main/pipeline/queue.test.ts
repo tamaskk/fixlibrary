@@ -175,6 +175,47 @@ describe('createJobQueue', () => {
     expect(mostAtOnce.cpu).toBe(1)
   })
 
+  it('runs one job at a time for a resource whose limit is not a number', async () => {
+    // Arrange
+    limits.cpu = Number.NaN
+    const jobs = queue()
+    for (const name of ['a', 'b']) jobs.add(job(name))
+
+    // Act
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(finished).toEqual(['a', 'b'])
+  })
+
+  it('starts nothing more, of any resource, once a job has paused the queue while starting', async () => {
+    // Arrange
+    const startedHere: string[] = []
+    const jobs: JobQueue<FakeJob> = createJobQueue<FakeJob>({
+      limits: () => limits,
+      resourceOf: (entry) => entry.resource,
+      run: async (entry) => {
+        startedHere.push(entry.name)
+        if (entry.name === 'pauses') {
+          jobs.pause()
+          jobs.addFirst(entry)
+        }
+      }
+    })
+    jobs.pause()
+    jobs.add(job('pauses', 'cpu'))
+    jobs.add(job('cpu-2', 'cpu'))
+    jobs.add(job('io-1', 'io'))
+
+    // Act
+    jobs.resume()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(startedHere).toEqual(['pauses'])
+    expect(jobs.waitingCount()).toBe(3)
+  })
+
   it('gives the place of a job back when its run rejects', async () => {
     // Arrange
     limits.cpu = 1

@@ -20,6 +20,7 @@ import {
   listJobs,
   markJobRunning,
   recoverInterruptedJobs,
+  requeueJobs,
   skipJobs,
   type JobStatus,
   type NewJob
@@ -39,11 +40,12 @@ import { runStage } from './run-stage'
 import { withDependencies } from './stages'
 import type { Stage } from './stages/stage'
 
-// A job that was running when the app stopped is started again. One that was
-// interrupted this often is the likely reason the app stops, and is given up.
+// A job that was running when the app crashed is started again. One that was
+// interrupted this often is the likely reason the app crashes, and is given up.
 const DEFAULT_MAX_ATTEMPTS = 3
-// The time left is estimated from the jobs that finished last.
+// The time left is estimated per stage, from the jobs of that stage that finished last.
 const DURATION_SAMPLES = 50
+// Fewer finished jobs than this in all say too little for an estimate.
 const MIN_DURATION_SAMPLES = 3
 
 export interface OrchestratorDependencies {
@@ -55,6 +57,7 @@ export interface OrchestratorDependencies {
   listMountedVolumes: () => ReadonlySet<string>
   /** In place or clean library, as the settings say when a run starts. */
   mode: () => BatchMode
+  /** May be called very often; whoever passes it on limits how often. */
   onProgress?: (progress: RunProgress) => void
   /** True while jobs run or may start by themselves; the app must not sleep then. */
   onBusyChange?: (busy: boolean) => void
@@ -72,11 +75,15 @@ export interface Orchestrator {
   /** No new job starts; the running ones finish. */
   pause: () => void
   resume: () => void
-  /** Stops the running jobs and ends the batch as cancelled. Resolves when it has ended. */
-  cancel: () => Promise<void>
   /**
-   * For quitting the app: tells the running jobs to stop and records nothing, so the
-   * next start finds them interrupted and goes on with the batch.
+   * Ends the batch as cancelled, at once: the running jobs are told to stop, and
+   * whatever they still return is thrown away.
+   */
+  cancel: () => void
+  /**
+   * For quitting the app, before the database is closed: tells the running jobs to
+   * stop and puts them back in line, so the next start goes on with the batch. The
+   * orchestrator does nothing after this.
    */
   shutdown: () => void
   progress: () => RunProgress | null
@@ -91,8 +98,6 @@ interface RunJob {
   status: JobStatus
 }
 
-type AbortReason = 'cancel' | 'shutdown'
-
 interface Run {
   batchId: number
   phase: JobPhase
@@ -102,16 +107,19 @@ interface Run {
   phaseJobs: RunJob[]
   /** Counted as the jobs change, per stage, in the order the stages run. */
   counts: Map<string, JobCounts>
+  /** How long the last jobs of each stage took, for the estimate. */
+  durations: Map<string, number[]>
   controllers: Map<number, AbortController>
   pauseReason: 'user' | 'offline' | null
-  cancelling: boolean
   startedAt: number
-  /** How long the last jobs took, for the estimate. */
-  durations: number[]
   /** Jobs of this phase that are running now. */
   running: number
   /** Jobs of this phase that are neither done, failed nor skipped. */
   unfinished: number
+}
+
+function isOver(status: JobStatus): status is 'done' | 'failed' | 'skipped' {
+  return status === 'done' || status === 'failed' || status === 'skipped'
 }
 
 /** A track as it is stored, for the `before` of a batch item that undo restores from. */
@@ -127,13 +135,14 @@ function emptyCounts(): JobCounts {
 }
 
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
-  const { db, stages, listMountedVolumes, onProgress, onBusyChange } = dependencies
+  const { db, stages, listMountedVolumes } = dependencies
   const now = dependencies.now ?? Date.now
   const maxAttempts = dependencies.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
   const stagesByName = new Map(stages.map((stage) => [stage.name, stage]))
 
   let run: Run | null = null
   let busy = false
+  let shutDown = false
   let finishedWaiters: (() => void)[] = []
 
   const queue = createJobQueue<RunJob>({
@@ -142,49 +151,85 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     run: executeJob
   })
 
+  // What listens may fail (a window that is gone); a run must not depend on it.
+  function tellProgress(progress: RunProgress): void {
+    try {
+      dependencies.onProgress?.(progress)
+    } catch (error) {
+      logger.error('The progress of the run could not be reported', error)
+    }
+  }
+
   function updateBusy(): void {
     // Paused with nothing running: the Mac may sleep until the user resumes.
     const nowBusy = run !== null && (run.pauseReason === null || run.running > 0)
     if (nowBusy === busy) return
     busy = nowBusy
-    onBusyChange?.(busy)
+    try {
+      dependencies.onBusyChange?.(busy)
+    } catch (error) {
+      logger.error('The change of the run could not be reported', error)
+    }
   }
 
-  function snapshot(active: Run, state: RunProgress['state']): RunProgress {
+  /**
+   * The time the jobs that are left will take: per stage, how long its last jobs
+   * took, times the jobs left, over how many of them run at once. Null while a stage
+   * with jobs left has not finished one yet, or too little has finished at all.
+   */
+  function estimate(active: Run): number | null {
+    const limits = dependencies.limits()
+    let samples = 0
+    let remainingMs = 0
+    for (const [name, counts] of active.counts) {
+      const durations = active.durations.get(name) ?? []
+      samples += durations.length
+      const left = counts.total - counts.done - counts.failed - counts.skipped
+      if (left === 0) continue
+      if (durations.length === 0) return null
+      const average = durations.reduce((sum, each) => sum + each, 0) / durations.length
+      const limit = limits[stagesByName.get(name)?.resource ?? 'cpu']
+      const atOnce = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : 1
+      remainingMs += (average * left) / Math.min(atOnce, left)
+    }
+    return samples < MIN_DURATION_SAMPLES ? null : Math.round(remainingMs)
+  }
+
+  function snapshot(
+    active: Run,
+    state: RunProgress['state'],
+    outcome: RunProgress['outcome'] = null
+  ): RunProgress {
     const total = emptyCounts()
     const perStage = [...active.counts].map(([stage, counts]) => {
       for (const key of Object.keys(total) as (keyof JobCounts)[]) total[key] += counts[key]
       return { stage, ...counts }
     })
-    const left = total.total - total.done - total.failed - total.skipped
-    const samples = active.durations
-    const average = samples.reduce((sum, each) => sum + each, 0) / Math.max(1, samples.length)
     return {
       batchId: active.batchId,
       phase: active.phase,
       state,
+      outcome,
       pauseReason: active.pauseReason,
       counts: total,
       stages: perStage,
       startedAt: active.startedAt,
-      remainingMs:
-        samples.length < MIN_DURATION_SAMPLES
-          ? null
-          : Math.round((average * left) / Math.max(1, total.running))
+      remainingMs: state === 'finished' ? null : estimate(active)
     }
   }
 
   function currentState(active: Run): RunProgress['state'] {
-    if (active.cancelling) return 'cancelling'
     return active.pauseReason === null ? 'running' : 'paused'
   }
 
   function report(): void {
-    if (run) onProgress?.(snapshot(run, currentState(run)))
+    if (run) tellProgress(snapshot(run, currentState(run)))
   }
 
   /** Changes the status of a job in memory and keeps the counts in step. */
   function setStatus(active: Run, job: RunJob, status: JobStatus): void {
+    // A job that is over stays as it ended: counting it again would end the phase early.
+    if (isOver(job.status) || job.status === status) return
     const counts = active.counts.get(job.stage.name)
     if (counts && job.stage.phase === active.phase) {
       if (job.status === 'running') {
@@ -195,7 +240,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         counts.running += 1
         active.running += 1
       }
-      if (status === 'done' || status === 'failed' || status === 'skipped') {
+      if (isOver(status)) {
         counts[status] += 1
         active.unfinished -= 1
       }
@@ -248,8 +293,11 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   function fail(active: Run, job: RunJob, error: TrackError): void {
-    finishJob(db, job.id, { status: 'failed', error })
-    setBatchItemError(db, active.batchId, error)
+    // Together: a failed job without its error on the item would never be explained.
+    db.transaction((tx) => {
+      finishJob(tx, job.id, { status: 'failed', error })
+      setBatchItemError(tx, active.batchId, error)
+    })
     setStatus(active, job, 'failed')
     for (const dependent of dependentsOf(active, job)) skipWithDependents(active, dependent)
   }
@@ -263,20 +311,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     }
   }
 
-  function endPhaseIfDone(): void {
-    const active = run
-    if (!active || active.unfinished > 0) return
-
-    const status = active.cancelling
-      ? 'cancelled'
-      : active.phase === 'compute'
-        ? // The proposals wait for the user's approval; nothing is written before that.
-          'preview'
-        : 'applied'
-    setBatchStatus(db, active.batchId, status)
-    setBatchPaused(db, active.batchId, false)
-    logger.info(`Batch ${active.batchId}: the ${active.phase} phase ended as ${status}`)
-    onProgress?.(snapshot(active, 'finished'))
+  /** Forgets the run and tells whoever waits for its end. */
+  function leave(active: Run, outcome: NonNullable<RunProgress['outcome']>): void {
+    tellProgress(snapshot(active, 'finished', outcome))
     run = null
     queue.resume()
     updateBusy()
@@ -285,8 +322,21 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const done of waiters) done()
   }
 
+  function endPhaseIfDone(): void {
+    const active = run
+    if (!active || active.unfinished > 0) return
+    // The proposals wait for the user's approval; nothing is written before that.
+    const status = active.phase === 'compute' ? 'preview' : 'applied'
+    db.transaction((tx) => {
+      setBatchStatus(tx, active.batchId, status)
+      setBatchPaused(tx, active.batchId, false)
+    })
+    logger.info(`Batch ${active.batchId}: the ${active.phase} phase ended as ${status}`)
+    leave(active, status)
+  }
+
   function pauseBecause(reason: 'user' | 'offline'): void {
-    if (!run || run.cancelling || run.pauseReason !== null) return
+    if (!run || run.pauseReason !== null) return
     run.pauseReason = reason
     queue.pause()
     setBatchPaused(db, run.batchId, true)
@@ -298,7 +348,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   /** Runs one job. Never rejects: the queue relies on that. */
   async function executeJob(job: RunJob): Promise<void> {
     const active = run
-    if (!active || active.cancelling || job.status !== 'queued') return
+    if (!active || job.status !== 'queued') return
+    // False once the run was cancelled, shut down, or this job was taken off it.
+    const stillOurs = (): boolean => run === active && job.status === 'running'
     try {
       const track = getTrackById(db, job.trackId, listMountedVolumes())
       if (track?.offline) {
@@ -342,45 +394,43 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         }
       )
       active.controllers.delete(job.id)
+      // The run went on without this job: nothing it returns is recorded, and the
+      // database may be closed by now.
+      if (!stillOurs()) return
 
-      const reason = controller.signal.aborted ? (controller.signal.reason as AbortReason) : null
-      if (reason === 'shutdown') {
-        // Left as it is: the next start of the app finds the job interrupted.
-        setStatus(active, job, 'queued')
-        return
-      }
-      if (reason === 'cancel') {
-        finishJob(db, job.id, { status: 'skipped' })
-        setStatus(active, job, 'skipped')
-        return
-      }
       if (!outcome.ok) {
         fail(active, job, outcome.error)
         return
       }
-
       const proposal = outcome.value?.proposal
+      // The proposal first: a job recorded as done must have left its result behind.
       if (proposal) mergeBatchItemProposal(db, active.batchId, job.trackId, proposal)
       finishJob(db, job.id, { status: 'done' })
       setStatus(active, job, 'done')
-      active.durations.push(now() - startedAt)
-      if (active.durations.length > DURATION_SAMPLES) active.durations.shift()
+
+      const durations = active.durations.get(job.stage.name) ?? []
+      durations.push(now() - startedAt)
+      if (durations.length > DURATION_SAMPLES) durations.shift()
+      active.durations.set(job.stage.name, durations)
       for (const dependent of dependentsOf(active, job)) resolve(active, dependent)
     } catch (error) {
       // The database refused something, or a stage returned what cannot be stored.
       logger.error(`Job ${job.id} (${job.stage.name}) could not be recorded`, error)
       active.controllers.delete(job.id)
-      try {
-        fail(active, job, trackError(job, 'UNEXPECTED'))
-      } catch (secondError) {
-        logger.error(`Job ${job.id} could not be marked as failed`, secondError)
-        setStatus(active, job, 'failed')
+      if (run === active && !isOver(job.status)) {
+        try {
+          fail(active, job, trackError(job, 'UNEXPECTED'))
+        } catch (secondError) {
+          logger.error(`Job ${job.id} could not be marked as failed`, secondError)
+          setStatus(active, job, 'failed')
+        }
       }
     } finally {
       if (run === active) {
+        // Ending the phase comes first and does not depend on the reports.
+        endPhaseIfDone()
         report()
         updateBusy()
-        endPhaseIfDone()
       }
     }
   }
@@ -393,11 +443,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       byTrack: new Map(),
       phaseJobs: [],
       counts: new Map(),
+      durations: new Map(),
       controllers: new Map(),
       pauseReason: options.paused ? 'user' : null,
-      cancelling: false,
       startedAt: now(),
-      durations: [],
       running: 0,
       unfinished: 0
     }
@@ -406,7 +455,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const row of listJobs(db, batch.id)) {
       const stage = stagesByName.get(row.stage)
       if (!stage) {
-        // A stage this version of the app no longer has.
+        // A stage this version of the app no longer has. No stage of this version
+        // can depend on it (`validateStages`), so nothing waits for these jobs.
         if (row.status === 'queued' || row.status === 'running') withoutStage.push(row.id)
         continue
       }
@@ -418,11 +468,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       active.phaseJobs.push(job)
       const counts = active.counts.get(stage.name) ?? emptyCounts()
       counts.total += 1
-      if (job.status === 'done' || job.status === 'failed' || job.status === 'skipped') {
-        counts[job.status] += 1
-      } else {
-        active.unfinished += 1
-      }
+      if (isOver(job.status)) counts[job.status] += 1
+      else active.unfinished += 1
       active.counts.set(stage.name, counts)
     }
     skipJobs(db, withoutStage)
@@ -431,29 +478,33 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     if (options.paused) queue.pause()
 
     if (phase === 'apply') {
-      // Only what the user approved is written.
-      const approved = new Set(
+      // Only what the user approved is written, and never a track that a stage failed
+      // for: what was proposed for it is incomplete.
+      const writable = new Set(
         listBatchItemStates(db, batch.id)
-          .filter((item) => item.approved && !item.excluded)
+          .filter((item) => item.approved && !item.excluded && !item.failed)
           .map((item) => item.trackId)
       )
       for (const job of active.phaseJobs) {
-        if (!approved.has(job.trackId)) skipWithDependents(active, job)
+        if (!writable.has(job.trackId)) skipWithDependents(active, job)
       }
     }
     for (const job of active.phaseJobs) resolve(active, job)
 
+    endPhaseIfDone()
     report()
     updateBusy()
-    endPhaseIfDone()
+  }
+
+  function isActive(): boolean {
+    return run !== null || findActiveBatch(db) !== undefined
   }
 
   return {
     start(request) {
       const parsed = runStartSchema.safeParse(request)
-      if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
-      if (run !== null || findActiveBatch(db) !== undefined)
-        return { ok: false, code: 'RUN_ACTIVE' }
+      if (!parsed.success || shutDown) return { ok: false, code: 'INVALID_INPUT' }
+      if (isActive()) return { ok: false, code: 'RUN_ACTIVE' }
 
       const selected = withDependencies(stages, parsed.data.stages)
       if (selected === null) return { ok: false, code: 'INVALID_INPUT' }
@@ -498,8 +549,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     },
 
     applyBatch(batchId) {
-      if (run !== null || findActiveBatch(db) !== undefined)
-        return { ok: false, code: 'RUN_ACTIVE' }
+      if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
+      if (isActive()) return { ok: false, code: 'RUN_ACTIVE' }
       const batch = getBatch(db, batchId)
       if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
       setBatchStatus(db, batchId, 'applying')
@@ -509,7 +560,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     },
 
     recover() {
-      if (run !== null) return
+      if (run !== null || shutDown) return
       const batch = findActiveBatch(db)
       if (!batch) return
       const phase: JobPhase = batch.status === 'applying' ? 'apply' : 'compute'
@@ -523,8 +574,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         logger.warn(
           `Job ${job.id} (${job.stage}) was interrupted ${job.attempts} times and is given up`
         )
-        finishJob(db, job.id, { status: 'failed', error })
-        setBatchItemError(db, batch.id, error)
+        db.transaction((tx) => {
+          finishJob(tx, job.id, { status: 'failed', error })
+          setBatchItemError(tx, batch.id, error)
+        })
       }
       logger.info(`Batch ${batch.id}: going on with the ${phase} phase after a restart`)
       begin(batch, phase, { paused: batch.paused })
@@ -533,7 +586,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     pause: () => pauseBecause('user'),
 
     resume() {
-      if (!run || run.cancelling || run.pauseReason === null) return
+      if (!run || run.pauseReason === null) return
       run.pauseReason = null
       setBatchPaused(db, run.batchId, false)
       logger.info(`Batch ${run.batchId} resumed`)
@@ -544,46 +597,51 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
     cancel() {
       const active = run
-      if (!active) return Promise.resolve()
-      if (!active.cancelling) {
-        active.cancelling = true
-        active.pauseReason = null
-        logger.info(`Batch ${active.batchId}: cancelling`)
-        queue.clear()
-        // Every job that has not started, of this phase and of the one after it.
-        const waiting = [...active.byTrack.values()].flatMap((ofTrack) =>
-          [...ofTrack.values()].filter((job) => job.status === 'queued')
-        )
-        for (const job of waiting) setStatus(active, job, 'skipped')
+      if (!active) return
+      queue.clear()
+      // Every job that is not over, of this phase and of the one after it. The
+      // running ones too: what they still return is not recorded.
+      const open = [...active.byTrack.values()].flatMap((ofTrack) =>
+        [...ofTrack.values()].filter((job) => !isOver(job.status))
+      )
+      // Stored at once and together, so that a cancelled batch can never be taken
+      // up again, whatever happens to the app next.
+      db.transaction((tx) => {
+        setBatchStatus(tx, active.batchId, 'cancelled')
+        setBatchPaused(tx, active.batchId, false)
         skipJobs(
-          db,
-          waiting.map((job) => job.id)
+          tx,
+          open.map((job) => job.id)
         )
-        for (const controller of active.controllers.values()) {
-          controller.abort('cancel' satisfies AbortReason)
-        }
-        queue.resume()
-        report()
-        endPhaseIfDone()
-      }
-      return new Promise<void>((done) => {
-        if (run === null) done()
-        else finishedWaiters.push(done)
       })
+      for (const job of open) setStatus(active, job, 'skipped')
+      active.pauseReason = null
+      for (const controller of active.controllers.values()) controller.abort()
+      active.controllers.clear()
+      logger.info(`Batch ${active.batchId} cancelled`)
+      leave(active, 'cancelled')
     },
 
     shutdown() {
+      shutDown = true
       const active = run
-      if (!active) return
       queue.pause()
       queue.clear()
-      for (const controller of active.controllers.values()) {
-        controller.abort('shutdown' satisfies AbortReason)
-      }
-      // The jobs that were running stay `running` in the database, and the batch
-      // stays active: `recover` picks both up at the next start.
+      if (!active) return
+      // Back in line, and not counted as an attempt: the app is closed on purpose.
+      // The batch stays active, and `recover` goes on with it at the next start.
+      const interrupted = active.phaseJobs.filter((job) => job.status === 'running')
+      requeueJobs(
+        db,
+        interrupted.map((job) => job.id)
+      )
+      for (const controller of active.controllers.values()) controller.abort()
+      active.controllers.clear()
       run = null
       updateBusy()
+      const waiters = finishedWaiters
+      finishedWaiters = []
+      for (const done of waiters) done()
     },
 
     progress: () => (run ? snapshot(run, currentState(run)) : null),

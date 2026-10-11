@@ -204,9 +204,11 @@ Pipeline runs:
 - Two phases. Compute ends with the batch in `preview`: nothing was written, and the apply jobs stay queued. `applyBatch` starts them, only for the items the user approved and did not take out, and ends with the batch `applied`. Only one batch waits for approval: starting a new run cancels an older one.
 - One batch is computed or applied at a time; a second start is answered with `RUN_ACTIVE`.
 - Pause: no new job starts and the running ones finish; the pause is stored on the batch. If the drive of a track is not mounted when its job would start, the run pauses itself (`offline`) instead of failing every track that is left.
-- Cancel: the running jobs get their abort signal, every job that has not started is skipped, and the batch ends as `cancelled`. A cancel does not wait for a stage that ignores its signal; such a stage's late result is thrown away.
-- Restart: quitting tells the running jobs to stop and records nothing. At the next start the batch that was being computed or applied is taken up again: `done` jobs are not run again, interrupted ones go back in line, and a paused batch stays paused. A job that was interrupted three times is recorded as failed, so a file that makes the app stop cannot do so forever.
-- Progress is reported as counts per stage and an estimate of the time left, from how long the last 50 jobs took.
+- Cancel ends the batch at once: in one transaction the batch becomes `cancelled` and every job that is not over becomes `skipped`, the running ones included. They get their abort signal, and whatever they still return is thrown away. A cancelled batch is never taken up again. A stage that writes files must therefore stop on its signal: a write that finishes after the cancel is not recorded on the job.
+- Restart: quitting tells the running jobs to stop and puts them back in line. At the next start the batch that was being computed or applied is taken up again: `done` jobs are not run again, and a paused batch stays paused. After a crash the jobs that were running go back in line too, but the start counts: a job that was running in three crashes is recorded as failed, so a file that makes the app crash cannot do so forever.
+- The apply phase never writes a track that a stage failed for, approved or not.
+- What listens to a run (progress, the sleep blocker) cannot stop it by failing.
+- Progress is reported as counts per stage and an estimate of the time left: per stage, how long its last 50 jobs took, times the jobs left, over how many run at once. There is no estimate while a stage with jobs left has not finished one.
 
 Python sidecar:
 
