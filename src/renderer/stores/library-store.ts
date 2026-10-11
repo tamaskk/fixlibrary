@@ -4,7 +4,7 @@ import {
   LIBRARY_PAGE_SIZE,
   type LibraryStatus,
   type LibraryTrack,
-  type RunTargets,
+  type RunStarted,
   type ScanProgress,
   type ScanSummary
 } from '@shared/library'
@@ -42,7 +42,7 @@ type TrackList =
 export type ScanOutcome = { ok: true; summary: ScanSummary } | { ok: false; code: ErrorCode } | null
 
 /** What the main process answered to the last run request; null before the first one. */
-export type RunOutcome = { ok: true; targets: RunTargets } | { ok: false; code: ErrorCode } | null
+export type RunOutcome = { ok: true; started: RunStarted } | { ok: false; code: ErrorCode } | null
 
 interface LibraryState {
   data: LibraryData
@@ -68,8 +68,8 @@ interface LibraryState {
   select: (id: number, modifiers: SelectModifiers, shownIds: readonly number[]) => void
   selectAllShown: (shownIds: readonly number[]) => void
   clearSelection: () => void
-  /** Asks main to run on the selected tracks, or on the whole library. */
-  run: (scope: 'selection' | 'library') => Promise<void>
+  /** Asks main to run the functions on the selected tracks, or on the whole library. */
+  run: (scope: 'selection' | 'library', stages: readonly string[]) => Promise<void>
 }
 
 // The main process is the authority: the store only ever holds what main returned.
@@ -192,9 +192,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       set({ selection: selectAll(get().selection, shownIds), lastRun: null }),
     clearSelection: () => set({ selection: EMPTY_SELECTION, lastRun: null }),
 
-    async run(scope) {
+    async run(scope, functions) {
       const { list, selection, requestingRun } = get()
-      if (requestingRun || list.status !== 'ready') return
+      if (requestingRun || list.status !== 'ready' || functions.length === 0) return
+      const stages = [...functions]
       // In library order; which of them can be processed is for main to decide.
       const trackIds = selectedInOrder(
         selection,
@@ -204,11 +205,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       set({ requestingRun: true })
       try {
         const result = await window.api.library.run(
-          scope === 'selection' ? { scope, trackIds } : { scope }
+          scope === 'selection' ? { scope, trackIds, stages } : { scope, stages }
         )
         set({
           lastRun: result.ok
-            ? { ok: true, targets: result.value }
+            ? { ok: true, started: result.value }
             : { ok: false, code: result.code }
         })
       } catch {

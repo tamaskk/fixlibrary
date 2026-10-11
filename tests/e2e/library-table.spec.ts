@@ -66,7 +66,7 @@ test.afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
 })
 
-test('tracks are selected with click, Shift, Cmd and Cmd+A, and a run gets exactly the selection', async () => {
+test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
   const { app, page } = await openScannedLibrary()
   try {
     const grid = page.getByRole('grid', { name: 'Trackek' })
@@ -95,12 +95,11 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A, and a run gets exact
     await expect(row(page, 20)).toHaveAttribute('aria-selected', 'true')
     await expect(row(page, 21)).toHaveAttribute('aria-selected', 'false')
 
-    // The main process answers with the tracks it would process: exactly these 20.
-    await run.getByRole('button', { name: 'Futtatás a kijelölteken' }).click()
-    await expect(run.getByText('20 track kerülne feldolgozásra.')).toBeVisible()
-
-    await run.getByRole('button', { name: 'Futtatás a teljes könyvtáron' }).click()
-    await expect(run.getByText(`${TRACK_COUNT} track kerülne feldolgozásra.`)).toBeVisible()
+    // This build has no function to run yet, so a run cannot be started; a run on a
+    // selection is covered by pipeline.spec.ts.
+    await expect(run.getByLabel('Funkció')).toBeDisabled()
+    await expect(run.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeDisabled()
+    await expect(run.getByRole('button', { name: 'Futtatás a teljes könyvtáron' })).toBeDisabled()
 
     // Cmd+A selects every row of the table, also the ones that are not in the page.
     await grid.focus()

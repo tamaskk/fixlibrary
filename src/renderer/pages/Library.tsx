@@ -4,6 +4,8 @@ import { LibraryToolbar } from '@/components/features/library/LibraryToolbar'
 import { ScanProgressPanel } from '@/components/features/library/ScanProgressPanel'
 import { ScanResult } from '@/components/features/library/ScanResult'
 import { SelectionBar } from '@/components/features/library/SelectionBar'
+import { RunPanel } from '@/components/features/pipeline/RunPanel'
+import { RunResult } from '@/components/features/pipeline/RunResult'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StatusLine } from '@/components/ui/status-line'
@@ -11,6 +13,7 @@ import { applyView, DEFAULT_VIEW } from '@/lib/library-view'
 import { scanPhaseLabel } from '@/lib/scan-phase'
 import { useAppStore } from '@/stores/app-store'
 import { useLibraryStore } from '@/stores/library-store'
+import { usePipelineStore } from '@/stores/pipeline-store'
 
 export function Library(): React.JSX.Element {
   const data = useLibraryStore((state) => state.data)
@@ -33,12 +36,23 @@ export function Library(): React.JSX.Element {
   const clearSelection = useLibraryStore((state) => state.clearSelection)
   const run = useLibraryStore((state) => state.run)
   const setPage = useAppStore((state) => state.setPage)
+  const functions = usePipelineStore((state) => state.functions)
+  const choice = usePipelineStore((state) => state.choice)
+  const runProgress = usePipelineStore((state) => state.progress)
+  const runFinished = usePipelineStore((state) => state.lastFinished)
+  const loadPipeline = usePipelineStore((state) => state.load)
+  const choose = usePipelineStore((state) => state.choose)
+  const chosenStages = usePipelineStore((state) => state.chosenStages)
+  const pauseRun = usePipelineStore((state) => state.pause)
+  const resumeRun = usePipelineStore((state) => state.resume)
+  const cancelRun = usePipelineStore((state) => state.cancel)
 
   // Asked again on every visit: the library folder may have been chosen in Settings
   // since, and the app may be scanning by itself.
   React.useEffect(() => {
     void load()
-  }, [load])
+    void loadPipeline()
+  }, [load, loadPipeline])
 
   const tracks = list.status === 'ready' ? list.tracks : null
   const rows = React.useMemo(
@@ -79,6 +93,14 @@ export function Library(): React.JSX.Element {
 
       {ready !== null && (
         <>
+          {runProgress !== null && (
+            <RunPanel
+              progress={runProgress}
+              onPause={() => void pauseRun()}
+              onResume={() => void resumeRun()}
+              onCancel={() => void cancelRun()}
+            />
+          )}
           {scanning && <ScanProgressPanel progress={progress} />}
           <div>
             {/* In the page before a scan starts, so the phase is announced when it changes. */}
@@ -86,7 +108,15 @@ export function Library(): React.JSX.Element {
               {scanning ? scanPhaseLabel(progress) : ''}
             </p>
             {/* With no folder and no tracks the empty state below says what is wrong. */}
-            <ScanResult outcome={scanning || (!hasTracks && !ready.rootChosen) ? null : lastScan} />
+            {/* While a run is shown, the note about the last scan gives its room to it. */}
+            <ScanResult
+              outcome={
+                scanning || runProgress !== null || (!hasTracks && !ready.rootChosen)
+                  ? null
+                  : lastScan
+              }
+            />
+            <RunResult finished={runProgress === null ? runFinished : null} />
           </div>
 
           {hasTracks && (list.status === 'idle' || list.status === 'loading') && (
@@ -135,9 +165,13 @@ export function Library(): React.JSX.Element {
               )}
               <SelectionBar
                 selectedCount={selection.ids.size}
+                functions={functions}
+                choice={choice}
+                onChoose={choose}
+                runActive={runProgress !== null}
                 requesting={requestingRun}
-                outcome={lastRun}
-                onRun={(scope) => void run(scope)}
+                outcome={runProgress === null ? lastRun : null}
+                onRun={(scope) => void run(scope, chosenStages())}
               />
             </>
           )}
