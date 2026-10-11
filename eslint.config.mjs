@@ -13,6 +13,7 @@ export default defineConfig(
       '**/out',
       'release',
       'python',
+      'resources/bin',
       'test-results',
       'playwright-report'
     ]

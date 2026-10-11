@@ -6,7 +6,7 @@ Derived from docs/PRD.md §05 and the 45-task plan. `T-0NN` is task NN in docs/s
 
 Package 1: foundations.
 
-- [ ] T-005 (base, S) External binaries: yt-dlp, ffmpeg, fpcalc, mp3gain
+- [ ] T-005 (base, S) External tools: ffmpeg, fpcalc, mp3gain bundled, yt-dlp as a Python module. Built and tested in development. Open: `checkAll()` in the packaged app, which needs the Python runtime of T-041 and the signing fix of T-042.
 - [ ] T-006 (base, M) Settings page and Keychain-backed secrets
 - [ ] T-007 (base, S) Logging and the skip-and-list error framework
 

@@ -53,7 +53,8 @@ There are no accounts and no personal data of other people.
 ## 06 Dependencies
 
 - New dependency, bundled binary or online service → ask first.
-- Bundled binaries are fetched at pinned versions by `scripts/fetch-binaries.sh` and checked for the arm64 architecture.
+- Bundled binaries are built or fetched at pinned versions by `scripts/fetch-binaries.sh` and checked for the arm64 architecture. Packaging refuses to run if `resources/bin` is missing, incomplete or changed since the script installed it.
+- ffmpeg is built without network protocols; yt-dlp is a pinned Python package in the sidecar environment, not a separate download.
 - Self-updating components (yt-dlp, Python runtime, app) are installed only after a SHA-256 check against the release manifest or checksum file.
 - Essentia is AGPL-3.0; the repository stays AGPL-3.0.
 
