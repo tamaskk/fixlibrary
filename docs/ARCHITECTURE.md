@@ -192,8 +192,8 @@ Library scan:
 Library page:
 
 - `library:list` returns one page (at most 500) of `LibraryTrack` rows in path order: what the table shows of a track and nothing more. The page loads all of them into `stores/library-store.ts`; search, filters and sorting are pure functions in `renderer/lib/library-view.ts` and run in the renderer, which is fast enough for the 3000 tracks the app is built for and makes range selection and "select all" trivial. The table itself is virtualized (`@tanstack/react-virtual`).
-- The selection (`renderer/lib/selection.ts`) lives in the store as a set of track ids. It survives a change of search, filter or sorting, and loses the tracks that are gone when the rows are loaded again after a scan.
-- `library:run` takes track ids, or the whole library, and nothing else. `pipeline/library.ts` decides which of them a run may process: a track that is offline, whose file the last scan did not find, or that is not in the library is left out and counted. Until the orchestrator exists (T-009) the handler only answers with those tracks; nothing is processed.
+- The selection (`renderer/lib/selection.ts`) lives in the store as a set of track ids. A search or filter that hides a selected row takes it out of the selection, so a run never processes a track the user cannot see selected; sorting keeps the selection. Tracks that are gone leave it when the rows are loaded again after a scan.
+- `library:run` takes track ids, or the whole library, and nothing else. `pipeline/library.ts` decides which of them a run may process: a track that is offline, whose file the last scan did not find, or that is not in the library is left out and counted. A track whose tags could not be read is not left out: its audio may still be fine. File and folder names are sent to the page as one clean line, for display only; the page never sends a name or a path back. The mounted volumes are looked up at most once a second for these calls, so one load of the table sees one state; the scanner always asks afresh. Until the orchestrator exists (T-009) the handler only answers with those tracks; nothing is processed.
 
 Python sidecar:
 

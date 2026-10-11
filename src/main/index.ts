@@ -18,7 +18,7 @@ import { readEnvFile } from './services/env-file'
 import { keychainCipher } from './services/keychain'
 import { logger, startFileLogging } from './services/logger'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
-import { listMountedVolumes } from './services/volumes'
+import { createMountedVolumesCache, listMountedVolumes } from './services/volumes'
 import { AppError } from '@shared/errors'
 import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
 
@@ -150,7 +150,8 @@ function registerLibrary(): void {
       )
     }
   })
-  registerLibraryIpc({ db, scanner, listMountedVolumes })
+  // The scanner above always asks afresh: it decides whether tracks are marked missing.
+  registerLibraryIpc({ db, scanner, listMountedVolumes: createMountedVolumesCache(1000) })
 
   // Picks up what changed on the drive since the last run. Without a chosen folder
   // there is nothing to scan, and a drive that is not connected ends the scan at once.

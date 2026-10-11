@@ -83,6 +83,20 @@ describe('listLibraryPage', () => {
     })
   })
 
+  it('shows a file name as one line without characters that reverse the reading direction', () => {
+    // Arrange
+    insertTracks(testDatabase.db, [newTrack('/Volumes/DJ SSD/Mu\nsic/track\u202egpj.mp3')])
+
+    // Act
+    const page = listLibraryPage(testDatabase.db, { limit: 10, offset: 0 }, MOUNTED)
+
+    // Assert
+    expect(page).toMatchObject({
+      ok: true,
+      value: { tracks: [{ fileName: 'track gpj.mp3', folder: '/Volumes/DJ SSD/Mu sic' }] }
+    })
+  })
+
   it('marks a track offline whose drive is not connected', () => {
     // Arrange
     insertTracks(testDatabase.db, [newTrack('/Volumes/Gone/b.wav', { format: 'wav' })])
@@ -192,6 +206,10 @@ describe('resolveRunTargets', () => {
     ['a path in place of an id', { scope: 'selection', trackIds: ['/etc/passwd'] }],
     ['an unknown scope', { scope: 'everything' }],
     ['ids with the library scope', { scope: 'library', trackIds: [1] }],
+    [
+      'more ids than a library can hold',
+      { scope: 'selection', trackIds: new Array(20_001).fill(1) }
+    ],
     ['no request', null]
   ])('refuses %s', (_name, request) => {
     // Act

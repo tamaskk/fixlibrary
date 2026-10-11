@@ -161,9 +161,9 @@ describe('applyView: sorting', () => {
     expect(titles(sorted)).toEqual(['b', 'c', 'a'])
   })
 
-  it('sorts keys around the Camelot wheel, not as text', () => {
+  it('sorts keys around the Camelot wheel, not as text, and what is not a key last', () => {
     // Arrange
-    const tracks = ['10A', '2B', '1A', '12B', '2A'].map((camelotKey) =>
+    const tracks = ['10A', '13A', '2B', '1A', '0B', '12B', '2A'].map((camelotKey) =>
       track({ title: camelotKey, camelotKey })
     )
 
@@ -171,7 +171,7 @@ describe('applyView: sorting', () => {
     const sorted = applyView(tracks, view({ sort: { key: 'key', descending: false } }), STYLES)
 
     // Assert
-    expect(titles(sorted)).toEqual(['1A', '2A', '2B', '10A', '12B'])
+    expect(titles(sorted)).toEqual(['1A', '2A', '2B', '10A', '12B', '13A', '0B'])
   })
 
   it('sorts styles in the order of the Settings list', () => {

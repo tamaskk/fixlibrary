@@ -75,8 +75,8 @@ export const libraryPageRequestSchema = z.strictObject({
 
 export type LibraryPageRequest = z.input<typeof libraryPageRequestSchema>
 
-// More ids than a library can hold is a broken or hostile page, not a selection.
-const MAX_RUN_TRACKS = 20_000
+/** More ids than a library can hold is a broken or hostile page, not a selection. */
+export const MAX_RUN_TRACKS = 20_000
 
 export const runRequestSchema = z.discriminatedUnion('scope', [
   z.strictObject({
@@ -93,6 +93,10 @@ export type RunRequest = z.input<typeof runRequestSchema>
 export interface RunTargets {
   /** For a selection in the order it was given, without repeats; else in library order. */
   trackIds: number[]
-  /** Asked for but left out: offline, without a file, or not a track of the library. */
+  /**
+   * Asked for but left out: offline, without a file, or not a track of the library.
+   * A track whose tags could not be read is not left out: its audio may still be fine,
+   * and a stage that cannot read it records that for the track.
+   */
   skipped: number
 }

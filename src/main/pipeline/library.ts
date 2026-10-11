@@ -5,17 +5,25 @@ import { countTracks, listTrackAvailability, listTracks, type Track } from '../d
 import type { Result } from '@shared/errors'
 import {
   libraryPageRequestSchema,
+  MAX_RUN_TRACKS,
   runRequestSchema,
   type LibraryPage,
   type LibraryTrack,
   type RunTargets
 } from '@shared/library'
+import { toOneLine } from '@shared/text'
+
+// As long as a file name and a path can be on macOS.
+const MAX_NAME_LENGTH = 255
+const MAX_FOLDER_LENGTH = 1024
 
 function toLibraryTrack(track: Track): LibraryTrack {
   return {
     id: track.id,
-    fileName: basename(track.path),
-    folder: dirname(track.path),
+    // For display only: a file name may hold a line break or characters that turn
+    // the reading direction around, and would then read as something else.
+    fileName: toOneLine(basename(track.path), MAX_NAME_LENGTH),
+    folder: toOneLine(dirname(track.path), MAX_FOLDER_LENGTH),
     format: track.format,
     durationMs: track.durationMs,
     artist: track.artist,
@@ -58,6 +66,9 @@ export function resolveRunTargets(
   request: unknown,
   mountedVolumes: ReadonlySet<string>
 ): Result<RunTargets> {
+  // Before the schema looks at every element: a list far too long is refused at once.
+  const ids = (request as { trackIds?: unknown } | null)?.trackIds
+  if (Array.isArray(ids) && ids.length > MAX_RUN_TRACKS) return { ok: false, code: 'INVALID_INPUT' }
   const parsed = runRequestSchema.safeParse(request)
   if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
 

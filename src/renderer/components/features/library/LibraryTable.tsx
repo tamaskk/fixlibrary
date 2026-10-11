@@ -21,22 +21,30 @@ import type { Style } from '@shared/settings'
 
 // DESIGN_SYSTEM §04: table rows are 36px high.
 const ROW_HEIGHT = 36
-// Fixed columns are multiples of 32px; artist and title share what is left. At the
-// minimum window (1024px) every column fits; below its minimum width the table
-// scrolls sideways inside itself.
-const COLUMNS = '32px 32px minmax(96px, 2fr) minmax(128px, 3fr) 64px 64px 64px 96px 96px'
-const MIN_TABLE_WIDTH = 752
+// Fixed columns are multiples of 32px, each wide enough for its header with the sort
+// arrow; artist and title share what is left. At the minimum window (1024px) every
+// column fits; below its minimum width the table scrolls sideways inside itself.
+const COLUMNS = '32px 32px minmax(96px, 2fr) minmax(96px, 3fr) 64px 64px 96px 96px 96px'
+// The minimums of the columns, the eight gaps between them and the padding of a row.
+const MIN_TABLE_WIDTH = 32 + 32 + 96 + 96 + 64 + 64 + 96 + 96 + 96 + 8 * 8 + 18
 
 // The state comes first, so it is never the column that is scrolled out of sight.
-const HEADERS: readonly { label: string; sortKey?: SortKey; numeric?: boolean; hidden?: true }[] = [
+const HEADERS: readonly {
+  label: string
+  sortKey?: SortKey
+  numeric?: boolean
+  hidden?: true
+  /** Sets a left-aligned column off from the right-aligned numbers before it. */
+  indent?: true
+}[] = [
   { label: 'Állapot', hidden: true },
   { label: 'Cover', hidden: true },
   { label: 'Artist', sortKey: 'artist' },
   { label: 'Title', sortKey: 'title' },
   { label: 'BPM', sortKey: 'bpm', numeric: true },
-  { label: 'Key', sortKey: 'key' },
+  { label: 'Key', sortKey: 'key', indent: true },
   { label: 'Energy', sortKey: 'energy', numeric: true },
-  { label: 'Stílus', sortKey: 'style' },
+  { label: 'Stílus', sortKey: 'style', indent: true },
   { label: 'Formátum', sortKey: 'format' }
 ]
 
@@ -140,8 +148,21 @@ export function LibraryTable({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void {
-    // Keys pressed in a header button belong to that button.
+    // These two act on the table wherever the focus is in it, also on a header button.
+    if (event.metaKey && event.key.toLowerCase() === 'a') {
+      event.preventDefault()
+      onSelectAll()
+      return
+    }
+    if (event.key === 'Escape') {
+      onClearSelection()
+      return
+    }
+    // The other keys pressed in a header button belong to that button, and a key
+    // with Cmd, Ctrl or Alt is a shortcut of the system.
     if (event.target !== event.currentTarget) return
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+
     const pageSize = Math.max(
       1,
       Math.floor((scrollRef.current?.clientHeight ?? 0) / ROW_HEIGHT) - 1
@@ -158,13 +179,12 @@ export function LibraryTable({
     if (target !== undefined) {
       event.preventDefault()
       moveCursor(target, event.shiftKey)
-    } else if (event.key === 'a' && event.metaKey) {
-      event.preventDefault()
-      onSelectAll()
-    } else if (event.key === 'Escape') {
-      onClearSelection()
     }
   }
+
+  const virtualRows = virtualizer.getVirtualItems()
+  // Only a row that is in the page can be named: the others are not rendered.
+  const cursorIsRendered = virtualRows.some((item) => item.index === cursorIndex)
 
   return (
     <div
@@ -175,9 +195,9 @@ export function LibraryTable({
       aria-multiselectable="true"
       aria-rowcount={rows.length + 1}
       aria-colcount={HEADERS.length}
-      aria-activedescendant={cursorIndex === -1 ? undefined : `${gridId}-${cursorId}`}
+      aria-activedescendant={cursorIsRendered ? `${gridId}-${cursorId}` : undefined}
       onKeyDown={handleKeyDown}
-      className="min-h-48 flex-1 overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      className="group min-h-48 flex-1 overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
     >
       <div style={{ minWidth: MIN_TABLE_WIDTH }}>
         <div role="rowgroup" className="sticky top-0 z-10">
@@ -187,7 +207,7 @@ export function LibraryTable({
             className="grid h-9 items-center gap-2 border-b border-border bg-surface px-2"
             style={{ gridTemplateColumns: COLUMNS }}
           >
-            {HEADERS.map(({ label, sortKey, numeric, hidden }) => {
+            {HEADERS.map(({ label, sortKey, numeric, hidden, indent }) => {
               const sorted = sortKey !== undefined && sort?.key === sortKey
               const SortIcon = sorted && sort.descending ? ArrowDown : ArrowUp
               return (
@@ -196,7 +216,8 @@ export function LibraryTable({
                   role="columnheader"
                   aria-sort={sorted ? (sort.descending ? 'descending' : 'ascending') : undefined}
                   className={cn(
-                    'flex min-w-0 text-label text-text-muted uppercase',
+                    'flex text-label text-text-muted uppercase',
+                    indent && 'pl-2',
                     numeric && 'justify-end'
                   )}
                 >
@@ -207,11 +228,11 @@ export function LibraryTable({
                       type="button"
                       onClick={() => onSort(sortKey)}
                       className={cn(
-                        'flex h-7 min-w-0 items-center gap-1 rounded-sm uppercase transition-colors duration-150 ease-out hover:text-text focus-visible:outline-2 focus-visible:outline-primary',
+                        'flex h-7 items-center gap-1 rounded-sm whitespace-nowrap uppercase transition-colors duration-150 ease-out hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
                         sorted && 'text-text'
                       )}
                     >
-                      <span className="truncate">{label}</span>
+                      <span>{label}</span>
                       {sorted && (
                         <SortIcon
                           className="size-4 shrink-0"
@@ -228,7 +249,7 @@ export function LibraryTable({
         </div>
 
         <div role="rowgroup" className="relative" style={{ height: virtualizer.getTotalSize() }}>
-          {virtualizer.getVirtualItems().map((item) => {
+          {virtualRows.map((item) => {
             const row = rows[item.index]
             if (!row) return null
             const selected = selection.ids.has(row.id)
@@ -249,7 +270,9 @@ export function LibraryTable({
                 className={cn(
                   'absolute inset-x-0 top-0 grid cursor-default items-center gap-2 border-b border-l-2 border-border border-l-transparent px-2 text-body select-none',
                   selected ? 'border-l-primary bg-surface-hover' : 'hover:bg-surface',
-                  row.id === cursorId && 'outline-1 -outline-offset-1 outline-border',
+                  // Shown while the table has the focus: it marks where the arrow keys move from.
+                  row.id === cursorId &&
+                    '-outline-offset-1 outline-border group-focus-visible:outline-1',
                   unavailable && 'text-text-muted'
                 )}
                 style={{
@@ -273,13 +296,14 @@ export function LibraryTable({
                   text={row.bpm === null ? null : formatDecimal(row.bpm)}
                   className="text-right font-mono text-data tabular-nums"
                 />
-                <TextCell text={row.camelotKey} className="font-mono text-data tabular-nums" />
+                <TextCell text={row.camelotKey} className="pl-2 font-mono text-data tabular-nums" />
                 <TextCell
                   text={row.energy === null ? null : String(row.energy)}
                   className="text-right font-mono text-data tabular-nums"
                 />
                 <TextCell
                   text={row.styleId === null ? null : (styleNames.get(row.styleId) ?? null)}
+                  className="pl-2"
                 />
                 <TextCell text={row.format.toUpperCase()} className="text-small text-text-muted" />
               </div>

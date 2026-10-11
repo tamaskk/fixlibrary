@@ -37,15 +37,23 @@ function foldForSearch(text: string): string {
     .toLocaleLowerCase('hu')
 }
 
+// The text a track is searched in, folded once per track and not on every keystroke.
+const searchText = new WeakMap<LibraryTrack, string>()
+
 function matchesSearch(track: LibraryTrack, words: readonly string[]): boolean {
   if (words.length === 0) return true
-  const haystack = foldForSearch(`${track.artist ?? ''} ${track.title ?? ''} ${track.fileName}`)
-  return words.every((word) => haystack.includes(word))
+  let haystack = searchText.get(track)
+  if (haystack === undefined) {
+    haystack = foldForSearch(`${track.artist ?? ''} ${track.title ?? ''} ${track.fileName}`)
+    searchText.set(track, haystack)
+  }
+  const text = haystack
+  return words.every((word) => text.includes(word))
 }
 
 /** Camelot keys in wheel order: 1A, 1B, 2A, … 12B. Anything else sorts after them. */
 function camelotRank(key: string | null): number | null {
-  const match = key === null ? null : /^(\d{1,2})([AB])$/.exec(key)
+  const match = key === null ? null : /^([1-9]|1[0-2])([AB])$/.exec(key)
   if (!match) return null
   return Number(match[1]) * 2 + (match[2] === 'B' ? 1 : 0)
 }

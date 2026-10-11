@@ -5,16 +5,20 @@ import { countTracks } from '../db/tracks'
 import { listLibraryPage, resolveRunTargets } from '../pipeline/library'
 import type { LibraryScanner } from '../pipeline/scanner'
 import { readSettings } from '../pipeline/settings'
+import { createLogLimiter } from '../services/log-limiter'
+import { logger } from '../services/logger'
 import { IPC_CHANNELS, IPC_EVENTS } from '@shared/ipc'
 import type { LibraryStatus, ScanProgress } from '@shared/library'
 import { handleIpc } from './handle'
 import { createProgressThrottle } from './progress'
-import { logger } from '../services/logger'
 
 const noArguments = z.tuple([])
 // The content of a request is checked by the pipeline, which answers a bad one with
 // INVALID_INPUT; here only the number of arguments is fixed.
 const oneUnknown = z.tuple([z.unknown()])
+
+// A page that asks for runs in a loop must not be able to fill the log with them.
+const logRun = createLogLimiter((line) => logger.info(line), { limit: 10, windowMs: 10_000 })
 
 export interface LibraryIpcDependencies {
   db: AppDatabase
@@ -58,7 +62,7 @@ export function registerLibraryIpc({
     // tracks it would process.
     if (targets.ok) {
       const { trackIds, skipped } = targets.value
-      logger.info(`Run requested for ${trackIds.length} tracks (${skipped} left out)`)
+      logRun(`Run requested for ${trackIds.length} tracks (${skipped} left out)`)
     }
     return targets
   })

@@ -36,7 +36,7 @@ export function LibraryToolbar({
 }: LibraryToolbarProps): React.JSX.Element {
   return (
     <div className="flex items-end gap-4">
-      <div className="w-64">
+      <div className="max-w-64 min-w-0 flex-1">
         <Input
           label="Keresés"
           type="search"
@@ -45,7 +45,7 @@ export function LibraryToolbar({
           onChange={(event) => onChange({ search: event.target.value })}
         />
       </div>
-      <div className="w-48">
+      <div className="w-48 shrink-0">
         <Select
           label="Stílus"
           value={String(view.style)}
@@ -60,7 +60,7 @@ export function LibraryToolbar({
           ))}
         </Select>
       </div>
-      <div className="w-48">
+      <div className="w-48 shrink-0">
         <Select
           label="Állapot"
           value={view.state}
@@ -74,7 +74,7 @@ export function LibraryToolbar({
           ))}
         </Select>
       </div>
-      <p className="ml-auto flex h-8 items-center gap-1 text-small text-text-muted">
+      <p className="ml-auto flex h-8 shrink-0 items-center gap-1 text-small whitespace-nowrap text-text-muted">
         <span className="font-mono text-data text-text tabular-nums">
           {shownCount === totalCount
             ? formatCount(totalCount)

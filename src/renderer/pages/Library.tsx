@@ -46,8 +46,11 @@ export function Library(): React.JSX.Element {
     [tracks, view, styles]
   )
 
+  const rowIds = React.useMemo(() => rows.map(({ id }) => id), [rows])
+
   const ready = data.status === 'ready' ? data : null
-  const hasTracks = ready !== null && ready.trackCount > 0
+  // The loaded rows count too: the count in `data` can be older than they are.
+  const hasTracks = ready !== null && (ready.trackCount > 0 || (tracks?.length ?? 0) > 0)
 
   return (
     <main className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-6">
@@ -125,8 +128,8 @@ export function Library(): React.JSX.Element {
                   selection={selection}
                   sort={view.sort}
                   onSort={toggleSort}
-                  onSelect={select}
-                  onSelectAll={selectAllShown}
+                  onSelect={(id, modifiers) => select(id, modifiers, rowIds)}
+                  onSelectAll={() => selectAllShown(rowIds)}
                   onClearSelection={clearSelection}
                 />
               )}

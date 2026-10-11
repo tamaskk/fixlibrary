@@ -61,10 +61,12 @@ interface LibraryState {
   /** Starts a scan, or follows the one the app is already running. */
   scan: () => Promise<void>
   loadTracks: () => Promise<void>
+  /** A search or filter that hides selected rows also takes them out of the selection. */
   setView: (changes: Partial<LibraryView>) => void
   toggleSort: (key: SortKey) => void
-  select: (id: number, modifiers: SelectModifiers) => void
-  selectAllShown: () => void
+  /** `shownIds` are the rows as the table shows them, which is what a range follows. */
+  select: (id: number, modifiers: SelectModifiers, shownIds: readonly number[]) => void
+  selectAllShown: (shownIds: readonly number[]) => void
   clearSelection: () => void
   /** Asks main to run on the selected tracks, or on the whole library. */
   run: (scope: 'selection' | 'library') => Promise<void>
@@ -77,12 +79,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
 
   function applyStatus({ rootChosen, trackCount }: LibraryStatus): void {
     set({ data: { status: 'ready', rootChosen, trackCount } })
-  }
-
-  /** The ids of the rows as the table shows them now. */
-  function shownIds(): number[] {
-    const { list, view, styles } = get()
-    return list.status === 'ready' ? applyView(list.tracks, view, styles).map(({ id }) => id) : []
   }
 
   /** Shows a scan while it runs and its result when it ends. `null` means there was none. */
@@ -137,8 +133,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         applyStatus(status)
         // A scan the app started at launch: follow it, so its result shows up here.
         if (status.scanning) void track(() => window.api.library.followScan())
-        // The scan that is running loads the rows itself when it ends.
-        else void get().loadTracks()
+        // Also while a scan runs: the rows that are there can be shown already, and
+        // the scan loads them again when it ends.
+        void get().loadTracks()
       } catch {
         set({ data: { status: 'error' } })
       }
@@ -152,19 +149,22 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       if (get().list.status !== 'ready') set({ list: { status: 'loading' } })
       try {
         const styles = await window.api.styles.list()
-        const tracks: LibraryTrack[] = []
-        for (let total = Infinity; tracks.length < total;) {
-          const page = await window.api.library.list({
-            limit: LIBRARY_PAGE_SIZE,
-            offset: tracks.length
-          })
+        // By id: a scan that adds or removes rows between two pages shifts the rest,
+        // and the same track can then arrive twice.
+        const byId = new Map<number, LibraryTrack>()
+        let offset = 0
+        let total = Infinity
+        while (offset < total) {
+          const page = await window.api.library.list({ limit: LIBRARY_PAGE_SIZE, offset })
           if (!page.ok) throw new Error(page.code)
-          tracks.push(...page.value.tracks)
+          for (const row of page.value.tracks) byId.set(row.id, row)
+          offset += page.value.tracks.length
           total = page.value.total
           // A library that shrank while it was read: stop instead of asking forever.
           if (page.value.tracks.length === 0) break
         }
         if (request !== latestListRequest) return
+        const tracks = [...byId.values()]
         set({
           list: { status: 'ready', tracks },
           styles,
@@ -175,12 +175,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       }
     },
 
-    setView: (changes) => set({ view: { ...get().view, ...changes } }),
+    setView(changes) {
+      const { list, styles, selection } = get()
+      const view = { ...get().view, ...changes }
+      // What a run processes is what the user can see selected: a row that the new
+      // search or filter hides leaves the selection.
+      const shown =
+        list.status === 'ready' ? applyView(list.tracks, view, styles).map(({ id }) => id) : []
+      set({ view, selection: keepExisting(selection, new Set(shown)), lastRun: null })
+    },
     toggleSort: (key) => set({ view: { ...get().view, sort: nextSort(get().view.sort, key) } }),
 
-    select: (id, modifiers) =>
-      set({ selection: selectRow(get().selection, id, modifiers, shownIds()), lastRun: null }),
-    selectAllShown: () => set({ selection: selectAll(get().selection, shownIds()), lastRun: null }),
+    select: (id, modifiers, shownIds) =>
+      set({ selection: selectRow(get().selection, id, modifiers, shownIds), lastRun: null }),
+    selectAllShown: (shownIds) =>
+      set({ selection: selectAll(get().selection, shownIds), lastRun: null }),
     clearSelection: () => set({ selection: EMPTY_SELECTION, lastRun: null }),
 
     async run(scope) {
