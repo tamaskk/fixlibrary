@@ -10,6 +10,7 @@ docs/source
 docs/prompts
 HARNESS_BOOTSTRAP.md
 python
+resources/bin
 test-results
 playwright-report
 .claude/hooks

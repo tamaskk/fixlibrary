@@ -28,6 +28,7 @@ __pycache__
 
 # Downloaded or built binaries (scripts/fetch-binaries.sh)
 resources/bin/*
+resources/.bin.*
 build/python-runtime
 
 # Real music files never enter the repo
