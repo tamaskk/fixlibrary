@@ -43,11 +43,6 @@ export function markJobRunning(db: AppDatabase, id: number): void {
     .run()
 }
 
-/** Puts a started job back in line, for a run that could not go on with it. */
-export function requeueJob(db: AppDatabase, id: number): void {
-  db.update(jobs).set({ status: 'queued', startedAt: null }).where(eq(jobs.id, id)).run()
-}
-
 export function finishJob(
   db: AppDatabase,
   id: number,

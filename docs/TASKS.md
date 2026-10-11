@@ -12,7 +12,7 @@ Package 1: foundations.
 
 Package 2: pipeline frame.
 
-- [ ] T-009 (base, L) Pipeline orchestrator and job queue
+- [ ] T-009 (base, L) Pipeline orchestrator and job queue. Done: the `jobs` table, the stage interface, the queue and the orchestrator (`pipeline/orchestrator.ts`), tested with stand-in stages. Open, in two more pull requests: `job.cancel` in the sidecar, the sleep blocker, the IPC and progress events, taking a run up at startup, `library:run`; then the run panel, the function chooser and the end-to-end test.
 - [ ] T-010 (base, M) File operations, backup and undo
 - [ ] T-011 (base, L) Batch preview frame
 - [ ] T-012 (base, M) Claude CLI service

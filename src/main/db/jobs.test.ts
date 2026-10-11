@@ -17,12 +17,12 @@ import {
   listJobs,
   markJobRunning,
   recoverInterruptedJobs,
-  requeueJob,
   skipJobs
 } from './jobs'
-import { batchItems, jobs } from './schema'
+import { batchItems, JOB_PHASES, jobs } from './schema'
 import { deleteTrack, insertTracks } from './tracks'
 import type { TrackError } from '@shared/errors'
+import { JOB_PHASES as SHARED_JOB_PHASES } from '@shared/pipeline'
 
 let testDatabase: TestDatabase
 let trackIds: number[]
@@ -193,6 +193,11 @@ describe('batch items', () => {
 })
 
 describe('jobs', () => {
+  it('knows the same phases as the rest of the app', () => {
+    // Assert
+    expect(JOB_PHASES).toEqual(SHARED_JOB_PHASES)
+  })
+
   function addJobs(batchId: number): void {
     insertJobs(
       testDatabase.db,
@@ -245,7 +250,6 @@ describe('jobs', () => {
 
     // Act
     markJobRunning(testDatabase.db, first.id)
-    requeueJob(testDatabase.db, first.id)
     markJobRunning(testDatabase.db, first.id)
     finishJob(testDatabase.db, first.id, { status: 'done' })
     markJobRunning(testDatabase.db, second.id)
