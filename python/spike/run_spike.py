@@ -62,6 +62,9 @@ def load_pinned_model() -> BagOfModels:
         for chunk in iter(lambda: model_file.read(1 << 20), b""):
             digest.update(chunk)
     if digest.hexdigest() != MODEL_SHA256:
+        # Leave nothing in the shared cache that another loader would trust.
+        model_path.resolve().unlink(missing_ok=True)
+        model_path.unlink(missing_ok=True)
         raise RuntimeError(f"SHA-256 mismatch for {MODEL_FILE}: {digest.hexdigest()}")
     model = BagOfModels([load_safetensors_model(model_path)])
     model.eval()

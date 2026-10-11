@@ -55,6 +55,12 @@ printf '%s\n' "${SHA256}" >"${WORK_DIR}/python/.archive-sha256"
 if [[ -e "${RUNTIME_DIR}" ]]; then
   mv "${RUNTIME_DIR}" "${WORK_DIR}/previous"
 fi
-mv "${WORK_DIR}/python" "${RUNTIME_DIR}"
+if ! mv "${WORK_DIR}/python" "${RUNTIME_DIR}"; then
+  # Put the old runtime back before the exit trap removes the work directory.
+  if [[ -e "${WORK_DIR}/previous" ]]; then
+    mv "${WORK_DIR}/previous" "${RUNTIME_DIR}"
+  fi
+  exit 1
+fi
 
 "${RUNTIME_DIR}/bin/python3" --version

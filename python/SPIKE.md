@@ -77,6 +77,7 @@ About 0.94 GB unpacked in total, so the Python side fits under the 2 GiB `.dmg` 
 
 - The lock is restricted to arm64 macOS (`tool.uv.environments` in `pyproject.toml`). A universal lock resolved torch 2.2.2, the last release with Intel macOS wheels, next to torchaudio 2.11.0.
 - The lock has a cooldown (`exclude-newer`): releases younger than about two weeks are not resolved. Move the date when upgrading on purpose.
+- The CPython runtime has no such cooldown: release `20261009` was two days old when it was pinned. Its hash matches the release's `SHA256SUMS`, which proves the download, not the release. T-041 should pin a release that is at least as old as the lock's cooldown.
 - The package uses a flat layout (`python/fixlib_py/`, `module-root = ""`), as docs/ARCHITECTURE.md §03 describes, not the `src/` layout that `uv init --package` creates.
 - Model loading (T-028, T-041). Demucs 4.1.0 takes its weights from the Hugging Face Hub (`adefossez/HTDemucs`), which is not in the project's list of online services. `demucs.pretrained.get_model()` must not be used in shipped code:
   - it follows the moving `main` branch without a checksum;
