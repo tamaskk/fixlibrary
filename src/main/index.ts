@@ -1,7 +1,29 @@
 import { app, shell, BrowserWindow } from 'electron'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
 import { registerAppIpc } from './ipc/app'
+import { createPythonBridge, type PythonBridge } from './services/python-bridge'
+
+let pythonBridge: PythonBridge | null = null
+let stoppingSidecar = false
+
+function startPythonSidecar(): void {
+  // Development only: the packaged runtime and its path come with T-041.
+  const pythonDir = join(app.getAppPath(), 'python')
+  const pythonPath = join(pythonDir, '.venv/bin/python')
+  if (app.isPackaged || !existsSync(pythonPath)) {
+    console.error('Python sidecar not started: no development environment in python/.venv')
+    return
+  }
+
+  pythonBridge = createPythonBridge({ pythonPath, cwd: pythonDir, logDir: app.getPath('logs') })
+  pythonBridge.start()
+  pythonBridge
+    .call('ping', {})
+    .then(({ version }) => console.info(`Python sidecar ready, fixlib_py ${version}`))
+    .catch((error: unknown) => console.error('Python sidecar did not answer ping', error))
+}
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -43,10 +65,24 @@ app.whenReady().then(() => {
   })
 
   registerAppIpc()
+  startPythonSidecar()
   createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('before-quit', (event) => {
+  if (!pythonBridge) return
+  // Hold the quit until the sidecar is gone, so no Python process outlives the app.
+  // A second quit request during the wait is held back too.
+  event.preventDefault()
+  if (stoppingSidecar) return
+  stoppingSidecar = true
+  void pythonBridge.stop().finally(() => {
+    pythonBridge = null
+    app.quit()
   })
 })
 

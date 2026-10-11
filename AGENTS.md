@@ -77,8 +77,9 @@ npm run test:e2e       build, then end-to-end tests (Playwright + Electron)
 npm run format         format the codebase
 npm run format:check   check formatting without writing
 
-uv run pytest          Python tests, from python/ (planned, task 2)
-uv run ruff check .    Python lint, from python/ (planned, task 2)
+uv run pytest          Python tests, from python/
+uv run ruff check .    Python lint, from python/
+uv run ruff format .   Python format, from python/
 ```
 
 If a command fails, report the exact output. Do not work around it silently.
