@@ -123,8 +123,9 @@ Python sidecar:
 
 - One long-running process, started by `services/python-bridge.ts` when the app is ready and stopped on quit (`shutdown`, then SIGKILL after 3 s). It speaks JSON-RPC 2.0, one JSON document per line: requests on stdin, responses and `progress` notifications on stdout.
 - The sidecar gets a fixed set of environment variables, not the app's environment, so secrets cannot reach it.
-- Every line from the sidecar is validated against `src/shared/rpc.ts`; anything else is logged and dropped.
-- When the sidecar dies, calls already sent are rejected with `PYTHON_CRASHED` and it restarts after 1 s, 2 s, then 4 s, at most 5 times in a row. Calls made during a restart wait for the new process.
+- Every line from the sidecar is validated against `src/shared/rpc.ts`; anything else is logged and dropped. A line longer than 1 MiB counts as a crash.
+- The sidecar keeps the real stdin and stdout for the protocol only: its own prints and its child processes get stderr and an empty stdin.
+- When the sidecar dies, calls already sent are rejected with `PYTHON_CRASHED` and it restarts after 1 s, 2 s, then 4 s, at most 5 times in a row; 10 s of uptime ends the row. Calls made during a restart wait for the new process.
 - In development the interpreter is `python/.venv/bin/python`. The packaged app does not start the sidecar until task 41 defines its runtime path.
 
 Errors:

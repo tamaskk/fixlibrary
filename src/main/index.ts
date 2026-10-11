@@ -6,6 +6,7 @@ import { registerAppIpc } from './ipc/app'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 
 let pythonBridge: PythonBridge | null = null
+let stoppingSidecar = false
 
 function startPythonSidecar(): void {
   // Development only: the packaged runtime and its path come with T-041.
@@ -75,10 +76,14 @@ app.whenReady().then(() => {
 app.on('before-quit', (event) => {
   if (!pythonBridge) return
   // Hold the quit until the sidecar is gone, so no Python process outlives the app.
+  // A second quit request during the wait is held back too.
   event.preventDefault()
-  const bridge = pythonBridge
-  pythonBridge = null
-  void bridge.stop().finally(() => app.quit())
+  if (stoppingSidecar) return
+  stoppingSidecar = true
+  void pythonBridge.stop().finally(() => {
+    pythonBridge = null
+    app.quit()
+  })
 })
 
 app.on('window-all-closed', () => {
