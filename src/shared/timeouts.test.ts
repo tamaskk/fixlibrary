@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_RPC_TIMEOUT_MS,
   ENGINE_CHECK_TIMEOUT_MS,
+  JOB_CANCEL_TIMEOUT_MS,
   STAGE_TIMEOUTS_MS,
   TAG_BATCH_TIMEOUT_MS
 } from './timeouts'
@@ -32,5 +33,10 @@ describe('STAGE_TIMEOUTS_MS', () => {
   it('waits fifteen seconds for the sidecar to say it is alive', () => {
     // Assert
     expect(ENGINE_CHECK_TIMEOUT_MS).toBe(15_000)
+  })
+
+  it('gives a job in the sidecar five seconds to stop', () => {
+    // Assert
+    expect(JOB_CANCEL_TIMEOUT_MS).toBe(5000)
   })
 })

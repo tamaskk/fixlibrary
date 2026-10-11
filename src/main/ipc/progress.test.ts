@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createProgressThrottle } from './progress'
+import { createProgressThrottle, createRateGate } from './progress'
 
 describe('createProgressThrottle', () => {
   it('passes on at most four values per second', () => {
@@ -35,5 +35,23 @@ describe('createProgressThrottle', () => {
 
     // Assert
     expect(sent).toEqual(['first'])
+  })
+})
+
+describe('createRateGate', () => {
+  it('lets a call through only when the last one it let through is long enough ago', () => {
+    // Arrange
+    let time = 0
+    const mayPass = createRateGate(2000, () => time)
+
+    // Act
+    const passed: boolean[] = []
+    for (const at of [0, 500, 1999, 2000, 2100, 4000]) {
+      time = at
+      passed.push(mayPass())
+    }
+
+    // Assert
+    expect(passed).toEqual([true, false, false, true, false, true])
   })
 })

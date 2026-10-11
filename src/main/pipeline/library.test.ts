@@ -146,13 +146,17 @@ describe('resolveRunTargets', () => {
     // Act
     const targets = resolveRunTargets(
       testDatabase.db,
-      { scope: 'selection', trackIds: selected },
-      MOUNTED
+      { scope: 'selection', trackIds: selected, stages: ['bpmKey'] },
+      MOUNTED,
+      ['bpmKey']
     )
 
     // Assert
     expect(selected).toHaveLength(20)
-    expect(targets).toEqual({ ok: true, value: { trackIds: selected, skipped: 0 } })
+    expect(targets).toEqual({
+      ok: true,
+      value: { trackIds: selected, skipped: 0, stages: ['bpmKey'] }
+    })
   })
 
   it('runs on every track of the library, in library order', () => {
@@ -160,10 +164,15 @@ describe('resolveRunTargets', () => {
     const ids = addTracks(50)
 
     // Act
-    const targets = resolveRunTargets(testDatabase.db, { scope: 'library' }, MOUNTED)
+    const targets = resolveRunTargets(
+      testDatabase.db,
+      { scope: 'library', stages: ['bpmKey'] },
+      MOUNTED,
+      ['bpmKey']
+    )
 
     // Assert
-    expect(targets).toEqual({ ok: true, value: { trackIds: ids, skipped: 0 } })
+    expect(targets).toMatchObject({ ok: true, value: { trackIds: ids, skipped: 0 } })
   })
 
   it('leaves out tracks that are offline, without a file, or not in the library', () => {
@@ -175,14 +184,20 @@ describe('resolveRunTargets', () => {
     // Act
     const selection = resolveRunTargets(
       testDatabase.db,
-      { scope: 'selection', trackIds: [offline, online, missing, 999_999] },
-      MOUNTED
+      { scope: 'selection', trackIds: [offline, online, missing, 999_999], stages: ['bpmKey'] },
+      MOUNTED,
+      ['bpmKey']
     )
-    const library = resolveRunTargets(testDatabase.db, { scope: 'library' }, MOUNTED)
+    const library = resolveRunTargets(
+      testDatabase.db,
+      { scope: 'library', stages: ['bpmKey'] },
+      MOUNTED,
+      ['bpmKey']
+    )
 
     // Assert
-    expect(selection).toEqual({ ok: true, value: { trackIds: [online], skipped: 3 } })
-    expect(library).toEqual({ ok: true, value: { trackIds: [online], skipped: 2 } })
+    expect(selection).toMatchObject({ ok: true, value: { trackIds: [online], skipped: 3 } })
+    expect(library).toMatchObject({ ok: true, value: { trackIds: [online], skipped: 2 } })
   })
 
   it('counts a track once that was named twice', () => {
@@ -192,28 +207,40 @@ describe('resolveRunTargets', () => {
     // Act
     const targets = resolveRunTargets(
       testDatabase.db,
-      { scope: 'selection', trackIds: [id, id, id] },
-      MOUNTED
+      { scope: 'selection', trackIds: [id, id, id], stages: ['bpmKey'] },
+      MOUNTED,
+      ['bpmKey']
     )
 
     // Assert
-    expect(targets).toEqual({ ok: true, value: { trackIds: [id], skipped: 0 } })
+    expect(targets).toMatchObject({ ok: true, value: { trackIds: [id], skipped: 0 } })
   })
 
   it.each([
-    ['an empty selection', { scope: 'selection', trackIds: [] }],
-    ['an id that is not a number', { scope: 'selection', trackIds: ['1'] }],
-    ['a path in place of an id', { scope: 'selection', trackIds: ['/etc/passwd'] }],
-    ['an unknown scope', { scope: 'everything' }],
-    ['ids with the library scope', { scope: 'library', trackIds: [1] }],
+    ['an empty selection', { scope: 'selection', trackIds: [], stages: ['bpmKey'] }],
+    ['an id that is not a number', { scope: 'selection', trackIds: ['1'], stages: ['bpmKey'] }],
+    [
+      'a path in place of an id',
+      { scope: 'selection', trackIds: ['/etc/passwd'], stages: ['bpmKey'] }
+    ],
+    ['an unknown scope', { scope: 'everything', stages: ['bpmKey'] }],
+    ['ids with the library scope', { scope: 'library', trackIds: [1], stages: ['bpmKey'] }],
+    ['no function', { scope: 'library', stages: [] }],
+    ['a function that cannot be asked for', { scope: 'library', stages: ['writeTags'] }],
+    ['one such function among others', { scope: 'library', stages: ['bpmKey', 'writeTags'] }],
+    [
+      'more functions than there can be',
+      { scope: 'library', stages: new Array(51).fill('bpmKey') }
+    ],
+    ['a run without functions', { scope: 'library' }],
     [
       'more ids than a library can hold',
-      { scope: 'selection', trackIds: new Array(20_001).fill(1) }
+      { scope: 'selection', trackIds: new Array(20_001).fill(1), stages: ['bpmKey'] }
     ],
     ['no request', null]
   ])('refuses %s', (_name, request) => {
     // Act
-    const targets = resolveRunTargets(testDatabase.db, request, MOUNTED)
+    const targets = resolveRunTargets(testDatabase.db, request, MOUNTED, ['bpmKey'])
 
     // Assert
     expect(targets).toEqual({ ok: false, code: 'INVALID_INPUT' })

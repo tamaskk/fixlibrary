@@ -63,3 +63,8 @@ export function withDependencies(
   }
   return names.every(add) ? ordered : null
 }
+
+/** The names of the stages the user can ask for, in the order they are defined. */
+export function selectableStages(stages: readonly Stage[]): string[] {
+  return stages.filter((stage) => stage.selectable).map((stage) => stage.name)
+}

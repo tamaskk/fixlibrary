@@ -155,6 +155,107 @@ describe('python bridge with a stand-in process', () => {
     expect(error).toMatchObject({ code: 'TIMEOUT' })
   })
 
+  it('rejects a job at once when it is stopped, and tells the sidecar to stop it', async () => {
+    // Arrange
+    const received = join(logDir, 'received')
+    // Writes down every request and answers none of them, like a job that takes long.
+    const recordOnly = `require("readline").createInterface({ input: process.stdin }).on("line", (line) => require("fs").appendFileSync(${JSON.stringify(received)}, line + "\\n")); setInterval(() => {}, 1000)`
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', recordOnly],
+      shutdownGraceMs: 50
+    })
+    const stop = new AbortController()
+    const job = sidecar
+      .call('echo', { value: 'long job' }, { job: { id: 'job-7', signal: stop.signal } })
+      .catch((caught: unknown) => caught)
+    await vi.waitFor(() => expect(existsSync(received)).toBe(true))
+
+    // Act
+    const stoppedAt = performance.now()
+    stop.abort()
+    const error = await job
+    await vi.waitFor(() => expect(readFileSync(received, 'utf8')).toContain('job.cancel'))
+
+    // Assert
+    expect(error).toMatchObject({ code: 'UNEXPECTED' })
+    expect(performance.now() - stoppedAt).toBeLessThan(1000)
+    const requests = readFileSync(received, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { method: string; params: unknown })
+    expect(requests.map((request) => [request.method, request.params])).toEqual([
+      ['echo', { value: 'long job' }],
+      ['job.cancel', { jobId: 'job-7' }]
+    ])
+  })
+
+  it('refuses a job whose id the sidecar would not accept, before anything is sent', async () => {
+    // Arrange
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      shutdownGraceMs: 50
+    })
+    const stop = new AbortController()
+
+    // Act
+    const errors = await Promise.all(
+      ['', 'x'.repeat(65)].map((id) =>
+        sidecar
+          .call('echo', { value: 1 }, { job: { id, signal: stop.signal } })
+          .catch((caught: unknown) => caught)
+      )
+    )
+
+    // Assert
+    expect(errors).toMatchObject([{ code: 'INVALID_INPUT' }, { code: 'INVALID_INPUT' }])
+  })
+
+  it('stops listening for the stop once a job has answered', async () => {
+    // Arrange
+    const answerAll =
+      'require("readline").createInterface({ input: process.stdin }).on("line", (line) => { const { id, params } = JSON.parse(line); console.log(JSON.stringify({ jsonrpc: "2.0", id, result: { value: params.value } })) }); setInterval(() => {}, 1000)'
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', answerAll],
+      shutdownGraceMs: 50
+    })
+    const stop = new AbortController()
+    const removed = vi.spyOn(stop.signal, 'removeEventListener')
+
+    // Act
+    const result = await sidecar.call(
+      'echo',
+      { value: 'done' },
+      { job: { id: 'job-9', signal: stop.signal } }
+    )
+    stop.abort()
+
+    // Assert
+    expect(result).toEqual({ value: 'done' })
+    expect(removed).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+
+  it('sends nothing for a job that is stopped before it starts', async () => {
+    // Arrange
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      shutdownGraceMs: 50
+    })
+    const stop = new AbortController()
+    stop.abort()
+
+    // Act
+    const error: unknown = await sidecar
+      .call('echo', { value: 1 }, { job: { id: 'job-8', signal: stop.signal } })
+      .catch((caught: unknown) => caught)
+
+    // Assert
+    expect(error).toMatchObject({ code: 'UNEXPECTED' })
+  })
+
   it('keeps what the sidecar says about an error out of the error, and logs it as one line', async () => {
     // Arrange
     const logged: string[] = []

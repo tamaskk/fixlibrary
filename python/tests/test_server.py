@@ -5,12 +5,21 @@ import json
 import re
 import subprocess
 import sys
+import threading
+from collections.abc import Iterator
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 
 from fixlib_py import server
+
+
+@pytest.fixture(autouse=True)
+def clean_job_registry() -> Iterator[None]:
+    yield
+    server._jobs.clear()
+    server._cancelled_early.clear()
 
 
 def call(line: str) -> dict:
@@ -359,3 +368,103 @@ def test_the_server_exits_when_stdin_closes() -> None:
     )
 
     assert completed.returncode == 0
+
+
+def test_job_cancel_stops_a_running_job_within_five_seconds() -> None:
+    started = threading.Event()
+    outcome: list[str] = []
+
+    def long_job() -> None:
+        try:
+            with server.cancellable("job-1") as stop:
+                started.set()
+                # Stands in for a method that checks between its steps.
+                while not stop.wait(0.05):
+                    pass
+                server.raise_if_cancelled(stop)
+        except server.JobCancelled:
+            outcome.append("cancelled")
+
+    worker = threading.Thread(target=long_job)
+    worker.start()
+    assert started.wait(2)
+
+    response = call('{"jsonrpc":"2.0","id":1,"method":"job.cancel","params":{"jobId":"job-1"}}')
+    worker.join(5)
+
+    assert response["result"] == {"cancelled": True}
+    assert outcome == ["cancelled"]
+    assert not worker.is_alive()
+
+
+def test_a_cancel_that_arrives_before_its_job_stops_the_job_as_it_starts() -> None:
+    early = call('{"jsonrpc":"2.0","id":1,"method":"job.cancel","params":{"jobId":"job-2"}}')
+
+    with server.cancellable("job-2") as stop:
+        stopped_at_once = stop.is_set()
+    with server.cancellable("job-2") as stop:
+        second_attempt = stop.is_set()
+
+    assert early["result"] == {"cancelled": False}
+    assert stopped_at_once is True
+    # The early cancel was used up: the id is free for a job that is not cancelled.
+    assert second_attempt is False
+
+
+def test_a_job_that_finished_is_not_cancelled_and_does_not_poison_its_id() -> None:
+    with server.cancellable("job-4"):
+        pass
+
+    late = call('{"jsonrpc":"2.0","id":1,"method":"job.cancel","params":{"jobId":"job-4"}}')
+
+    assert late["result"] == {"cancelled": False}
+
+
+def test_early_cancels_are_remembered_only_up_to_a_limit() -> None:
+    for number in range(server.MAX_CANCELLED_EARLY + 10):
+        server.cancel_job(f"early-{number}")
+
+    with server.cancellable("early-0") as oldest, server.cancellable("early-265") as newest:
+        forgotten, remembered = oldest.is_set(), newest.is_set()
+
+    assert len(server._cancelled_early) <= server.MAX_CANCELLED_EARLY
+    assert (forgotten, remembered) == (False, True)
+
+
+def test_a_method_that_stops_on_request_answers_without_a_stack_trace(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def stops() -> None:
+        raise server.JobCancelled()
+
+    server._methods["test.stops"] = stops
+    try:
+        with caplog.at_level("INFO"):
+            response = call('{"jsonrpc":"2.0","id":9,"method":"test.stops"}')
+    finally:
+        del server._methods["test.stops"]
+
+    assert response["error"]["message"] == "JobCancelled"
+    assert [record.levelname for record in caplog.records] == ["INFO"]
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_two_jobs_cannot_share_an_id() -> None:
+    with server.cancellable("job-3"):
+        with pytest.raises(ValueError):
+            with server.cancellable("job-3"):
+                pass
+
+
+@pytest.mark.parametrize("job_id", [7, "", "x" * 65, None])
+def test_job_cancel_and_cancellable_refuse_an_id_of_the_wrong_kind(job_id: object) -> None:
+    request = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "job.cancel", "params": {"jobId": job_id}}
+    )
+
+    response = call(request)
+
+    assert response["error"]["code"] == server.INTERNAL_ERROR
+    with pytest.raises(ValueError):
+        with server.cancellable(job_id):  # type: ignore[arg-type]
+            pass

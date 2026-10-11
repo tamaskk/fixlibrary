@@ -12,7 +12,6 @@ Package 1: foundations.
 
 Package 2: pipeline frame.
 
-- [ ] T-009 (base, L) Pipeline orchestrator and job queue. Done: the `jobs` table, the stage interface, the queue and the orchestrator (`pipeline/orchestrator.ts`), tested with stand-in stages. Open, in two more pull requests: `job.cancel` in the sidecar, the sleep blocker, the IPC and progress events, taking a run up at startup, `library:run`; then the run panel, the function chooser and the end-to-end test.
 - [ ] T-010 (base, M) File operations, backup and undo
 - [ ] T-011 (base, L) Batch preview frame
 - [ ] T-012 (base, M) Claude CLI service
@@ -96,3 +95,4 @@ Nothing planned. See docs/PRD.md §07 before proposing anything.
 - [x] T-006 (base, M) Settings page and Keychain-backed secrets. Not done: the "Teszt" button was not tried with real keys; the Claude CLI row of the Rendszer section comes with T-012; the packaged-app half of the `.env.local` rule is covered by a unit test only.
 - [x] T-007 (base, S) Logging and the skip-and-list error framework. Not done here: a batch that runs past a broken MP3 and lists it on the "Hibák" tab needs the orchestrator (T-009) and the preview (T-011); the stage runner they will use is in place and tested.
 - [x] T-008 (base, M) Library scan and track selection: `pipeline/scanner.ts`, `tags.read`, scan at startup, the virtualized track table with search, filters, sorting and selection, `library:list` and `library:run`. Not done: `library:run` only answers with the tracks a run would process, and the function chooser is missing, both until T-009; the cover column shows the cover state, thumbnails come with the cover task (F2); one state icon per row, the icons per function come with the stages; the 5 minute / 30 second scan limits, the unplugged drive and scrolling 3000 real rows were not measured on the real external drive.
+- [x] T-009 (base, L) Pipeline orchestrator and job queue: the `jobs` table, stages, the queue, the orchestrator, `job.cancel`, the sleep blocker, `library:run` and the `pipeline:*` channels, the run panel and the function chooser. Not done: no real stage exists before T-013, so runs use two stand-in stages that only wait and exist in development only (`FIXLIB_DEMO_STAGES=1`); `job.cancel` within 5 s is proven with a stand-in job, not a real Python method; "no file changed after compute" is proven only with stand-in stages; the sleep assertion (`pmset -g assertions`) was not checked by hand; nothing starts the apply phase before T-011; the rate limiters per lookup service come with T-014.

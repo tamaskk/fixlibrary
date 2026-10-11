@@ -27,6 +27,8 @@ export interface Stage {
   resource: Resource
   /** Stages that must be done for the same track first. */
   dependsOn: readonly string[]
+  /** True for a stage the user can ask for by itself in the function chooser. */
+  selectable: boolean
   timeoutMs: number
   run: (context: StageContext, track: Track) => Promise<StageResult | void>
 }

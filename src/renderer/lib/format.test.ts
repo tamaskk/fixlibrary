@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatCount, formatDecimal, parseDecimal } from './format'
+import { formatCount, formatDecimal, formatElapsed, formatRemaining, parseDecimal } from './format'
 
 describe('formatDecimal', () => {
   it.each([
@@ -48,6 +48,40 @@ describe('formatCount', () => {
   ])('formats %d as %s', (value, expected) => {
     // Act
     const text = formatCount(value)
+
+    // Assert
+    expect(text).toBe(expected)
+  })
+})
+
+describe('formatElapsed', () => {
+  it.each([
+    [0, '0:00'],
+    [999, '0:00'],
+    [125_000, '2:05'],
+    [3_725_000, '1:02:05'],
+    [-5, '0:00']
+  ])('formats %d ms as %s', (ms, expected) => {
+    // Act
+    const text = formatElapsed(ms)
+
+    // Assert
+    expect(text).toBe(expected)
+  })
+})
+
+describe('formatRemaining', () => {
+  it.each([
+    [20_000, 'kevesebb mint 1 perc'],
+    [60_000, 'kb. 1 perc'],
+    [12 * 60_000, 'kb. 12 perc'],
+    [60 * 60_000, 'kb. 1 óra'],
+    [97 * 60_000, 'kb. 1 óra 35 perc'],
+    [119 * 60_000, 'kb. 2 óra'],
+    [38 * 60 * 60_000, 'kb. 38 óra']
+  ])('formats %d ms as %s', (ms, expected) => {
+    // Act
+    const text = formatRemaining(ms)
 
     // Assert
     expect(text).toBe(expected)

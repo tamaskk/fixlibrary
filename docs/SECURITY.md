@@ -31,6 +31,7 @@ There are no accounts and no personal data of other people.
 - An event from the main process reaches the page through a subscribe function of the preload that passes on the payload only; the page never gets the event object or a way to listen on a channel of its choice.
 - Navigation and new windows are denied; only `http(s)` links are handed to the OS browser. The window stays on the app's own page (`will-navigate`, `will-redirect` and webviews are blocked), so a dropped file or a changed `location` cannot load another document into the window that holds `window.api`.
 - Every IPC handler checks that the call comes from the main frame of the app's own page, and validates its arguments, before it runs.
+- A run is started with track ids and function names only. Which tracks run is decided in the main process, twice (when the request arrives and when the batch is built); a function name is accepted only if it is one the user can ask for, so a page cannot put an apply stage into a batch. Starting a run and pausing or resuming one are rate limited in the main process. Pause, resume and cancel take no argument: a page can only act on the one active run. One run is active at a time, enforced in the main process.
 - Custom protocols (such as the planned `fixlib-audio`) serve only files that belong to a track in the database, resolved by track id, never by a path from the renderer.
 
 ## 04 Secrets

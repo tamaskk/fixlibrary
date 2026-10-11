@@ -18,3 +18,17 @@ export function createProgressThrottle<T>(
     send(progress)
   }
 }
+
+/**
+ * Says whether enough time has passed since the last call it let through. For a
+ * handler that a page must not be able to call in a tight loop.
+ */
+export function createRateGate(minIntervalMs: number, now: () => number = Date.now): () => boolean {
+  let lastPassed: number | null = null
+  return () => {
+    const time = now()
+    if (lastPassed !== null && time - lastPassed < minIntervalMs) return false
+    lastPassed = time
+    return true
+  }
+}

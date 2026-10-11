@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Result } from '@shared/errors'
 import type { FixLibraryApi } from '@shared/ipc'
-import type { LibraryPage, LibraryTrack, RunRequest, RunTargets } from '@shared/library'
+import type { LibraryPage, LibraryTrack, RunRequest, RunStarted } from '@shared/library'
 
 type LibraryApi = FixLibraryApi['library']
 
@@ -44,10 +44,10 @@ const api = {
         value: { tracks: library.slice(offset, offset + limit), total: library.length }
       }
     },
-    run: async (request): Promise<Result<RunTargets>> => {
+    run: async (request): Promise<Result<RunStarted>> => {
       runRequests.push(request)
       const trackIds = request.scope === 'selection' ? request.trackIds : library.map((t) => t.id)
-      return { ok: true, value: { trackIds, skipped: 0 } }
+      return { ok: true, value: { batchId: 1, trackIds, skipped: 0 } }
     },
     scan: async () => ({ ok: false, code: 'UNEXPECTED' }),
     followScan: async () => null,
@@ -198,13 +198,13 @@ describe('run', () => {
     store.getState().setView({ search: 'tuz' })
 
     // Act
-    await store.getState().run('selection')
+    await store.getState().run('selection', ['bpmKey'])
 
     // Assert
-    expect(runRequests).toEqual([{ scope: 'selection', trackIds: [1, 3] }])
+    expect(runRequests).toEqual([{ scope: 'selection', trackIds: [1, 3], stages: ['bpmKey'] }])
     expect(store.getState().lastRun).toEqual({
       ok: true,
-      targets: { trackIds: [1, 3], skipped: 0 }
+      started: { batchId: 1, trackIds: [1, 3], skipped: 0 }
     })
   })
 
@@ -215,10 +215,10 @@ describe('run', () => {
     store.getState().select(5, CLICK, [5])
 
     // Act
-    await store.getState().run('library')
+    await store.getState().run('library', ['bpmKey'])
 
     // Assert
-    expect(runRequests).toEqual([{ scope: 'library' }])
+    expect(runRequests).toEqual([{ scope: 'library', stages: ['bpmKey'] }])
   })
 
   it('does not ask for a run on an empty selection', async () => {
@@ -227,7 +227,19 @@ describe('run', () => {
     await store.getState().loadTracks()
 
     // Act
-    await store.getState().run('selection')
+    await store.getState().run('selection', ['bpmKey'])
+
+    // Assert
+    expect(runRequests).toEqual([])
+  })
+
+  it('does not ask for a run without a function', async () => {
+    // Arrange
+    const store = await freshStore()
+    await store.getState().loadTracks()
+
+    // Act
+    await store.getState().run('library', [])
 
     // Assert
     expect(runRequests).toEqual([])
@@ -238,7 +250,7 @@ describe('run', () => {
     const store = await freshStore()
     await store.getState().loadTracks()
     store.getState().select(5, CLICK, [5, 6])
-    await store.getState().run('selection')
+    await store.getState().run('selection', ['bpmKey'])
 
     // Act
     store.getState().select(6, CLICK, [5, 6])

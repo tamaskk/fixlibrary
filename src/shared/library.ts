@@ -78,18 +78,25 @@ export type LibraryPageRequest = z.input<typeof libraryPageRequestSchema>
 /** More ids than a library can hold is a broken or hostile page, not a selection. */
 export const MAX_RUN_TRACKS = 20_000
 
+/** More names than the app can have functions. */
+export const MAX_RUN_STAGES = 50
+
+// The names of the functions to run; the app adds the stages they depend on.
+const requestedStages = z.array(z.string().min(1).max(40)).min(1).max(MAX_RUN_STAGES)
+
 export const runRequestSchema = z.discriminatedUnion('scope', [
   z.strictObject({
     scope: z.literal('selection'),
-    trackIds: z.array(z.number().int().positive()).min(1).max(MAX_RUN_TRACKS)
+    trackIds: z.array(z.number().int().positive()).min(1).max(MAX_RUN_TRACKS),
+    stages: requestedStages
   }),
-  z.strictObject({ scope: z.literal('library') })
+  z.strictObject({ scope: z.literal('library'), stages: requestedStages })
 ])
 
-/** What to run on: the tracks the user selected, or every track of the library. */
+/** What to run, and on what: the tracks the user selected, or every track of the library. */
 export type RunRequest = z.input<typeof runRequestSchema>
 
-/** The tracks a run would process, decided by the main process. */
+/** The tracks a run processes, decided by the main process. */
 export interface RunTargets {
   /** For a selection in the order it was given, without repeats; else in library order. */
   trackIds: number[]
@@ -99,4 +106,9 @@ export interface RunTargets {
    * and a stage that cannot read it records that for the track.
    */
   skipped: number
+}
+
+/** The answer to a run that was started. */
+export interface RunStarted extends RunTargets {
+  batchId: number
 }

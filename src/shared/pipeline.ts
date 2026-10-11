@@ -62,8 +62,21 @@ export interface RunProgress {
   counts: JobCounts
   /** The same per stage, in the order the stages run. */
   stages: (JobCounts & { stage: string })[]
-  /** When this phase was started in this session of the app, as a timestamp. */
-  startedAt: number
+  /** The tracks of the batch, and how many of them a stage of this phase failed for. */
+  tracks: { total: number; failed: number }
+  /**
+   * How long the phase has been working in this session of the app, as of this
+   * report. The time a run is paused does not count.
+   */
+  elapsedMs: number
   /** An estimate of the time left, or null while too little has finished to tell. */
   remainingMs: number | null
+}
+
+/** What the page needs to know about runs when it opens. */
+export interface PipelineState {
+  /** The names of the functions that can be asked for, in the order to offer them. */
+  functions: string[]
+  /** The run that is active now, or null. */
+  progress: RunProgress | null
 }

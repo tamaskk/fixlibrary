@@ -90,7 +90,7 @@ SQLite: `src/main/db/` holds one connection (WAL mode, foreign keys on) opened a
 
 - Startup opens the database and runs the pending migrations before IPC, the sidecar and the window. If the database cannot be opened or migrated, or was written by a newer version of the app, the app shows an error and quits. Only one instance of the app runs at a time.
 - Migrations run with foreign keys off (a table rebuild would otherwise cascade into the child tables), followed by a foreign key check; the keys are on for everything else.
-- Rows that undo depends on never disappear as a side effect: a batch with backups cannot be deleted, a track that a batch refers to cannot be deleted, and deleting a track only clears the link on its backup rows.
+- Rows that undo depends on never disappear as a side effect: a batch with backups cannot be deleted, a track that a batch refers to cannot be deleted, and deleting a track only clears the link on its backup rows. The one delete of batches is `deleteDiscardedBatches`, run when a new run starts: it removes batches that were cancelled before anything was written (never applied, no backup, no apply job ever started), with their items and jobs. A batch that got as far as writing is never deleted by it.
 - Track paths are stored normalized and NFC-composed, and the volume name is always derived from the path.
 - Settings keys that start with `secret.` are reserved for encrypted values (task 6); `setSetting` refuses them.
 - Migrations are generated with `npx drizzle-kit generate --name <what_changed>` and committed. The packaged app reads them from `Resources/migrations` (`extraResources`).
@@ -201,13 +201,19 @@ Pipeline runs:
 - A run is a batch: one `batch_items` row per track, holding the track as it was (`before`) and what the stages propose (`after`), and one `jobs` row per track and stage. Asking for a stage adds the stages it depends on. Only a track that is in the library, online and has its file becomes part of a batch; this is decided when the run starts, whatever the caller checked.
 - `pipeline/orchestrator.ts` runs the jobs. A job starts when the stages it depends on are done for the same track, and when its resource has room (`pipeline/queue.ts`): `cpu` is the worker count of the settings, read again whenever a job could start; `gpu` 1, `claude` 1, `io` 2, `network` 4.
 - A job goes through `pipeline/run-stage.ts`, so a failure or a timeout becomes a `TrackError` on the job and on the item of the batch (the first error of a track stays). The jobs that wait for a failed one are skipped; the other tracks go on.
-- Two phases. Compute ends with the batch in `preview`: nothing was written, and the apply jobs stay queued. `applyBatch` starts them, only for the items the user approved and did not take out, and ends with the batch `applied`. Only one batch waits for approval: starting a new run cancels an older one.
+- Two phases. Compute ends with the batch in `preview`: nothing was written, and the apply jobs stay queued. `applyBatch` starts them, only for the items the user approved and did not take out, and ends with the batch `applied`. Only one batch waits for approval: starting a new run cancels an older one, and deletes it together with every other batch that was given up unwritten, so the rows of runs that came to nothing do not pile up.
 - One batch is computed or applied at a time; a second start is answered with `RUN_ACTIVE`.
 - Pause: no new job starts and the running ones finish; the pause and its reason are stored on the batch. If the drive of a track is not mounted when its job would start, the run pauses itself (`offline`) instead of failing every track that is left.
 - Cancel ends the batch at once: in one transaction the batch becomes `cancelled` and every job that is not over becomes `skipped`, the running ones included. They get their abort signal, and whatever they still return is thrown away. A cancelled batch is never taken up again. A stage that writes files must therefore stop on its signal: a write that finishes after the cancel is not recorded on the job.
 - Restart: quitting tells the running jobs to stop and puts them back in line. At the next start the batch that was being computed or applied is taken up again: `done` jobs are not run again. A batch the user paused stays paused; one that had paused for a missing drive goes on, and pauses again if the drive is still away. After a crash the jobs that were running go back in line too, but the start counts: a job that was running in three crashes is recorded as failed, so a file that makes the app crash cannot do so forever.
 - The apply phase never writes a track that a stage failed for, approved or not.
 - What listens to a run (progress, the sleep blocker) cannot stop it by failing, and may act on the run from inside a report: the last report of a run goes out after the run is over.
+- A run is started from the Library page with `library:run`: track ids, or the whole library, and the names of the functions to run. Only the names of stages marked `selectable` are accepted; the stages they depend on are added by the orchestrator. At most one run is started in two seconds, and pause and resume are acted on at most four times a second, so a page cannot fill the disk or the log by calling in a loop. `pipeline:state` tells the page which functions exist and which run is active; `pipeline:pause`, `pipeline:resume` and `pipeline:cancel` take no argument and act on the one active run.
+- `pipeline:progress` events go to the page at most four times a second. A report that says something new about the run itself (paused, went on, ended, another batch or phase) is never held back, and the newest report that was held back still goes out when its time has come: a run may stand still for minutes, and the page must not show old numbers all that time. A report carries the time the run has worked (pauses do not count) and how many tracks failed.
+- While a run works, `services/power.ts` holds off sleep with Electron's `powerSaveBlocker` (`prevent-app-suspension`); a paused run with nothing running lets the Mac sleep.
+- At startup the app scans the library first and then takes up a run that was interrupted, so both do not read the drive at once. Until then the run is not shown, and a new run is refused. The limits of the resources are read from the settings at most once a second. Quitting calls `shutdown` on the orchestrator before the sidecar is stopped and the database is closed.
+- Long work in the sidecar runs inside `cancellable(job_id)` and checks its stop event between steps. The bridge takes a job id and an abort signal with a call: on abort the call is rejected at once and `job.cancel` is sent. A job has five seconds to stop. A cancel that reaches the sidecar before its job has registered is remembered, and the job is stopped as it starts. Every attempt of a job gets its own id, made in the main process, of at most 64 characters. No method uses this before T-013.
+- No real stage exists before T-013. In development, `FIXLIB_DEMO_STAGES=1` adds two stages that only wait (`pipeline/stages/demo.ts`), so a run can be tried and tested end to end; `FIXLIB_DEMO_STAGE_MS` sets how long they take. The packaged app ignores both.
 - Progress is reported as counts per stage and an estimate of the time left: per stage, how long its last 50 jobs took, times the jobs left, over how many run at once. There is no estimate while a stage with jobs left has not finished one.
 
 Python sidecar:
@@ -298,10 +304,12 @@ There is no server, preview or staging environment.
 
 Environment variables (names only; values live in `.env.local` for development and in the app's Settings, encrypted via the macOS Keychain, when packaged):
 
-| Name                    | Used by                     | Main process only |
-| ----------------------- | --------------------------- | ----------------- |
-| ACOUSTID_API_KEY        | `src/main/services/lookup/` | yes               |
-| DISCOGS_CONSUMER_KEY    | `src/main/services/lookup/` | yes               |
-| DISCOGS_CONSUMER_SECRET | `src/main/services/lookup/` | yes               |
+| Name                    | Used by                                | Main process only |
+| ----------------------- | -------------------------------------- | ----------------- |
+| ACOUSTID_API_KEY        | `src/main/services/lookup/`            | yes               |
+| DISCOGS_CONSUMER_KEY    | `src/main/services/lookup/`            | yes               |
+| DISCOGS_CONSUMER_SECRET | `src/main/services/lookup/`            | yes               |
+| FIXLIB_DEMO_STAGES      | `src/main/index.ts` (development only) | yes               |
+| FIXLIB_DEMO_STAGE_MS    | `src/main/index.ts` (development only) | yes               |
 
 The packaged app ignores `.env` files.

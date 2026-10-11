@@ -3,6 +3,19 @@ import { IPC_CHANNELS, IPC_EVENTS, type FixLibraryApi } from '@shared/ipc'
 
 // The preload runs sandboxed: only `electron` may be required at runtime.
 // Never expose ipcRenderer itself, only the typed functions below.
+/**
+ * Passes what the main process sends on one fixed channel on to the page: the
+ * payload only, never the event with its sender. Returns the function that stops it.
+ */
+function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
+  if (typeof listener !== 'function') throw new TypeError('The listener must be a function')
+  const forward = (_event: unknown, payload: T): void => listener(payload)
+  ipcRenderer.on(channel, forward)
+  return () => {
+    ipcRenderer.removeListener(channel, forward)
+  }
+}
+
 const api: FixLibraryApi = {
   app: {
     getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion)
@@ -33,16 +46,14 @@ const api: FixLibraryApi = {
     followScan: () => ipcRenderer.invoke(IPC_CHANNELS.libraryFollowScan),
     list: (page) => ipcRenderer.invoke(IPC_CHANNELS.libraryList, page),
     run: (request) => ipcRenderer.invoke(IPC_CHANNELS.libraryRun, request),
-    onScanProgress: (listener) => {
-      if (typeof listener !== 'function') throw new TypeError('The listener must be a function')
-      // The page gets the payload only, never the event with its sender.
-      const forward = (_event: unknown, progress: Parameters<typeof listener>[0]): void =>
-        listener(progress)
-      ipcRenderer.on(IPC_EVENTS.libraryScanProgress, forward)
-      return () => {
-        ipcRenderer.removeListener(IPC_EVENTS.libraryScanProgress, forward)
-      }
-    }
+    onScanProgress: (listener) => subscribe(IPC_EVENTS.libraryScanProgress, listener)
+  },
+  pipeline: {
+    state: () => ipcRenderer.invoke(IPC_CHANNELS.pipelineState),
+    pause: () => ipcRenderer.invoke(IPC_CHANNELS.pipelinePause),
+    resume: () => ipcRenderer.invoke(IPC_CHANNELS.pipelineResume),
+    cancel: () => ipcRenderer.invoke(IPC_CHANNELS.pipelineCancel),
+    onProgress: (listener) => subscribe(IPC_EVENTS.pipelineProgress, listener)
   }
 }
 

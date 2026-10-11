@@ -1,9 +1,11 @@
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, notExists } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import {
+  backups,
   batches,
   batchItems,
+  jobs,
   type BATCH_MODES,
   type BATCH_STATUSES,
   type PAUSE_REASONS
@@ -84,6 +86,35 @@ export function setBatchPause(db: AppDatabase, id: number, pauseReason: PauseRea
 /** Every batch that waits for approval becomes `cancelled`: only one batch waits at a time. */
 export function cancelPreviewBatches(db: AppDatabase): void {
   db.update(batches).set({ status: 'cancelled' }).where(eq(batches.status, 'preview')).run()
+}
+
+/**
+ * Deletes the batches that were given up before anything was written: cancelled,
+ * never applied, without a backup, and with no apply job that was ever started.
+ * Their items and jobs go with them. Returns how many batches were deleted.
+ *
+ * A batch that got as far as writing a file is never deleted here, cancelled or
+ * not: undo and the backups depend on its rows.
+ */
+export function deleteDiscardedBatches(db: AppDatabase): number {
+  return db
+    .delete(batches)
+    .where(
+      and(
+        eq(batches.status, 'cancelled'),
+        isNull(batches.appliedAt),
+        notExists(
+          db.select({ id: backups.id }).from(backups).where(eq(backups.batchId, batches.id))
+        ),
+        notExists(
+          db
+            .select({ id: jobs.id })
+            .from(jobs)
+            .where(and(eq(jobs.batchId, batches.id), eq(jobs.phase, 'apply'), gt(jobs.attempts, 0)))
+        )
+      )
+    )
+    .run().changes
 }
 
 /**

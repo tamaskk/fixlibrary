@@ -48,6 +48,11 @@ export const RPC_SCHEMAS = {
     params: z.object({}),
     result: z.null()
   },
+  /** Asks a running job to stop. `cancelled` is false when no such job is running. */
+  'job.cancel': {
+    params: z.object({ jobId: z.string().min(1).max(64) }),
+    result: z.object({ cancelled: z.boolean() })
+  },
   'tags.read': {
     params: z.object({ paths: z.array(z.string().min(1)).min(1).max(TAG_BATCH_SIZE) }),
     // One entry per path, in input order. Each entry is checked on its own with

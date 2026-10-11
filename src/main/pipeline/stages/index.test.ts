@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { STAGES, validateStages, withDependencies } from './index'
+import { createDemoStages } from './demo'
+import { selectableStages, STAGES, validateStages, withDependencies } from './index'
 import type { Stage } from './stage'
 
 function stage(name: string, dependsOn: string[] = [], phase: Stage['phase'] = 'compute'): Stage {
-  return { name, phase, resource: 'cpu', dependsOn, timeoutMs: 1000, run: async () => {} }
+  return {
+    name,
+    phase,
+    resource: 'cpu',
+    dependsOn,
+    selectable: phase === 'compute',
+    timeoutMs: 1000,
+    run: async () => {}
+  }
 }
 
 describe('validateStages', () => {
@@ -107,5 +116,48 @@ describe('withDependencies', () => {
 
     // Assert
     expect(selected).toBeNull()
+  })
+})
+
+describe('selectableStages', () => {
+  it('names the stages the user can ask for, and no other', () => {
+    // Arrange
+    const stages = [stage('rename', ['naming'], 'apply'), stage('naming'), stage('bpmKey')]
+
+    // Act
+    const names = selectableStages(stages)
+
+    // Assert
+    expect(names).toEqual(['naming', 'bpmKey'])
+  })
+})
+
+describe('the demo stages', () => {
+  it('can be ordered, and both can be asked for', () => {
+    // Arrange
+    const stages = createDemoStages()
+
+    // Act
+    const validate = (): void => validateStages(stages)
+
+    // Assert
+    expect(validate).not.toThrow()
+    expect(selectableStages(stages)).toEqual(['demoAnalyze', 'demoLookup'])
+  })
+
+  it('propose something for the track and stop waiting when told to', async () => {
+    // Arrange
+    const [analyze] = createDemoStages(60_000)
+    const stop = new AbortController()
+    const track = { id: 1 } as Parameters<NonNullable<typeof analyze>['run']>[1]
+
+    // Act
+    const quick = await createDemoStages(1)[0]?.run({ signal: stop.signal, batchId: 1 }, track)
+    const stopped = analyze?.run({ signal: stop.signal, batchId: 1 }, track)
+    stop.abort()
+
+    // Assert
+    expect(quick).toEqual({ proposal: { demoAnalyzed: true } })
+    await expect(stopped).rejects.toThrow('stopped')
   })
 })

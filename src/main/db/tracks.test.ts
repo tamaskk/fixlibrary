@@ -7,6 +7,7 @@ import {
   countTracks,
   deleteTrack,
   getTrackById,
+  getTracksByIds,
   insertTracks,
   listTrackFileStates,
   listTracks,
@@ -422,5 +423,22 @@ describe('updateTracks', () => {
     // Assert
     expect(update).toThrow()
     expect(getTrackById(testDatabase.db, first, NO_VOLUMES)?.title).toBeNull()
+  })
+})
+
+describe('getTracksByIds', () => {
+  it('reads many tracks at once and leaves out an id without a track', () => {
+    // Arrange
+    const ids = insertTracks(
+      testDatabase.db,
+      Array.from({ length: 1200 }, (_, index) => newTrack(`/Volumes/DJ SSD/${index}.mp3`))
+    )
+
+    // Act
+    const found = getTracksByIds(testDatabase.db, [...ids, 999_999], new Set())
+
+    // Assert
+    expect(found.map((track) => track.id).sort((a, b) => a - b)).toEqual(ids)
+    expect(found.every((track) => track.offline)).toBe(true)
   })
 })

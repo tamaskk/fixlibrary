@@ -92,6 +92,24 @@ export function getTrackById(
   return row && toTrack(row, mountedVolumes)
 }
 
+/** The tracks with these ids, in no particular order. An id without a track is left out. */
+export function getTracksByIds(
+  db: AppDatabase,
+  ids: readonly number[],
+  mountedVolumes: ReadonlySet<string>
+): Track[] {
+  const found: Track[] = []
+  for (let start = 0; start < ids.length; start += ID_CHUNK_SIZE) {
+    const rows = db
+      .select()
+      .from(tracks)
+      .where(inArray(tracks.id, ids.slice(start, start + ID_CHUNK_SIZE)))
+      .all()
+    found.push(...rows.map((row) => toTrack(row, mountedVolumes)))
+  }
+  return found
+}
+
 /** One page of tracks ordered by path. The page size is capped at MAX_TRACK_PAGE_SIZE. */
 export function listTracks(
   db: AppDatabase,

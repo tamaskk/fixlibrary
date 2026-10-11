@@ -52,6 +52,7 @@ function fakeStage(name: string, options: FakeStageOptions = {}): Stage {
     phase: options.phase ?? 'compute',
     resource,
     dependsOn: options.dependsOn ?? [],
+    selectable: true,
     timeoutMs: options.timeoutMs ?? 60_000,
     run: async ({ signal }, track) => {
       started.push(`${name}:${track.id}`)
@@ -924,7 +925,7 @@ describe('starting a run', () => {
     expect(started).toEqual([`bpmKey:${online}`])
   })
 
-  it('gives up an older batch that still waited for approval', async () => {
+  it('gives up an older batch that still waited for approval, and deletes it', async () => {
     // Arrange
     const trackIds = addTracks(1)
     const run = orchestrator([fakeStage('bpmKey')])
@@ -936,9 +937,61 @@ describe('starting a run', () => {
     await vi.runAllTimersAsync()
 
     // Assert
-    const statusOf = (result: typeof first): string | undefined =>
-      result.ok ? getBatch(testDatabase.db, result.value.batchId)?.status : undefined
-    expect([statusOf(first), statusOf(second)]).toEqual(['cancelled', 'preview'])
+    const batchOf = (result: typeof first): ReturnType<typeof getBatch> =>
+      result.ok ? getBatch(testDatabase.db, result.value.batchId) : undefined
+    expect(batchOf(first)).toBeUndefined()
+    expect(batchOf(second)?.status).toBe('preview')
+    expect(testDatabase.db.select().from(batchItems).all()).toHaveLength(1)
+  })
+
+  it('does not pile up batches when runs are started and cancelled again and again', async () => {
+    // Arrange
+    const trackIds = addTracks(50)
+    const run = orchestrator([fakeStage('bpmKey'), fakeStage('energy', { dependsOn: ['bpmKey'] })])
+
+    // Act
+    for (let turn = 0; turn < 10; turn += 1) {
+      run.start({ trackIds, stages: ['energy'] })
+      await vi.advanceTimersByTimeAsync(50)
+      run.cancel()
+    }
+    const last = run.start({ trackIds, stages: ['energy'] })
+
+    // Assert: only the run that is active has rows.
+    const batchId = last.ok ? last.value.batchId : -1
+    expect(
+      testDatabase.db
+        .select()
+        .from(batches)
+        .all()
+        .map((batch) => batch.id)
+    ).toEqual([batchId])
+    expect(testDatabase.db.select().from(batchItems).all()).toHaveLength(50)
+    expect(listJobs(testDatabase.db, batchId)).toHaveLength(100)
+  })
+
+  it('keeps a batch that was cancelled while it was being applied', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    const stages = [
+      fakeStage('naming'),
+      fakeStage('rename', { dependsOn: ['naming'], phase: 'apply', resource: 'io', ms: 500 })
+    ]
+    const run = orchestrator(stages)
+    const first = run.start({ trackIds, stages: ['rename'] })
+    const firstId = first.ok ? first.value.batchId : -1
+    await vi.runAllTimersAsync()
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    run.applyBatch(firstId)
+    await vi.advanceTimersByTimeAsync(100)
+    run.cancel()
+
+    // Act
+    run.start({ trackIds, stages: ['rename'] })
+    await vi.runAllTimersAsync()
+
+    // Assert: undo may need what that batch recorded.
+    expect(getBatch(testDatabase.db, firstId)?.status).toBe('cancelled')
   })
 })
 
@@ -1133,6 +1186,51 @@ describe('progress', () => {
         { stage: 'bpmKey', total: 4, done: 3, failed: 1, skipped: 0, running: 0 },
         { stage: 'energy', total: 4, done: 3, failed: 0, skipped: 1, running: 0 }
       ]
+    })
+  })
+
+  it('counts the time it works, not the time it is paused', async () => {
+    // Arrange
+    const trackIds = addTracks(6)
+    limits.cpu = 1
+    const run = orchestrator([fakeStage('bpmKey', { ms: 1000 })])
+    run.start({ trackIds, stages: ['bpmKey'] })
+    await vi.advanceTimersByTimeAsync(2500)
+
+    // Act
+    run.pause()
+    const atPause = run.progress()?.elapsedMs
+    await vi.advanceTimersByTimeAsync(60_000)
+    const afterAnHourOfPause = run.progress()?.elapsedMs
+    run.resume()
+    await vi.advanceTimersByTimeAsync(1500)
+
+    // Assert
+    expect(atPause).toBe(2500)
+    expect(afterAnHourOfPause).toBe(2500)
+    expect(run.progress()?.elapsedMs).toBe(4000)
+  })
+
+  it('says how many tracks the batch has and how many of them failed', async () => {
+    // Arrange
+    const trackIds = addTracks(5)
+    const run = orchestrator([
+      fakeStage('bpmKey', { fails: (trackId) => trackId === trackIds[1] }),
+      fakeStage('lookup', {
+        resource: 'network',
+        fails: (trackId) => trackId === trackIds[1] || trackId === trackIds[4]
+      })
+    ])
+
+    // Act
+    run.start({ trackIds, stages: ['bpmKey', 'lookup'] })
+    await vi.runAllTimersAsync()
+
+    // Assert: one track failed in two stages and counts once.
+    expect(progress.at(-1)).toMatchObject({
+      state: 'finished',
+      tracks: { total: 5, failed: 2 },
+      counts: { failed: 3 }
     })
   })
 

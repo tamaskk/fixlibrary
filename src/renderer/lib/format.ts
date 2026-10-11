@@ -23,3 +23,25 @@ const count = new Intl.NumberFormat('hu-HU', { maximumFractionDigits: 0 })
 export function formatCount(value: number): string {
   return count.format(value)
 }
+
+/** A length of time as a clock: `2:05`, or `1:02:05` from an hour on. */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return hours > 0
+    ? `${hours}:${pad(minutes)}:${pad(seconds % 60)}`
+    : `${minutes}:${pad(seconds % 60)}`
+}
+
+/** An estimate of the time left in words, rounded so that it does not jump about. */
+export function formatRemaining(ms: number): string {
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 1) return 'kevesebb mint 1 perc'
+  if (minutes < 60) return `kb. ${minutes} perc`
+  const hours = Math.floor(minutes / 60)
+  const rest = Math.round((minutes % 60) / 5) * 5
+  if (rest === 60) return `kb. ${hours + 1} óra`
+  return rest === 0 ? `kb. ${hours} óra` : `kb. ${hours} óra ${rest} perc`
+}
