@@ -9,7 +9,8 @@ import {
   type Page
 } from '@playwright/test'
 
-const API_KEY = 'e2e-acoustid-key-7f3a9c'
+// Not a real key: a made-up value that the test types in and then looks for on disk.
+const FAKE_KEY = 'not-a-real-key-for-the-e2e-test'
 
 let folder: string
 let userDataDir: string
@@ -71,7 +72,7 @@ test('settings are saved, survive a restart, and the API key is never stored as 
 
     await page.getByLabel('Célszint').selectOption('-8')
 
-    await keys.getByRole('textbox', { name: 'AcoustID API kulcs' }).fill(API_KEY)
+    await keys.getByRole('textbox', { name: 'AcoustID API kulcs' }).fill(FAKE_KEY)
     await keys.getByRole('button', { name: 'AcoustID API kulcs mentése' }).click()
     await expect(keys.getByText('Tárolva a Keychainben')).toBeVisible()
     await expect(keys.getByRole('textbox', { name: 'AcoustID API kulcs' })).toHaveValue('')
@@ -123,8 +124,8 @@ test('settings are saved, survive a restart, and the API key is never stored as 
     files.some((content) => content.includes(Buffer.from(text, encoding)))
   expect(contains('secret.acoustid', 'utf8')).toBe(true)
   // As single-byte text and as the two-byte text Chromium uses in its own stores.
-  expect(contains(API_KEY, 'utf8')).toBe(false)
-  expect(contains(API_KEY, 'utf16le')).toBe(false)
+  expect(contains(FAKE_KEY, 'utf8')).toBe(false)
+  expect(contains(FAKE_KEY, 'utf16le')).toBe(false)
 
   const second = await openSettings()
   try {
