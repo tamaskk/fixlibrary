@@ -151,6 +151,25 @@ External tools:
   - mp3gain: always `-s s`, absolute paths, and only files the app has identified as MP3.
   - All of them: an argument array, an explicit minimal environment, a timeout.
 
+Settings and secrets:
+
+- `src/shared/settings.ts` holds the schemas and the defaults. Settings are stored as five groups, one row each; a group that was never changed has no row, and a folder that was never chosen is null. `pipeline/settings.ts` resolves the value in use (backup folder next to the library, Rekordbox folders under `~/Documents/FixLibrary`, worker count one less than the CPU cores and never more than the cores). A library that is a whole drive or a home folder has no folder next to it that the app could create, so it has no default backup folder: the user has to choose one.
+- The renderer changes settings with a typed, validated patch. There is no generic "set key to value" call, an unknown key is refused, and the merged result is validated again before it is written.
+- Folders are never accepted from the renderer: `settings:pickFolder` opens the dialog in the main process, which also words the dialog, and stores what the user picked as the file system names it (links resolved). The library, its clean copy and its backup folder may not contain one another; this is decided by what the folders are on disk, not by how their paths are spelled. A folder that does not exist yet is resolved as far as it exists and compared by spelling from there on. The rule is checked when a folder is chosen; the tasks that write files check their targets again when they run.
+- API keys are encrypted with Electron `safeStorage` (a key in the macOS Keychain) and stored under the reserved `secret.` keys of the settings table. Without the Keychain a key is not stored at all. A key's value never goes to the renderer, only where it comes from: stored, the development env file, unreadable, or missing.
+- In development `.env.local` is a fallback for keys that are not stored. Only the three key variables are kept, in an object and never in `process.env`, so child processes cannot inherit them. The packaged app does not read the file.
+- The app is ad-hoc signed, so the Keychain item belongs to one build. After an update a stored key may not decrypt; the Settings page then shows it as unreadable and asks for it again.
+- A key test is a real request with the owner's key: one at a time per service, and no second request to a service within five seconds, whatever is saved or deleted in between (a test that comes too soon is answered without a request). It never follows a redirect. Only a clear answer counts; anything else is reported as "not checked". A result belongs to the keys it was run with: once a key changes, a test that ran or is still running with the old one is not reported for the new one.
+- A stored key is encrypted together with its name, so a ciphertext copied to the row of another key is not accepted there.
+- Names of styles and hot cues are stored composed (NFC) with single spaces. Control, invisible, private-use and unassigned characters are refused, which also rules out emoji sequences that need a joiner.
+- A style that a track uses cannot be deleted; `Unsorted` always exists and keeps its name.
+
+IPC handlers:
+
+- Every handler is registered through `handleIpc` (`src/main/ipc/handle.ts`). It runs the handler only for the app's own page (the main frame, at the renderer's URL) and only with arguments that fit a Zod schema. Anything else is rejected with a fixed message and logged by channel name. A handler that throws is logged in the main process, and the renderer gets a fixed message, never the error text. In development every page of the dev server's origin counts as the app's page.
+- Calls that can fail in an expected way return `Result<T>` from `src/shared/errors.ts` (`{ ok, value }` or `{ ok: false, code }`), because an error thrown across IPC loses its code. The renderer maps the code to Hungarian text.
+- The window's top-level document cannot navigate away from the app's page, and no webview can be attached. A frame inside the page gets no preload and is refused by the handlers.
+
 Python sidecar:
 
 - One long-running process, started by `services/python-bridge.ts` when the app is ready and stopped on quit (`shutdown`, then SIGKILL after 3 s). It speaks JSON-RPC 2.0, one JSON document per line: requests on stdin, responses and `progress` notifications on stdout.

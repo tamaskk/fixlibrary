@@ -45,7 +45,7 @@ Hot cue defaults (editable in Settings; these are the first-run values, assumed 
 
 Rules:
 
-- One primary color. Accent colors are for state, not decoration. Cue colors appear only on cues.
+- One primary color. Accent colors are for state, not decoration. Cue colors appear only on cues. Colors the user picks as data (a style's color) are free and may coincide with a cue color; they are always shown with their hex value.
 - Text on any background passes WCAG AA (4.5:1 for body text). Use `--color-primary-text` and `--color-danger-text` for colored text; `--color-primary` and `--color-danger` are backgrounds for white text.
 - Dark only in v1. There is no light theme and no `.dark` class; never hard-code a color so a second value set can be added later.
 - State is never shown by color alone: pair it with an icon or a label.
@@ -120,13 +120,56 @@ Buttons
 
 - Height 32px, padding 0 12px, radius-md, Small 500.
 - States: hover (primary-hover, or surface-hover for secondary and ghost), active (darken 8%), focus (2px primary ring with a 2px bg offset), disabled (50% opacity, no pointer).
-- Loading: spinner replaces the label, width stays fixed.
+- Loading: spinner replaces the label, width stays fixed. The label stays in place for assistive technology.
 
 Inputs
 
 - Height 32px, radius-sm, surface background, border color-border, focus ring primary.
 - Label above the field, 11px Label role, always visible. Placeholder is a hint, never the label.
 - Error: border danger, message below in danger-text at 13px.
+- In a table whose column header already shows the label, the field's own label may be visually hidden (`labelHidden`). It stays in place for assistive technology and names the row ("3. stílus neve"), so rows can be told apart.
+- A field that saves when it loses focus also saves on Enter.
+
+Selects
+
+- The native `<select>`, styled like an input: height 32px, radius-sm (it is a form field; radius-md is for custom dropdown panels), surface background, label above. Focus ring and disabled state as for inputs.
+
+Switches
+
+- Track 32×16px, radius-full. Off: surface-hover with a text-muted border, so the control is visible on a surface. On: primary. Thumb 12px in text color.
+- The label sits next to the switch, and the whole row (at least 32px high) is the click target. An optional description under the label says what both states mean.
+- States: hover (border text when off, primary-hover when on), focus (2px primary ring with a 2px offset), disabled (50% opacity).
+- In a table whose column header shows the label, the switch label may be visually hidden, as for inputs.
+- For a setting that takes effect at once. A choice between more than two values is a select.
+
+Color inputs
+
+- The system color picker behind a 32px swatch (radius-sm, border; border text-muted on hover), with the hex value next to it in lower case in the Data role, so the choice is never shown by color alone.
+- The value is committed when the picker is left, not for every step while choosing.
+
+Icon buttons
+
+- A button that holds only an icon is 32×32px (`size="icon"`), usually Ghost, and always has an `aria-label` that names the row it acts on.
+
+Navigation
+
+- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted.
+- Current page: surface-hover background, text color and a straight 2px primary left edge, marked with `aria-current="page"`. Focus ring as for buttons.
+
+Status lines
+
+- A state shown as an icon and words together in the Small role: success (check), danger-text (cross), warning (triangle), text-muted (dash). `success` and `warning` may be used as text on bg and surface; both pass AA there.
+- A status that appears after an action sits in a `role="status"` element, so it is announced.
+
+Settings pages
+
+- One card per section, space-6 between cards (they are parts of one form, not separate sections of a page). The title is an `h2` in the H3 role, with an optional description of at most two lines in Small, text-muted. A longer explanation goes next to what it explains, as a Small caption.
+- Saving: a control saves at once (switch, select, color once the picker is left) or when its field is left or Enter is pressed (text, number). The outcome appears in the card header, to the right of the title: the status line "Elmentve" for four seconds, or the error until the next attempt. The slot takes no extra room, so nothing moves when it appears.
+- There is no page-wide save button. The page has no Primary button, with two exceptions that never show together: the save button of a list that is edited as a whole (the styles) while it has unsaved changes, next to the warning status "Nem mentett változások", and the retry button of the page's error state.
+- Leaving the page with unsaved changes asks for confirmation in a modal. Deleting something the user would have to find again (an API key) asks for confirmation too.
+- Folder field: a read-only box (bg background, border, 32px) that can take the focus and is named by its label. It shows the path in the Data role: the parent path truncates, the folder name with its slash never does. While the box has the focus the whole path is spelled out under it; it is also in the tooltip. "(alapérték)" follows a path that is the default. The folder is chosen with a Secondary button; a Ghost button of fixed width removes the choice, and keeps its place when there is nothing to remove, so rows align.
+- A table of fields uses `role="table"` rows with a header row in the Label role. Column widths are multiples of space-8.
+- Text inside a native `<option>` cannot take the Data role; numbers there use the hu-HU format only.
 
 Tables
 
@@ -143,6 +186,7 @@ Modals
 
 - Max width 480px, radius-lg, overlay rgba(0, 0, 0, 0.6).
 - Close on overlay click and on Escape, except while an apply phase is running.
+- Buttons sit at the bottom right: the one that cancels on the left, the one that confirms on the right. The confirming button is Danger when it deletes or discards. Focus starts on the cancelling button.
 
 Progress
 
@@ -186,5 +230,6 @@ Rules:
 
 - Tokens live in `src/renderer/styles/globals.css` as CSS variables with the exact names above, exposed to Tailwind through `@theme` (Tailwind v4). This file and globals.css change in the same commit.
 - Primitives live in `src/renderer/components/ui/` (shadcn/ui restyled with these tokens).
+- Layout widths are tokens too: `--container-sidebar` (220px), `--container-form` (720px), `--container-modal` (480px).
 - Cue colors in the UI come from Settings at runtime; the `--color-cue-*` tokens are only the defaults.
 - Anything not defined here: ask before inventing it.

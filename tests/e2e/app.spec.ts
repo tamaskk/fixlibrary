@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
 import Database from 'better-sqlite3'
 
@@ -35,6 +36,50 @@ test('app opens the Library page in a locked-down renderer', async () => {
       return { require: typeof scope.require, api: typeof scope.api }
     })
     expect(globals).toEqual({ require: 'undefined', api: 'object' })
+  } finally {
+    await app.close()
+  }
+})
+
+test('the window cannot be taken to another page', async () => {
+  // Another local file is the case that matters: it is what a file dropped on the
+  // window would load, and it needs no network.
+  const otherPage = join(userDataDir, 'other.html')
+  writeFileSync(otherPage, '<!doctype html><title>Other</title><h1>Other page</h1>')
+
+  const app = await launchApp()
+  try {
+    const page = await app.firstWindow()
+    await expect(page.getByRole('heading', { name: 'Könyvtár' })).toBeVisible()
+
+    // Playwright would wait for a navigation that never happens, so the window is
+    // driven and asked from the main process.
+    const state = await app.evaluate(async ({ BrowserWindow }, target) => {
+      const contents = BrowserWindow.getAllWindows()[0]?.webContents
+      if (!contents) throw new Error('no window')
+      // Resolves when the app has decided about the navigation, either way.
+      const decided = new Promise<string>((resolve) => {
+        contents.once('will-navigate', (event) =>
+          setImmediate(() => resolve(event.defaultPrevented ? 'blocked' : 'allowed'))
+        )
+      })
+      await contents.executeJavaScript(`window.location.href = ${JSON.stringify(target)}; null`)
+      const decision = await decided
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      return {
+        decision,
+        url: contents.getURL(),
+        heading: (await contents.executeJavaScript(
+          'document.querySelector("h1")?.textContent ?? null'
+        )) as string | null,
+        hasApi: (await contents.executeJavaScript('typeof window.api')) as string
+      }
+    }, pathToFileURL(otherPage).href)
+
+    expect(state.decision).toBe('blocked')
+    expect(state.url).toMatch(/renderer\/index\.html$/)
+    expect(state.heading).toBe('Könyvtár')
+    expect(state.hasApi).toBe('object')
   } finally {
     await app.close()
   }
