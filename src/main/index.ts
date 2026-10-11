@@ -1,7 +1,7 @@
 import { app, dialog, powerSaveBlocker, shell, BrowserWindow } from 'electron'
-import { existsSync } from 'fs'
-import { cpus, homedir } from 'os'
-import { join } from 'path'
+import { existsSync, realpathSync } from 'fs'
+import { cpus, homedir, tmpdir } from 'os'
+import { join, sep } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
 import { closeDatabase, getDatabase, initDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
@@ -154,6 +154,22 @@ function startPythonSidecar(): void {
 }
 
 /**
+ * True for a file that tests generated: under the system's temp folder, or in the
+ * synthetic fixtures of the repository. The stand-in rename works on nothing else,
+ * so a development build cannot rename a real library by accident.
+ */
+function isGeneratedFile(path: string): boolean {
+  const roots = [tmpdir(), join(app.getAppPath(), 'tests/fixtures/synthetic')].flatMap((root) => {
+    try {
+      return [realpathSync.native(root)]
+    } catch {
+      return []
+    }
+  })
+  return roots.some((root) => path.startsWith(root + sep))
+}
+
+/**
  * The stages a run can use. In development, `FIXLIB_DEMO_STAGES=1` adds two stages
  * that propose made-up values and one that renames the file to the proposed name once
  * the batch is approved, so a run can be tried and tested end to end while no real stage
@@ -163,7 +179,7 @@ function availableStages(): Stage[] {
   if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') return [...STAGES]
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])
   const usable = Number.isInteger(ms) && ms >= 1 && ms <= MAX_DEMO_STAGE_MS
-  return [...STAGES, ...createDemoStages(usable ? ms : undefined)]
+  return [...STAGES, ...createDemoStages(usable ? ms : undefined, { mayRename: isGeneratedFile })]
 }
 
 function registerLibraryAndPipeline(): void {
@@ -234,7 +250,7 @@ function registerLibraryAndPipeline(): void {
     batchFiles,
     // Until the startup work below is over, and during every scan.
     libraryBusy: () => !startupDone || scanner.isRunning(),
-    beforeApply: (batchId) => commitManualEdits(db, batchId),
+    onTrackApplied: (batchId, trackId) => commitManualEdits(db, batchId, trackId),
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })

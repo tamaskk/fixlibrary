@@ -482,7 +482,7 @@ describe('what the user set by hand', () => {
     testDatabase.db.update(batchItems).set({ approved: true }).run()
 
     // Act
-    commitManualEdits(testDatabase.db, batchId)
+    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
 
     // Assert
     expect(track(edited)).toMatchObject({
@@ -508,7 +508,7 @@ describe('what the user set by hand', () => {
       .run()
 
     // Act
-    commitManualEdits(testDatabase.db, batchId)
+    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
 
     // Assert
     expect(track(id)).toMatchObject({ title: 'old one', lockedFields: [] })
@@ -520,7 +520,7 @@ describe('what the user set by hand', () => {
     const rows = preview()
     rows.edit({ batchId, trackId: id, field: 'title', value: 'By Hand' })
     testDatabase.db.update(batchItems).set({ approved: true }).run()
-    commitManualEdits(testDatabase.db, batchId)
+    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
     setBatchStatus(testDatabase.db, batchId, 'applied')
     const next = createBatch(testDatabase.db, {
       type: 'run',
@@ -597,7 +597,7 @@ describe('what the second look at the preview found', () => {
     testDatabase.db.update(batchItems).set({ approved: true }).run()
 
     // Act
-    commitManualEdits(testDatabase.db, batchId)
+    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
 
     // Assert
     expect(track(id)).toMatchObject({ primaryStyleId: null, lockedFields: ['title'] })
@@ -632,5 +632,41 @@ describe('what the second look at the preview found', () => {
 
     // Assert
     expect(edited).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+})
+
+describe('a warning that an edit has made untrue', () => {
+  it('is taken back by the stage that reported it, and the warnings of other stages stay', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, { warnings: ['DUPLICATE', 'LOW_BITRATE'] })
+    // Reports a duplicate only for one title.
+    const duplicates: Stage = {
+      ...naming,
+      warnings: ['DUPLICATE'],
+      recompute: (_track, values) => (values.title === 'Twice' ? { warnings: ['DUPLICATE'] } : {})
+    }
+    const edits = preview([duplicates])
+
+    // Act
+    const fixed = edits.edit({ batchId, trackId: id, field: 'title', value: 'Once' })
+    const again = edits.edit({ batchId, trackId: id, field: 'title', value: 'Twice' })
+
+    // Assert
+    expect(fixed.ok && fixed.value.warnings).toEqual(['LOW_BITRATE'])
+    expect(again.ok && again.value.warnings).toEqual(['DUPLICATE', 'LOW_BITRATE'])
+  })
+})
+
+describe('a list of tracks to take out', () => {
+  it('is refused by its length, before its entries are looked at', () => {
+    // Arrange
+    const tooMany = Array.from({ length: 20_001 }, () => 'not even a number')
+
+    // Act
+    const result = preview().setExcluded({ batchId, trackIds: tooMany, excluded: true })
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
   })
 })

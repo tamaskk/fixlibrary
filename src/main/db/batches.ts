@@ -25,6 +25,8 @@ import {
   type BATCH_STATUSES,
   type PAUSE_REASONS
 } from './schema'
+import { createLogLimiter } from '../services/log-limiter'
+import { logger } from '../services/logger'
 import { trackErrorSchema, type TrackError } from '@shared/errors'
 import { mergeProposal, readProposal, type Proposal } from '@shared/preview'
 
@@ -140,6 +142,9 @@ export function deleteDiscardedBatches(db: AppDatabase): number {
 
 const recordSchema = z.record(z.string(), z.unknown())
 
+// One line per track at most would still be thousands for a broken stage.
+const logDropped = createLogLimiter((line) => logger.warn(line), { limit: 20, windowMs: 10_000 })
+
 /** An `after` with its fields and warnings replaced; whatever else it holds stays. */
 function withProposal(after: unknown, proposal: Proposal): Record<string, unknown> {
   const stored = recordSchema.safeParse(after)
@@ -170,7 +175,19 @@ export function mergeBatchItemProposal(
     const item = tx.select({ after: batchItems.after }).from(batchItems).where(where).get()
     if (!item) throw new Error('The batch has no item for this track')
     const stored = recordSchema.safeParse(item.after)
-    const merged = mergeProposal(readProposal(item.after), readProposal(proposal), lockedFields)
+    const proposed = readProposal(proposal)
+    // What a stage proposed and the schema refused is left out, and said once: a
+    // stage bug, or metadata from outside that is not fit to show or to write.
+    const raw = recordSchema.safeParse(proposal['fields'])
+    const dropped = Object.keys(raw.success ? raw.data : {}).filter(
+      (field) => !Object.hasOwn(proposed.fields ?? {}, field)
+    )
+    if (dropped.length > 0) {
+      logDropped(
+        `Batch ${batchId}, track ${trackId}: ${dropped.length} proposed fields were not valid and are left out`
+      )
+    }
+    const merged = mergeProposal(readProposal(item.after), proposed, lockedFields)
     const after = withProposal({ ...(stored.success ? stored.data : {}), ...proposal }, merged)
     tx.update(batchItems).set({ after }).where(where).run()
   })
@@ -384,11 +401,13 @@ export function approveBatchItems(db: AppDatabase, batchId: number): void {
   })
 }
 
-/** The items of a batch that the apply phase will write. */
-export function listApprovedBatchItems(db: AppDatabase, batchId: number): BatchItem[] {
-  return db
-    .select()
-    .from(batchItems)
-    .where(and(eq(batchItems.batchId, batchId), eq(batchItems.approved, true)))
-    .all()
+/** How many items of a batch the apply phase will write. */
+export function countApprovedBatchItems(db: AppDatabase, batchId: number): number {
+  return (
+    db
+      .select({ total: count() })
+      .from(batchItems)
+      .where(and(eq(batchItems.batchId, batchId), eq(batchItems.approved, true)))
+      .get()?.total ?? 0
+  )
 }

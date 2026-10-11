@@ -70,10 +70,13 @@ export interface OrchestratorDependencies {
    */
   libraryBusy?: () => boolean
   /**
-   * Called once the apply phase of a batch is certain to start, right before it
-   * does: what the user decided in the preview is made the tracks' own here.
+   * Called for a track once every apply stage of the batch is done for it, and for
+   * an approved track the batch has nothing to write for: what the user set in the
+   * preview is made the track's own here. Not called for a track whose apply stage
+   * failed or never ran, so its row never says more than its file. May be called
+   * again for the same track after a restart.
    */
-  beforeApply?: (batchId: number) => void
+  onTrackApplied?: (batchId: number, trackId: number) => void
   /** May be called very often; whoever passes it on limits how often. */
   onProgress?: (progress: RunProgress) => void
   /** True while jobs run or may start by themselves; the app must not sleep then. */
@@ -286,6 +289,22 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       }
     }
     job.status = status
+  }
+
+  /** Passes on that a track is written, once every apply job of the batch is done for it. */
+  function tellIfApplied(active: Run, trackId: number): void {
+    const jobs = [...(active.byTrack.get(trackId)?.values() ?? [])].filter(
+      (job) => job.stage.phase === 'apply'
+    )
+    if (!jobs.every((job) => job.status === 'done')) return
+    try {
+      dependencies.onTrackApplied?.(active.batchId, trackId)
+    } catch (error) {
+      // The files are written; only what the user typed is not on the track's row.
+      logger.error(
+        `Track ${trackId}: its manual values could not be stored: ${describeError(error)}`
+      )
+    }
   }
 
   function dependentsOf(active: Run, job: RunJob): RunJob[] {
@@ -521,6 +540,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       }
       finishJob(db, job.id, { status: 'done' })
       setStatus(active, job, 'done')
+      if (active.phase === 'apply') tellIfApplied(active, job.trackId)
 
       const durations = active.durations.get(job.stage.name) ?? []
       durations.push(now() - startedAt)
@@ -613,6 +633,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         if (!writable.has(job.trackId)) skipWithDependents(active, job)
       }
       active.writtenTracks = writable.size
+      // Tracks with nothing left to write: no apply stage in the batch, or all of
+      // them done before the app was closed.
+      for (const trackId of writable) tellIfApplied(active, trackId)
     }
     for (const job of active.phaseJobs) resolve(active, job)
 
@@ -708,8 +731,6 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       // A scan may have started while the room was measured.
       if (libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
 
-      // If this fails, the batch stays in its preview and nothing has started.
-      dependencies.beforeApply?.(batchId)
       setBatchStatus(db, batchId, 'applying')
       logger.info(`Batch ${batchId}: the apply phase started`)
       begin({ ...batch, status: 'applying' }, 'apply', null)

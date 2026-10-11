@@ -2,6 +2,7 @@
 // editing and approval before anything is written.
 import { z } from 'zod'
 import type { TrackError } from './errors'
+import { unusableNameReason, UNSAFE_TEXT } from './file-names'
 import { FILE_WARNINGS } from './file-ops'
 
 /** The fields a preview shows. The column sets of the batch types choose from these. */
@@ -38,27 +39,19 @@ export const LOW_CONFIDENCE_BELOW = 0.7
 // As long as tag text read by a scan may be.
 const MAX_FIELD_TEXT = 300
 
-// What text of a field must not hold: control characters, line breaks, and the
-// invisible characters that turn the reading direction around or take no room. The
-// same rule as for tag text read by a scan, plus the zero-width ones.
-const UNSAFE_FIELD_TEXT =
-  /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u200b\u2060\ufeff]/u
-
 // One clean line; an empty text is "no value".
 const textValue = z
   .string()
   .max(MAX_FIELD_TEXT)
-  .refine((text) => !UNSAFE_FIELD_TEXT.test(text))
+  .refine((text) => !UNSAFE_TEXT.test(text))
   .transform((text) => (text.trim() === '' ? null : text.trim()))
   .nullable()
 
-// A file name is a name, never a path: no separator, and not a dot name. Which names
-// a library file may have beyond that is decided where the file is renamed.
+// A file name is a name a library file may have, never a path: the rule the rename
+// itself applies, so the preview shows no name that would be refused afterwards.
 const fileNameValue = z
   .string()
-  .min(1)
-  .max(255)
-  .refine((name) => !UNSAFE_FIELD_TEXT.test(name) && !/[/:]/.test(name) && !/^\.+$/.test(name))
+  .refine((name) => unusableNameReason(name, 'file') === null)
   .nullable()
 
 /** What a value of each field may be. Used for proposals of stages and edits of the user alike. */
@@ -234,7 +227,12 @@ export const MAX_EXCLUDE_TRACKS = 20_000
 
 export const previewExcludeSchema = z.strictObject({
   batchId: z.number().int().positive(),
-  trackIds: z.array(z.number().int().positive()).min(1).max(MAX_EXCLUDE_TRACKS),
+  // The length first: a list of millions is refused before its entries are looked at.
+  trackIds: z
+    .array(z.unknown())
+    .min(1)
+    .max(MAX_EXCLUDE_TRACKS)
+    .pipe(z.array(z.number().int().positive())),
   excluded: z.boolean()
 })
 export type PreviewExclude = z.input<typeof previewExcludeSchema>

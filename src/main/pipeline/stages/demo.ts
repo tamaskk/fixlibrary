@@ -1,9 +1,19 @@
 import { basename, dirname, extname, join } from 'path'
 import type { Track } from '../../db/tracks'
+import { AppError } from '@shared/errors'
 import type { PreviewField, PreviewValue, Proposal } from '@shared/preview'
 import type { Stage } from './stage'
 
 const DEFAULT_DEMO_STAGE_MS = 200
+
+export interface DemoStageOptions {
+  /**
+   * Whether the stand-in rename may touch the file at this path. It renames real
+   * files, so whoever adds these stages says which ones are only generated test
+   * files. Without it, the stage renames nothing.
+   */
+  mayRename?: (path: string) => boolean
+}
 
 /** Waits, and stops waiting as soon as the stage is told to stop. */
 function wait(ms: number, signal: AbortSignal): Promise<void> {
@@ -60,9 +70,14 @@ function demoLookup(track: Track): Proposal {
  * call nothing; two of them only wait and propose made-up values, so a run can be
  * started, paused, cancelled, previewed and approved in the running app. The third
  * one renames the file to the proposed name, through the same backup and undo as a
- * real stage. They are only ever added in development (see `src/main/index.ts`).
+ * real stage, and only where `mayRename` allows it. They are only ever added in
+ * development (see `src/main/index.ts`).
  */
-export function createDemoStages(ms: number = DEFAULT_DEMO_STAGE_MS): Stage[] {
+export function createDemoStages(
+  ms: number = DEFAULT_DEMO_STAGE_MS,
+  options: DemoStageOptions = {}
+): Stage[] {
+  const mayRename = options.mayRename ?? ((): boolean => false)
   return [
     {
       name: 'demoAnalyze',
@@ -102,11 +117,19 @@ export function createDemoStages(ms: number = DEFAULT_DEMO_STAGE_MS): Stage[] {
       dependsOn: ['demoLookup'],
       selectable: false,
       timeoutMs: 60_000,
-      run: async ({ files, proposal }) => {
+      run: async ({ files, proposal }, track) => {
         if (!files) throw new Error('an apply stage must be given its files')
         const fileName = proposal.fields?.fileName?.value
         if (typeof fileName !== 'string') return
+        // A stand-in must never rename a file of a real library.
+        if (!mayRename(track.path)) {
+          throw new AppError('INVALID_INPUT', 'the demo stage renames only generated test files')
+        }
         const working = await files.workingPath()
+        // It renames and nothing else: the kind of file stays what it is.
+        if (extname(fileName).toLowerCase() !== extname(working).toLowerCase()) {
+          throw new AppError('INVALID_INPUT', 'the proposed name has another extension')
+        }
         const moved = await files.move(join(dirname(working), fileName))
         return moved.collided ? { proposal: { warnings: ['NAME_COLLISION'] } } : undefined
       }

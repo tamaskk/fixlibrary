@@ -8,9 +8,8 @@ import {
   cancelPreviewBatches,
   countBatchItems,
   findPreviewBatch,
-  getBatch,
   getBatchItem,
-  listApprovedBatchItems,
+  countApprovedBatchItems,
   listBatchItems,
   setBatchItemProposal,
   setBatchItemsExcluded,
@@ -20,6 +19,8 @@ import type { AppDatabase } from '../db/connection'
 import { listJobStageNames } from '../db/jobs'
 import { listStyles } from '../db/styles'
 import { getTrackById, updateTrack, type Track, type TrackChanges } from '../db/tracks'
+import { describeError } from '../services/error-text'
+import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
 import { trackErrorSchema, type Result } from '@shared/errors'
 import {
@@ -50,14 +51,23 @@ import type { Stage } from './stages/stage'
 
 // As long as a file name can be on macOS.
 const MAX_NAME_LENGTH = 255
+// As long as a field of a proposal may be.
+const MAX_SHOWN_TEXT = 300
 
 // What a row needs of the track as it was before the batch. Read leniently: a field
 // that is missing or odd shows as empty and never keeps the row from being shown.
+// For display only, like the file name: one line, and no longer than a field may be.
+const shownText = z
+  .string()
+  .transform((text) => toOneLine(text, MAX_SHOWN_TEXT))
+  .nullable()
+  .catch(null)
+
 const beforeSchema = z.object({
   path: z.string().catch(''),
-  artist: z.string().nullable().catch(null),
-  title: z.string().nullable().catch(null),
-  mix: z.string().nullable().catch(null),
+  artist: shownText,
+  title: shownText,
+  mix: shownText,
   primaryStyleId: z.number().nullable().catch(null),
   energy: z.number().nullable().catch(null)
 })
@@ -123,37 +133,44 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
 }
 
 /**
- * Before the apply phase of a batch starts: what the user typed in its preview
+ * Once a track of a batch is written: what the user typed for it in the preview
  * becomes the track's own, and those fields are locked, so that no later automatic
- * run proposes anything else for them. Only for the tracks that are applied.
+ * run or rescan puts anything else in their place. Only for a track that was
+ * approved. Doing it again changes nothing.
  */
-export function commitManualEdits(db: AppDatabase, batchId: number): void {
-  const styleIds = new Set(listStyles(db).map((style) => style.id))
+export function commitManualEdits(db: AppDatabase, batchId: number, trackId: number): void {
   db.transaction((tx) => {
-    for (const item of listApprovedBatchItems(tx, batchId)) {
-      const fields = readProposal(item.after).fields ?? {}
-      const manual = EDITABLE_PREVIEW_FIELDS.filter((field) => fields[field]?.source === 'manual')
-      if (manual.length === 0) continue
-      const track = getTrackById(tx, item.trackId, new Set())
-      if (!track) continue
-      const committed = new Set<string>(manual)
-      const changes: TrackChanges = {}
-      if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
-      if (fields.title?.source === 'manual') changes.title = fields.title.value
-      if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
-      if (fields.energy?.source === 'manual') changes.energy = fields.energy.value
-      if (fields.styleId?.source === 'manual') {
-        const styleId = fields.styleId.value
-        // A style that was deleted since the edit cannot be the track's, and a value
-        // the track did not get is not locked either.
-        if (styleId === null || styleIds.has(styleId)) changes.primaryStyleId = styleId
-        else committed.delete('styleId')
-      }
-      changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
-      updateTrack(tx, item.trackId, changes)
+    const item = getBatchItem(tx, batchId, trackId)
+    if (!item || !item.approved) return
+    const fields = readProposal(item.after).fields ?? {}
+    const manual = EDITABLE_PREVIEW_FIELDS.filter((field) => fields[field]?.source === 'manual')
+    if (manual.length === 0) return
+    const track = getTrackById(tx, trackId, new Set())
+    if (!track) return
+    const committed = new Set<string>(manual)
+    const changes: TrackChanges = {}
+    if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
+    if (fields.title?.source === 'manual') changes.title = fields.title.value
+    if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
+    if (fields.energy?.source === 'manual') changes.energy = fields.energy.value
+    if (fields.styleId?.source === 'manual') {
+      const styleId = fields.styleId.value
+      const known = styleId === null || listStyles(tx).some((style) => style.id === styleId)
+      // A style that was deleted since the edit cannot be the track's, and a value
+      // the track did not get is not locked either.
+      if (known) changes.primaryStyleId = styleId
+      else committed.delete('styleId')
     }
+    changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
+    updateTrack(tx, trackId, changes)
   })
 }
+
+// A stage that throws on every edit must not fill the log.
+const logRecompute = createLogLimiter((line) => logger.error(line), {
+  limit: 20,
+  windowMs: 10_000
+})
 
 export interface PreviewDependencies {
   db: AppDatabase
@@ -214,11 +231,18 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       if (!stage.recompute || stage.phase !== 'compute' || !ran.has(stage.name)) continue
       try {
         const next = stage.recompute(track, valuesAfter(before, proposal))
+        if (!next) continue
+        // The warnings a stage reports are its own to take back: a name that was
+        // taken, or a duplicate, may be neither after the edit.
+        const owned = stage.warnings ?? []
+        const kept = { ...proposal, warnings: proposal.warnings?.filter((w) => !owned.includes(w)) }
         // What the user typed stays, as in a run: a stage never writes over it.
-        if (next) proposal = mergeProposal(proposal, readProposal(next), track.lockedFields)
+        proposal = mergeProposal(kept, readProposal(next), track.lockedFields)
       } catch (error) {
         // The edit itself is kept; only what follows from it is not brought up to date.
-        logger.error(`Stage ${stage.name} could not propose again for track ${track.id}`, error)
+        logRecompute(
+          `Stage ${stage.name} could not propose again for track ${track.id}: ${describeError(error)}`
+        )
       }
     }
     return proposal
@@ -231,8 +255,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       const parsed = previewRowsRequestSchema.safeParse(request)
       if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
       const { batchId, offset, limit } = parsed.data
-      const batch = getBatch(db, batchId)
-      if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
+      const batch = findPreviewBatch(db)
+      if (!batch || batch.id !== batchId) return { ok: false, code: 'INVALID_INPUT' }
       return {
         ok: true,
         value: {
@@ -287,7 +311,7 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       try {
         approveBatchItems(db, batchId)
         // An approval of nothing would end as a batch that is "applied" and did nothing.
-        if (listApprovedBatchItems(db, batchId).length === 0) {
+        if (countApprovedBatchItems(db, batchId) === 0) {
           return { ok: false, code: 'INVALID_INPUT' }
         }
         // Asked here as well as by the orchestrator: the page shows the numbers.

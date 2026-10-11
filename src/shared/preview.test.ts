@@ -92,7 +92,10 @@ describe('readProposal', () => {
     ['a path', '../Other/x.mp3'],
     ['a name with a colon', 'a:b.mp3'],
     ['a dot name', '..'],
-    ['a name that turns the reading direction around', 'a\u202eb.mp3']
+    ['a name that turns the reading direction around', 'a\u202eb.mp3'],
+    ['a name without an audio extension', 'Artist - Title'],
+    ['a hidden name', '.Artist - Title.mp3'],
+    ['a name with a zero-width joiner', 'a\u200db.mp3']
   ])('takes no file name that is %s', (_what, value) => {
     // Act
     const proposal = readProposal({ fields: { fileName: { value, source: 'lookup' } } })
@@ -164,7 +167,7 @@ describe('the value of a field', () => {
     expect(empty).toBeNull()
   })
 
-  it.each(['a\u202eb', 'a\u200bb', 'a\u2066b', 'a\tb'])(
+  it.each(['a\u202eb', 'a\u200bb', 'a\u2066b', 'a\tb', 'a\u200cb', 'a\u00adb', 'a\u3164b'])(
     'cannot be text with an invisible character (%j)',
     (text) => {
       // Act

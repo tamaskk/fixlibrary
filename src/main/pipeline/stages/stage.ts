@@ -1,7 +1,7 @@
 import type { Track } from '../../db/tracks'
 import type { TrackFiles } from '../batch-files'
 import type { JobPhase, Resource } from '@shared/pipeline'
-import type { PreviewField, PreviewValue, Proposal } from '@shared/preview'
+import type { PreviewField, PreviewValue, PreviewWarning, Proposal } from '@shared/preview'
 
 export interface StageContext {
   /**
@@ -54,4 +54,9 @@ export interface Stage {
    * file, no network, no database.
    */
   recompute?: (track: Track, values: Record<PreviewField, PreviewValue>) => Proposal | void
+  /**
+   * The warnings this stage reports. When it proposes again after an edit, those are
+   * replaced by what it reports then; the warnings of other stages stay.
+   */
+  warnings?: readonly PreviewWarning[]
 }
