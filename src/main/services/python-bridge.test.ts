@@ -28,6 +28,7 @@ function startBridge(overrides: Partial<PythonBridgeOptions> = {}): PythonBridge
     cwd: PYTHON_DIR,
     logDir,
     log: () => {},
+    onSidecarOutput: () => {},
     ...overrides
   })
   bridge.start()
@@ -136,6 +137,54 @@ describe('python bridge with a stand-in process', () => {
 
     // Assert
     expect(error).toMatchObject({ code: 'TIMEOUT' })
+  })
+
+  it('keeps what the sidecar says about an error out of the error, and logs it as one line', async () => {
+    // Arrange
+    const logged: string[] = []
+    const failWithDetail =
+      'process.stdin.once("data", (line) => console.log(JSON.stringify({ jsonrpc: "2.0", id: JSON.parse(line).id, error: { code: -32603, message: "FileNotFoundError: /Volumes/DJ SSD/Private/track.mp3\\nffmpeg -i x" } }))); setInterval(() => {}, 1000)'
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', failWithDetail],
+      shutdownGraceMs: 50,
+      log: (message) => logged.push(message)
+    })
+
+    // Act
+    const error = (await sidecar.call('ping', {}).catch((caught: unknown) => caught)) as Error
+
+    // Assert
+    expect(error).toMatchObject({ code: 'PYTHON_ERROR' })
+    expect(error.message).toBe('ping: the sidecar reported an error (-32603)')
+    expect(logged).toContain(
+      'ping failed (-32603): FileNotFoundError: /Volumes/DJ SSD/Private/track.mp3 ffmpeg -i x'
+    )
+  })
+
+  it('writes at most 200 lines of sidecar output in ten seconds, then says how many it held back', async () => {
+    // Arrange
+    const output: string[] = []
+    let clock = 0
+    const chatty =
+      'for (let i = 0; i < 500; i += 1) console.error("progress " + i); process.stdin.once("data", (line) => { console.error("after the pause"); console.log(JSON.stringify({ jsonrpc: "2.0", id: JSON.parse(line).id, result: { version: "0.0.0" } })) }); setInterval(() => {}, 1000)'
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', chatty],
+      shutdownGraceMs: 50,
+      onSidecarOutput: (line) => output.push(line),
+      now: () => clock
+    })
+    await vi.waitFor(() => expect(output).toHaveLength(200))
+
+    // Act
+    clock = 10_000
+    await sidecar.call('ping', {})
+    await vi.waitFor(() => expect(output.at(-1)).toBe('after the pause'))
+
+    // Assert
+    expect(output.slice(0, 2)).toEqual(['progress 0', 'progress 1'])
+    expect(output.slice(-2)).toEqual(['(300 lines suppressed)', 'after the pause'])
   })
 
   it('rejects a result with the wrong shape', async () => {

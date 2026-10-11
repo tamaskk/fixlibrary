@@ -66,4 +66,5 @@ There are no accounts and no personal data of other people.
 
 - Contact: the repository owner (tamaskk).
 - A leaked secret: rotate first, then clean the history.
+- Looking for what happened: `main.log` and `python.log` in the log folder, which the Settings page opens ("Logmappa megnyitása"). They hold stage errors and tool output, never a key. That rests on rules, not on a filter: a key is sent in a request body or header and never in a URL; code that talks to a service catches its own errors and raises one with fixed text; a request, response or config object is never passed to the logger (an object is written out in full, an `Error` only as its stack). The first lookup client (task 14) adds masking of the stored key values as a second line of defence.
 - A bad batch on real files: stop, use "Undo last batch", and do not apply another batch (it would delete the backups) until the cause is understood.

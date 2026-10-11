@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from typing import Any, TextIO
 
-from fixlib_py.log import configure_logging
+from fixlib_py.logging_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 

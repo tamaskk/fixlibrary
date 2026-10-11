@@ -9,16 +9,22 @@ import {
   type RpcMethods,
   type RpcProgress
 } from '@shared/rpc'
+import { toOneLine } from '@shared/text'
+import { DEFAULT_RPC_TIMEOUT_MS } from '@shared/timeouts'
 import { createLineReader } from './line-reader'
+import { createLogLimiter } from './log-limiter'
+import { logger } from './logger'
 
-// T-007 moves the per-stage timeouts to src/shared/timeouts.ts.
-const DEFAULT_CALL_TIMEOUT_MS = 30_000
 const DEFAULT_RESTART_DELAYS_MS = [1000, 2000, 4000]
 const DEFAULT_MAX_RESTARTS = 5
 const DEFAULT_SHUTDOWN_GRACE_MS = 3000
 const DEFAULT_STABLE_UPTIME_MS = 10_000
 const DEFAULT_MAX_LINE_LENGTH = 1024 * 1024
-const MAX_LOGGED_STDERR_LENGTH = 4000
+const MAX_LOGGED_STDERR_LENGTH = 1000
+const MAX_LOGGED_ERROR_LENGTH = 500
+// The sidecar shares main.log with the app: a tool's progress display must not be
+// able to push the app's own history out of it.
+const SIDECAR_OUTPUT_LIMIT = { limit: 200, windowMs: 10_000 }
 
 // The sidecar gets a fixed set of variables, so nothing else in the app's
 // environment (lookup API keys in development) can reach it.
@@ -33,7 +39,11 @@ export interface PythonBridgeOptions {
   cwd?: string
   logDir: string
   onProgress?: (progress: RpcProgress) => void
+  /** What the bridge itself has to say: crashes, restarts, rejected lines. */
   log?: (message: string) => void
+  /** One line the sidecar wrote to stderr. */
+  onSidecarOutput?: (line: string) => void
+  now?: () => number
   /** Wait before restart 1, 2, 3…; the last value repeats. */
   restartDelaysMs?: readonly number[]
   /** Restarts in a row before the bridge gives up. */
@@ -77,7 +87,16 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
   const shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS
   const stableUptimeMs = options.stableUptimeMs ?? DEFAULT_STABLE_UPTIME_MS
   const maxLineLength = options.maxLineLength ?? DEFAULT_MAX_LINE_LENGTH
-  const log = options.log ?? ((message: string) => console.error(`[python-bridge] ${message}`))
+  const log = options.log ?? ((message: string) => logger.warn(`[python-bridge] ${message}`))
+  // The sidecar keeps its own python.log; its lines are also in the main log, in order
+  // with what the app was doing at the time.
+  const writeSidecarOutput = createLogLimiter(
+    options.onSidecarOutput ?? ((line: string) => logger.info(`[python] ${line}`)),
+    { ...SIDECAR_OUTPUT_LIMIT, now: options.now }
+  )
+  // One clean line each: what a tool prints cannot forge or garble log lines.
+  const onSidecarOutput = (line: string): void =>
+    writeSidecarOutput(toOneLine(line, MAX_LOGGED_STDERR_LENGTH))
 
   const pending = new Map<number, PendingCall>()
   let state: PythonBridgeState = 'idle'
@@ -152,7 +171,9 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
     }
     if (message.id === null) {
       if (message.kind === 'error') {
-        log(`sidecar rejected a request: ${message.message} (${message.code})`)
+        log(
+          `sidecar rejected a request (${message.code}): ${toOneLine(message.message, MAX_LOGGED_ERROR_LENGTH)}`
+        )
       }
       return
     }
@@ -161,8 +182,16 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
     if (!call) return
 
     if (message.kind === 'error') {
+      // What the sidecar says can hold a path or a tool's output: it goes to the log,
+      // cut down to one line, and the error itself carries the app's own words.
+      log(
+        `${call.method} failed (${message.code}): ${toOneLine(message.message, MAX_LOGGED_ERROR_LENGTH)}`
+      )
       call.reject(
-        new AppError('PYTHON_ERROR', `${call.method}: ${message.message} (${message.code})`)
+        new AppError(
+          'PYTHON_ERROR',
+          `${call.method}: the sidecar reported an error (${message.code})`
+        )
       )
       return
     }
@@ -245,8 +274,8 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
       'data',
       createLineReader({
         maxLineLength: MAX_LOGGED_STDERR_LENGTH,
-        onLine: (line) => log(`sidecar: ${line}`),
-        onOverflow: () => log('sidecar: (dropped an overlong line)')
+        onLine: onSidecarOutput,
+        onOverflow: () => onSidecarOutput('(dropped an overlong line)')
       })
     )
     // A write to a sidecar that just died fails here; the exit handler deals with it.
@@ -288,7 +317,7 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
         return
       }
       const id = nextId++
-      const timeoutMs = callOptions.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
+      const timeoutMs = callOptions.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS
       const timer = setTimeout(() => {
         if (settle(id)) {
           reject(new AppError('TIMEOUT', `${method}: no answer within ${timeoutMs} ms`))

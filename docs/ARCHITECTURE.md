@@ -73,7 +73,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
       lib/               pure renderer helpers
     shared/              types and pure functions used by main, preload and renderer: ipc.ts, rpc.ts, errors.ts, keys.ts
   python/
-    fixlib_py/           sidecar package: server.py, log.py, analysis/, tags.py, convert.py, normalize.py
+    fixlib_py/           sidecar package: server.py, logging_setup.py, analysis/, tags.py, convert.py, normalize.py
     tests/               pytest
     spike/               T-002 environment spike script; results in python/SPIKE.md
     runtime/             python-build-standalone CPython (gitignored)
@@ -181,9 +181,14 @@ Python sidecar:
 
 Errors:
 
-- A failing track never stops a batch: it is recorded as `TrackError { trackId, stage, code, message }` and listed on the "Hibák" tab.
-- Every stage has a timeout from `src/shared/timeouts.ts`.
-- Logs go to `~/Library/Logs/FixLibrary/`. The UI shows a plain Hungarian message, never a stack trace or raw tool output.
+- A failing track never stops a batch: it is recorded as `TrackError { trackId, stage, code, message }` and listed on the "Hibák" tab. `pipeline/run-stage.ts` is the one place that turns a failure into a `TrackError`: it runs one stage for one track, never throws, and aborts the work when its time is up (`TIMEOUT`). The orchestrator (task 9) stores the error in `batch_items.error`; the preview (task 11) lists it.
+- Every stage has a timeout from `src/shared/timeouts.ts`, the only place where the limits are set.
+- The message of a `TrackError` is always fixed text of the app, chosen by the error's code (`TRACK_ERROR_MESSAGES`). The text of the error itself, what the sidecar reported and what a tool printed go to the log only, each cut down to one clean line. An error the app did not raise itself is recorded as `UNEXPECTED`.
+- Work that is abandoned on a timeout is told to stop through an abort signal. Its late result is ignored, but what it still does is not undone, so work that writes a file must stop on abort and never rename a temp file into place afterwards.
+- Everything in the main process logs through `services/logger.ts`, into `main.log` in the app's log folder (`~/Library/Logs/FixLibrary/`; Electron spells the folder `fixlibrary`, which is the same folder on a case-insensitive disk). The file rotates at 10 MB and five files are kept. The sidecar writes its own `python.log` there with the same limits, and the bridge copies the sidecar's stderr lines into `main.log` with a `[python]` prefix, so both sides can be read in order. That copy is limited to 200 lines in ten seconds (what is held back is counted in one line), so a tool's progress output cannot push the app's own history out of the log. Both files are readable by the user only. If the log folder cannot be used, the app logs to the console and starts anyway.
+- An uncaught exception in the main process is logged, the user is told in a dialog, and the app restarts (or stops, if it has run for less than 30 seconds, so a crash at startup cannot loop). The app never runs on in an unknown state while it may be writing library files. An unhandled promise rejection is only logged.
+- `services/logger.ts` and the pure helpers in `src/shared` may be imported from every layer of the main process, including `db/`. Only `logger.ts` imports `electron-log`, and only its `/node` entry: the main entry registers IPC handlers outside `ipc/handle.ts`. ESLint enforces this.
+- The UI shows a plain Hungarian message, never a stack trace or raw tool output.
 
 ## 05 Boundaries
 

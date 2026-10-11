@@ -14,6 +14,7 @@ import { createToolChecker } from './pipeline/system'
 import { resolveToolLocations } from './services/binaries'
 import { readEnvFile } from './services/env-file'
 import { keychainCipher } from './services/keychain'
+import { logger, startFileLogging } from './services/logger'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 
 let pythonBridge: PythonBridge | null = null
@@ -30,7 +31,7 @@ function openAppDatabase(): boolean {
     return true
   } catch (error) {
     // Without its state the app would re-process the library, so it does not start.
-    console.error('The database could not be opened', error)
+    logger.error('The database could not be opened', error)
     // The file holds the undo records, so the user is told where it is and to keep it.
     dialog.showErrorBox(
       'Az adatbázis nem nyitható meg',
@@ -47,9 +48,31 @@ function readDevelopmentSecrets(): Record<string, string> {
     // Only the three key names are kept; nothing else of the file stays in memory.
     return pickSecretEnv(readEnvFile(join(app.getAppPath(), '.env.local')))
   } catch (error) {
-    console.error('The development env file could not be read', error)
+    logger.error('The development env file could not be read', error)
     return {}
   }
+}
+
+// An app that crashes while starting must not relaunch itself in a loop.
+const MIN_UPTIME_FOR_RELAUNCH_S = 30
+
+/**
+ * After an uncaught exception the app is in an unknown state, and it must not go on
+ * like that while it may be writing library files. The error is already in the log;
+ * the user is told, and the app starts again (or stops, if it has only just started).
+ */
+function stopAfterUncaughtException(): void {
+  const relaunch = process.uptime() >= MIN_UPTIME_FOR_RELAUNCH_S
+  dialog.showErrorBox(
+    'Váratlan hiba történt',
+    relaunch
+      ? 'Az alkalmazás újraindul. A részletek a logban vannak.'
+      : 'Az alkalmazás leáll. A részletek a logban vannak.'
+  )
+  closeDatabase()
+  if (relaunch) app.relaunch()
+  // The sidecar ends by itself when its input closes.
+  app.exit(1)
 }
 
 function registerSettingsAndSystemIpc(): void {
@@ -86,7 +109,7 @@ function startPythonSidecar(): void {
   const pythonDir = join(app.getAppPath(), 'python')
   const pythonPath = join(pythonDir, '.venv/bin/python')
   if (app.isPackaged || !existsSync(pythonPath)) {
-    console.error('Python sidecar not started: no development environment in python/.venv')
+    logger.error('Python sidecar not started: no development environment in python/.venv')
     return
   }
 
@@ -94,8 +117,8 @@ function startPythonSidecar(): void {
   pythonBridge.start()
   pythonBridge
     .call('ping', {})
-    .then(({ version }) => console.info(`Python sidecar ready, fixlib_py ${version}`))
-    .catch((error: unknown) => console.error('Python sidecar did not answer ping', error))
+    .then(({ version }) => logger.info(`Python sidecar ready, fixlib_py ${version}`))
+    .catch((error: unknown) => logger.error('Python sidecar did not answer ping', error))
 }
 
 function createWindow(): void {
@@ -163,6 +186,13 @@ app.on('second-instance', () => {
 
 app.whenReady().then(() => {
   if (!isOnlyInstance) return
+
+  // First of all, so that whatever goes wrong during startup is in the log file.
+  startFileLogging(app.getPath('logs'), {
+    mirrorToConsole: is.dev,
+    onUncaughtException: stopAfterUncaughtException
+  })
+  logger.info(`FixLibrary ${app.getVersion()} starting`)
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
