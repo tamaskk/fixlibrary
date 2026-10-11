@@ -28,7 +28,8 @@ There are no accounts and no personal data of other people.
 - There is no login and no session. The only principal is the local macOS user.
 - The renderer has no privileges of its own: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, and a CSP of `default-src 'self'`.
 - The preload exposes named functions only. It never exposes `ipcRenderer`, a generic `invoke(channel, …)`, or a function that takes a file path to execute or a command to run.
-- Navigation and new windows are denied; only `http(s)` links are handed to the OS browser.
+- Navigation and new windows are denied; only `http(s)` links are handed to the OS browser. The window stays on the app's own page (`will-navigate`, `will-redirect` and webviews are blocked), so a dropped file or a changed `location` cannot load another document into the window that holds `window.api`.
+- Every IPC handler checks that the call comes from the main frame of the app's own page, and validates its arguments, before it runs.
 - Custom protocols (such as the planned `fixlib-audio`) serve only files that belong to a track in the database, resolved by track id, never by a path from the renderer.
 
 ## 04 Secrets
@@ -37,6 +38,9 @@ There are no accounts and no personal data of other people.
 - The packaged app ignores `.env` files.
 - CI and the release workflow need no API keys. Do not add one.
 - Rotation: the user regenerates the key at AcoustID or Discogs and re-enters it in Settings.
+- What the encryption covers: the database file at rest. A copy or backup of the file, another macOS user, or a process that can only read files does not get the keys. What it does not cover: code running as the same user. The app is ad-hoc signed and not notarized, so such code can start the app's own binary and ask the Keychain itself. The encryption gives confidentiality only: it does not detect a changed ciphertext, which is why each key is encrypted together with its name.
+- The Settings page can save, replace, delete and test a key, but never read one back. The "Teszt" request sends the key in the request body (AcoustID) or the `Authorization` header (Discogs), never in a URL, to a fixed host, without following redirects. No second request goes to a service within five seconds, and saving or deleting a key does not reset that.
+- `.env.local` is read into memory in development only and is never copied into `process.env`.
 
 ## 05 Input, output, injection
 

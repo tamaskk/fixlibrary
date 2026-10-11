@@ -5,10 +5,7 @@ import { execFile } from 'child_process'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-
-export const TOOL_NAMES = ['yt-dlp', 'ffmpeg', 'fpcalc', 'mp3gain'] as const
-
-export type ToolName = (typeof TOOL_NAMES)[number]
+import { TOOL_NAMES, type ToolCheck, type ToolName } from '@shared/tools'
 
 export interface ToolLocations {
   /** `resources/bin` in development, `Resources/bin` in the packaged app. */
@@ -22,12 +19,6 @@ export interface ToolCommand {
   command: string
   args: string[]
 }
-
-export type ToolCheckFailure = 'missing' | 'timeout' | 'failed' | 'unrecognized'
-
-export type ToolCheck =
-  | { name: ToolName; ok: true; version: string }
-  | { name: ToolName; ok: false; reason: ToolCheckFailure }
 
 // `-I` keeps the interpreter isolated: no PYTHON* variables, no user site-packages,
 // and the working directory is not on the module search path.

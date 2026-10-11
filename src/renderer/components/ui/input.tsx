@@ -4,16 +4,30 @@ import { cn } from 'cn'
 type InputProps = Omit<React.ComponentProps<'input'>, 'id'> & {
   /** Always visible, above the field. The placeholder is a hint, never the label. */
   label: string
+  /**
+   * Hides the label visually, for a field in a table whose column header already
+   * shows it. The label stays in place for assistive technology.
+   */
+  labelHidden?: boolean
   error?: string
 }
 
-export function Input({ className, label, error, ...props }: InputProps): React.JSX.Element {
+export function Input({
+  className,
+  label,
+  labelHidden = false,
+  error,
+  ...props
+}: InputProps): React.JSX.Element {
   const id = React.useId()
   const errorId = `${id}-error`
 
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-label text-text-muted uppercase">
+      <label
+        htmlFor={id}
+        className={cn('text-label text-text-muted uppercase', labelHidden && 'sr-only')}
+      >
         {label}
       </label>
       <input

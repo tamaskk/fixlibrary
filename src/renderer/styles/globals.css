@@ -66,6 +66,7 @@
 
   --container-modal: 480px;
   --container-form: 720px;
+  --container-sidebar: 220px;
 }
 
 @layer base {
