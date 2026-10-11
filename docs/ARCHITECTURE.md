@@ -74,9 +74,11 @@ Do not add a dependency that overlaps with a row in this table without asking.
     shared/              types and pure functions used by main, preload and renderer: ipc.ts, rpc.ts, errors.ts, keys.ts
   python/
     fixlib_py/           sidecar package: server.py, analysis/, tags.py, convert.py, normalize.py
-    pyproject.toml, uv.lock
+    spike/               T-002 environment spike script; results in python/SPIKE.md
+    runtime/             python-build-standalone CPython (gitignored)
+    pyproject.toml, uv.lock   locked for arm64 macOS only
   resources/bin/         downloaded binaries (gitignored)
-  scripts/               fetch-binaries.sh, build-python.sh, build-dmg.sh
+  scripts/               fetch-python-runtime.sh, fetch-binaries.sh, build-python.sh, build-dmg.sh
   tests/
     e2e/                 Playwright tests against the built app
     fixtures/synthetic/  generated audio (committed)
@@ -164,7 +166,7 @@ The agent must not "fix" these.
 ## 07 Scalability and future considerations
 
 - Expected scale for v1: one user, one library of about 3000 tracks (25–35 GB) on an external drive, one machine (MacBook Pro M1). Build for this, not for 100x.
-- Known limits: one Demucs job at a time, so the first full run takes half a day to a day; one Claude call at a time in batches of 20; the Claude subscription limit can pause a run; exFAT drives make backups real copies; the full `.dmg` must stay under 2 GiB (GitHub Releases file limit).
+- Known limits: one Demucs job at a time, so the first full run takes half a day to a day (the T-002 spike projects 37 to 80 hours of Demucs time from synthetic input, see `python/SPIKE.md`; confirm on real tracks in T-028); one Claude call at a time in batches of 20; the Claude subscription limit can pause a run; exFAT drives make backups real copies; the full `.dmg` must stay under 2 GiB (GitHub Releases file limit).
 - Planned next: nothing beyond the 45 tasks.
 - Not planned: other platforms, other DJ software, multi-user, cloud sync, a plugin system. Do not add abstractions for these.
 

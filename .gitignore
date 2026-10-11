@@ -20,6 +20,7 @@ CLAUDE.local.md
 # Python sidecar
 python/.venv
 python/runtime
+python/.runtime.*
 python/wheels
 __pycache__
 .pytest_cache
