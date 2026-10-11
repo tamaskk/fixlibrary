@@ -6,6 +6,7 @@ import {
   deleteDiscardedBatches,
   findActiveBatch,
   getBatch,
+  getBatchItem,
   listBatchItemStates,
   mergeBatchItemProposal,
   setBatchItemError,
@@ -37,6 +38,7 @@ import {
   type ResourceLimits,
   type RunProgress
 } from '@shared/pipeline'
+import { readProposal } from '@shared/preview'
 import type { BatchFiles, UndoSummary } from './batch-files'
 import { createJobQueue } from './queue'
 import { runStage } from './run-stage'
@@ -67,6 +69,14 @@ export interface OrchestratorDependencies {
    * the cleanup at startup: no batch is applied or undone then.
    */
   libraryBusy?: () => boolean
+  /**
+   * Called for a track once every apply stage of the batch is done for it, and for
+   * an approved track the batch has nothing to write for: what the user set in the
+   * preview is made the track's own here. Not called for a track whose apply stage
+   * failed or never ran, so its row never says more than its file. May be called
+   * again for the same track after a restart.
+   */
+  onTrackApplied?: (batchId: number, trackId: number) => void
   /** May be called very often; whoever passes it on limits how often. */
   onProgress?: (progress: RunProgress) => void
   /** True while jobs run or may start by themselves; the app must not sleep then. */
@@ -133,6 +143,8 @@ interface Run {
   durations: Map<string, number[]>
   controllers: Map<number, AbortController>
   pauseReason: 'user' | 'offline' | null
+  /** In the apply phase: how many tracks are written. The others were left out. */
+  writtenTracks: number | null
   /** The tracks that a stage of this phase failed for. */
   failedTracks: Set<number>
   /** How long the phase worked before the last pause, in this session of the app. */
@@ -240,7 +252,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       pauseReason: active.pauseReason,
       counts: total,
       stages: perStage,
-      tracks: { total: active.byTrack.size, failed: active.failedTracks.size },
+      tracks: {
+        total: active.writtenTracks ?? active.byTrack.size,
+        failed: active.failedTracks.size
+      },
       elapsedMs: active.activeMs + (active.activeSince === null ? 0 : now() - active.activeSince),
       remainingMs: state === 'finished' ? null : estimate(active)
     }
@@ -274,6 +289,22 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       }
     }
     job.status = status
+  }
+
+  /** Passes on that a track is written, once every apply job of the batch is done for it. */
+  function tellIfApplied(active: Run, trackId: number): void {
+    const jobs = [...(active.byTrack.get(trackId)?.values() ?? [])].filter(
+      (job) => job.stage.phase === 'apply'
+    )
+    if (!jobs.every((job) => job.status === 'done')) return
+    try {
+      dependencies.onTrackApplied?.(active.batchId, trackId)
+    } catch (error) {
+      // The files are written; only what the user typed is not on the track's row.
+      logger.error(
+        `Track ${trackId}: its manual values could not be stored: ${describeError(error)}`
+      )
+    }
   }
 
   function dependentsOf(active: Run, job: RunJob): RunJob[] {
@@ -418,9 +449,17 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   function stageContext(active: Run, job: RunJob, signal: AbortSignal): StageContext {
+    const stored = getBatchItem(db, active.batchId, job.trackId)?.after
+    const own: Record<string, unknown> =
+      typeof stored === 'object' && stored !== null ? { ...stored } : {}
+    // The fields and warnings reach a stage only as far as they are valid, the same
+    // way the preview showed them; what else a stage stored is its own.
+    delete own['fields']
+    delete own['warnings']
     return {
       signal,
       batchId: active.batchId,
+      proposal: { ...own, ...readProposal(stored) },
       // Only an apply stage gets a way to change the file of its track.
       files:
         job.stage.phase === 'apply'
@@ -495,9 +534,13 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       }
       const proposal = outcome.value?.proposal
       // The proposal first: a job recorded as done must have left its result behind.
-      if (proposal) mergeBatchItemProposal(db, active.batchId, job.trackId, proposal)
+      // A field the user set by hand in an earlier preview keeps its value.
+      if (proposal) {
+        mergeBatchItemProposal(db, active.batchId, job.trackId, proposal, track.lockedFields)
+      }
       finishJob(db, job.id, { status: 'done' })
       setStatus(active, job, 'done')
+      if (active.phase === 'apply') tellIfApplied(active, job.trackId)
 
       const durations = active.durations.get(job.stage.name) ?? []
       durations.push(now() - startedAt)
@@ -543,6 +586,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       durations: new Map(),
       controllers: new Map(),
       pauseReason,
+      writtenTracks: null,
       failedTracks: new Set(),
       activeMs: 0,
       activeSince: pauseReason === null ? now() : null,
@@ -588,6 +632,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       for (const job of active.phaseJobs) {
         if (!writable.has(job.trackId)) skipWithDependents(active, job)
       }
+      active.writtenTracks = writable.size
+      // Tracks with nothing left to write: no apply stage in the batch, or all of
+      // them done before the app was closed.
+      for (const trackId of writable) tellIfApplied(active, trackId)
     }
     for (const job of active.phaseJobs) resolve(active, job)
 

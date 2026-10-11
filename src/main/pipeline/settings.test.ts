@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { insertBackup } from '../db/backups'
-import { createBatch } from '../db/batches'
+import { createBatch, setBatchStatus } from '../db/batches'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { setSetting } from '../db/settings'
 import { listStyles } from '../db/styles'
@@ -632,6 +632,7 @@ describe('the backup folder while a batch can still be undone', () => {
       { path: '/m/a.mp3', originalPath: '/m/a.mp3', format: 'mp3' }
     ])
     const batchId = createBatch(testDatabase.db, { type: 'run', mode: 'in_place', items: [] })
+    setBatchStatus(testDatabase.db, batchId, 'applied')
     insertBackup(testDatabase.db, {
       batchId,
       trackId: trackId as number,
@@ -681,5 +682,45 @@ describe('the backup folder while a batch can still be undone', () => {
 
     // Assert
     expect(result.ok).toBe(true)
+  })
+})
+
+describe('the folders of the library while a batch is open', () => {
+  const local = { homeDir: '/Users/dj', cpuCount: 8 }
+
+  it.each(['computing', 'preview', 'applying'] as const)(
+    'cannot change while a batch is %s',
+    (status) => {
+      // Arrange
+      const music = makeFolder('Music A')
+      const other = makeFolder('Music B')
+      setFolder(testDatabase.db, 'libraryRoot', music, local)
+      const batchId = createBatch(testDatabase.db, { type: 'run', mode: 'in_place', items: [] })
+      setBatchStatus(testDatabase.db, batchId, status)
+
+      // Act
+      const result = setFolder(testDatabase.db, 'libraryRoot', other, local)
+
+      // Assert
+      expect(result).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+      expect(getSettingsSnapshot(testDatabase.db, local).settings.library.rootFolder).toBe(music)
+    }
+  )
+
+  it('can change again once the batch was given up, and other folders are never held', () => {
+    // Arrange
+    const music = makeFolder('Music A')
+    const xml = makeFolder('Xml')
+    const batchId = createBatch(testDatabase.db, { type: 'run', mode: 'in_place', items: [] })
+    setBatchStatus(testDatabase.db, batchId, 'preview')
+
+    // Act
+    const whileOpen = setFolder(testDatabase.db, 'generatedXml', xml, local)
+    setBatchStatus(testDatabase.db, batchId, 'cancelled')
+    const afterwards = setFolder(testDatabase.db, 'libraryRoot', music, local)
+
+    // Assert
+    expect(whileOpen.ok).toBe(true)
+    expect(afterwards.ok).toBe(true)
   })
 })

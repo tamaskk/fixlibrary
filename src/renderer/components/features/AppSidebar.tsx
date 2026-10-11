@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { cn } from '@/lib/cn'
-import { Library, Settings, type LucideIcon } from 'lucide-react'
+import { Library, ListChecks, Settings, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogFooter } from '@/components/ui/dialog'
 import { useAppStore, type AppPage } from '@/stores/app-store'
@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 
 const PAGES: { page: AppPage; label: string; icon: LucideIcon }[] = [
   { page: 'library', label: 'Könyvtár', icon: Library },
+  { page: 'preview', label: 'Előnézet', icon: ListChecks },
   { page: 'settings', label: 'Beállítások', icon: Settings }
 ]
 

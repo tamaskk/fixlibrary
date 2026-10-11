@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `locked_fields` text DEFAULT '[]' NOT NULL;

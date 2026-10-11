@@ -1,17 +1,19 @@
 import { app, dialog, powerSaveBlocker, shell, BrowserWindow } from 'electron'
-import { existsSync } from 'fs'
-import { cpus, homedir } from 'os'
-import { join } from 'path'
+import { existsSync, realpathSync } from 'fs'
+import { cpus, homedir, tmpdir } from 'os'
+import { join, sep } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
 import { closeDatabase, getDatabase, initDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
+import { registerPreviewIpc } from './ipc/preview'
 import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
+import { commitManualEdits, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
 import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
 import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
@@ -152,15 +154,32 @@ function startPythonSidecar(): void {
 }
 
 /**
+ * True for a file that tests generated: under the system's temp folder, or in the
+ * synthetic fixtures of the repository. The stand-in rename works on nothing else,
+ * so a development build cannot rename a real library by accident.
+ */
+function isGeneratedFile(path: string): boolean {
+  const roots = [tmpdir(), join(app.getAppPath(), 'tests/fixtures/synthetic')].flatMap((root) => {
+    try {
+      return [realpathSync.native(root)]
+    } catch {
+      return []
+    }
+  })
+  return roots.some((root) => path.startsWith(root + sep))
+}
+
+/**
  * The stages a run can use. In development, `FIXLIB_DEMO_STAGES=1` adds two stages
- * that only wait, so a run can be tried and tested end to end while no real stage
+ * that propose made-up values and one that renames the file to the proposed name once
+ * the batch is approved, so a run can be tried and tested end to end while no real stage
  * exists. The packaged app never has them.
  */
 function availableStages(): Stage[] {
   if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') return [...STAGES]
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])
   const usable = Number.isInteger(ms) && ms >= 1 && ms <= MAX_DEMO_STAGE_MS
-  return [...STAGES, ...createDemoStages(usable ? ms : undefined)]
+  return [...STAGES, ...createDemoStages(usable ? ms : undefined, { mayRename: isGeneratedFile })]
 }
 
 function registerLibraryAndPipeline(): void {
@@ -231,6 +250,7 @@ function registerLibraryAndPipeline(): void {
     batchFiles,
     // Until the startup work below is over, and during every scan.
     libraryBusy: () => !startupDone || scanner.isRunning(),
+    onTrackApplied: (batchId, trackId) => commitManualEdits(db, batchId, trackId),
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })
@@ -255,6 +275,9 @@ function registerLibraryAndPipeline(): void {
     listMountedVolumes: createMountedVolumesCache(1000)
   })
   registerPipelineIpc({ orchestrator: runs, functions })
+  registerPreviewIpc(
+    createPreview({ db, stages, orchestrator: runs, batchFiles, listMountedVolumes })
+  )
 
   // In this order, so that no two of them work on the drive at the same time: what
   // interrupted writes left behind is removed, then the library is scanned for what

@@ -269,8 +269,8 @@ describe('batch items', () => {
     const [trackId] = trackIds as [number]
 
     // Act
-    mergeBatchItemProposal(testDatabase.db, id, trackId, { bpm: 124, key: '8A' })
-    mergeBatchItemProposal(testDatabase.db, id, trackId, { key: '9A', energy: 7 })
+    mergeBatchItemProposal(testDatabase.db, id, trackId, { bpm: 124, key: '8A' }, [])
+    mergeBatchItemProposal(testDatabase.db, id, trackId, { key: '9A', energy: 7 }, [])
 
     // Assert
     const [item] = testDatabase.db.select().from(batchItems).all()

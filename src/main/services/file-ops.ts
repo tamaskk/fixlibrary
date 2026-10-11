@@ -22,29 +22,21 @@ import {
 } from 'fs/promises'
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep } from 'path'
 import { AppError } from '@shared/errors'
+
+// The rule lives with the preview that shows a name; here it is the last check before
+// a file gets one.
+export { unusableNameReason } from '@shared/file-names'
 import { describeError } from './error-text'
 import { logger } from './logger'
 
 /** A file that is still being written carries a name like `.<name>.<random>.fixlib-tmp`. */
 const TEMP_SUFFIX = '.fixlib-tmp'
-// The longest name a file may get, in UTF-16 units as APFS and exFAT count them: it
-// leaves room for ` (999)` and for the temp name of a later write.
-const MAX_NAME_LENGTH = 220
 // How much of a file's name its temp file carries; the rest is cut off.
 const MAX_TEMP_STEM_LENGTH = 200
 // After this many taken names something else is wrong than a name that is in use.
 const MAX_NAME_ATTEMPTS = 1000
 // The file systems of a Mac's drives never hold more in one name.
 const NAME_LIMIT = 255
-const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.aif', '.aiff']
-
-// Control characters, line and paragraph separators, the invisible characters that
-// turn the reading direction around, and the ones that take no room: two names that
-// differ only in those would look the same. Written as escapes, so that no editor
-// drops them unseen.
-const UNSAFE_NAME_CHARACTERS =
-  /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u200b\u2060\ufeff\u00ad]/u
-
 export interface FileOpsOptions {
   /**
    * The folders this module may change anything in: the library, the clean library
@@ -123,25 +115,6 @@ function tempPathOf(target: string): string {
 
 function isTempName(name: string): boolean {
   return name.startsWith('.') && name.endsWith(TEMP_SUFFIX) && name.length > TEMP_SUFFIX.length + 1
-}
-
-/**
- * Why a name cannot be given to a file or a folder of the library, or null if it can.
- * The text a name is built from (tags, lookups) is not to be trusted.
- */
-export function unusableNameReason(name: string, kind: 'file' | 'folder'): string | null {
-  if (name.length === 0 || name === '.' || name === '..') return 'it is empty or a dot name'
-  if (name.length > MAX_NAME_LENGTH) return 'it is too long'
-  if (name.includes('/') || name.includes(':')) return 'it holds a path separator'
-  if (UNSAFE_NAME_CHARACTERS.test(name)) return 'it holds an invisible or control character'
-  // Hidden from the scanner, and a temp name would be deleted at the next start.
-  if (name.startsWith('.')) return 'it starts with a dot'
-  if (name.endsWith(' ') || name.endsWith('.')) return 'it ends with a space or a dot'
-  if (name !== name.normalize('NFC')) return 'it is not composed (NFC)'
-  if (kind === 'file' && !AUDIO_EXTENSIONS.includes(extname(name).toLowerCase())) {
-    return 'it is not an audio file name'
-  }
-  return null
 }
 
 /** The path as the disk names it, from its nearest ancestor that exists. */

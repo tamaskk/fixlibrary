@@ -45,3 +45,20 @@ export function formatRemaining(ms: number): string {
   if (rest === 60) return `kb. ${hours + 1} óra`
   return rest === 0 ? `kb. ${hours} óra` : `kb. ${hours} óra ${rest} perc`
 }
+
+const gigabytes = new Intl.NumberFormat('hu-HU', {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1
+})
+
+/** A size on a drive in gigabytes with one decimal, such as `4,7 GB`. Never rounds up to "enough". */
+export function formatGigabytes(bytes: number, rounding: 'up' | 'down'): string {
+  const tenths = bytes / 100_000_000
+  const rounded = (rounding === 'up' ? Math.ceil(tenths) : Math.floor(tenths)) / 10
+  return `${gigabytes.format(rounded)} GB`
+}
+
+/** A share between 0 and 1 as a whole percent, rounded down: 69.9% is not 70%. */
+export function formatPercent(share: number): string {
+  return `${Math.floor(share * 100)}%`
+}

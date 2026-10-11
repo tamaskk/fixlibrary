@@ -1,6 +1,7 @@
 import type { Track } from '../../db/tracks'
 import type { TrackFiles } from '../batch-files'
 import type { JobPhase, Resource } from '@shared/pipeline'
+import type { PreviewField, PreviewValue, PreviewWarning, Proposal } from '@shared/preview'
 
 export interface StageContext {
   /**
@@ -14,11 +15,20 @@ export interface StageContext {
    * first, written in one step. Null in the compute phase, which changes no file.
    */
   files: TrackFiles | null
+  /**
+   * What the batch holds for the track when the stage starts: the proposals of the
+   * stages before it, with what the user changed in the preview.
+   */
+  proposal: Proposal & Record<string, unknown>
 }
 
 export interface StageResult {
-  /** What the stage proposes for the track. It is merged into the item of the batch. */
-  proposal?: Record<string, unknown>
+  /**
+   * What the stage proposes for the track. It is merged into the item of the batch.
+   * `fields` and `warnings` are what the batch preview shows; anything else is the
+   * stage's own, for its apply stage to read.
+   */
+  proposal?: Proposal & Record<string, unknown>
 }
 
 /**
@@ -37,4 +47,16 @@ export interface Stage {
   selectable: boolean
   timeoutMs: number
   run: (context: StageContext, track: Track) => Promise<StageResult | void>
+  /**
+   * For a compute stage whose proposal follows from other fields, such as a file
+   * name: proposes again after the user changed a field in the preview. `values` are
+   * the fields as the preview shows them now. It must be quick and touch nothing: no
+   * file, no network, no database.
+   */
+  recompute?: (track: Track, values: Record<PreviewField, PreviewValue>) => Proposal | void
+  /**
+   * The warnings this stage reports. When it proposes again after an edit, those are
+   * replaced by what it reports then; the warnings of other stages stay.
+   */
+  warnings?: readonly PreviewWarning[]
 }

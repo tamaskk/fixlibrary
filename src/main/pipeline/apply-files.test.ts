@@ -26,6 +26,8 @@ import { createFileOps, type FileOps } from '../services/file-ops'
 import { logger } from '../services/logger'
 import { createBatchFiles, type BatchFiles } from './batch-files'
 import { createOrchestrator, type Orchestrator } from './orchestrator'
+import { commitManualEdits, createPreview, type Preview } from './preview'
+import { createDemoStages } from './stages/demo'
 import type { Stage, StageContext } from './stages/stage'
 
 const FIXTURE = readFileSync(
@@ -500,5 +502,187 @@ describe('other work on the files of the library', () => {
     // Assert
     expect(undone).toMatchObject({ ok: true, value: { batchId: wrote, restored: 3 } })
     expect(paths.map(sha256)).toEqual(originals)
+  })
+})
+
+describe('a batch that goes through its preview', () => {
+  const mayRename = (): boolean => true
+
+  function previewed(): { run: Orchestrator; preview: Preview } {
+    const stages = createDemoStages(1, { mayRename })
+    const run = createOrchestrator({
+      db: testDatabase.db,
+      stages,
+      limits: () => ({ cpu: 4, gpu: 1, network: 4, claude: 1, io: 2 }),
+      listMountedVolumes: () => NO_VOLUMES,
+      mode: () => mode,
+      batchFiles,
+      onTrackApplied: (batchId, trackId) => commitManualEdits(testDatabase.db, batchId, trackId)
+    })
+    const preview = createPreview({
+      db: testDatabase.db,
+      stages,
+      orchestrator: run,
+      batchFiles,
+      listMountedVolumes: () => NO_VOLUMES
+    })
+    return { run, preview }
+  }
+
+  async function computeAll(run: Orchestrator, ids: number[]): Promise<number> {
+    const started = run.start({ trackIds: ids, stages: ['demoAnalyze', 'demoLookup'] })
+    if (!started.ok) throw new Error(`the run did not start: ${started.code}`)
+    await run.whenFinished()
+    return started.value.batchId
+  }
+
+  it('changes no file until it is approved, then writes what the preview shows', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(4)
+    const [edited, excluded] = ids as [number, number]
+    const originals = paths.map(sha256)
+    const { run, preview } = previewed()
+    const batchId = await computeAll(run, ids)
+    const row = preview.edit({ batchId, trackId: edited, field: 'title', value: 'By Hand' })
+    preview.setExcluded({ batchId, trackIds: [excluded], excluded: true })
+    const beforeApproval = { files: filesUnder(library), hashes: paths.map(sha256) }
+
+    // Act
+    const outcome = await preview.approve(batchId)
+    await run.whenFinished()
+
+    // Assert
+    expect(row.ok && row.value.cells.fileName.after).toBe('Demo Artist - By Hand.mp3')
+    expect(beforeApproval).toEqual({
+      files: paths.map((path) => path.slice(folder.length + 1)),
+      hashes: originals
+    })
+    expect(outcome).toEqual({ ok: true, value: { started: true } })
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('applied')
+    expect(pathOf(edited)).toBe(join(library, 'Inbox', 'Demo Artist - By Hand.mp3'))
+    expect(sha256(pathOf(edited))).toBe(originals[0])
+    // The row that was taken out: the same file, the same bytes, the same name.
+    expect(pathOf(excluded)).toBe(paths[1])
+    expect(sha256(paths[1] as string)).toBe(originals[1])
+    expect(filesUnder(library)).toHaveLength(4)
+  })
+
+  it('does not write a file name that the preview could not show', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const [tampered, other] = ids as [number, number]
+    const { run, preview } = previewed()
+    const batchId = await computeAll(run, ids)
+    testDatabase.db
+      .update(batchItems)
+      .set({ after: { fields: { fileName: { value: '../Elsewhere/x.mp3', source: 'lookup' } } } })
+      .where(eq(batchItems.trackId, tampered))
+      .run()
+    const shown = preview.rows({ batchId, offset: 0, limit: 10 })
+
+    // Act
+    await preview.approve(batchId)
+    await run.whenFinished()
+
+    // Assert: the row showed no new name, and the file kept the one it had.
+    const row = shown.ok ? shown.value.rows.find((each) => each.trackId === tampered) : undefined
+    expect(row?.cells.fileName.changed).toBe(false)
+    expect(pathOf(tampered)).toBe(paths[0])
+    expect(pathOf(other)).not.toBe(paths[1])
+    expect(filesUnder(folder).some((name) => name.includes('Elsewhere'))).toBe(false)
+  })
+
+  it('keeps a title that was set by hand through the next automatic run', async () => {
+    // Arrange
+    const { ids } = addTracks(2)
+    const [edited] = ids as [number]
+    const { run, preview } = previewed()
+    const first = await computeAll(run, ids)
+    preview.edit({ batchId: first, trackId: edited, field: 'title', value: 'By Hand' })
+    await preview.approve(first)
+    await run.whenFinished()
+
+    // Act
+    const second = await computeAll(run, ids)
+    const rows = preview.rows({ batchId: second, offset: 0, limit: 10 })
+
+    // Assert
+    const row = rows.ok ? rows.value.rows.find((each) => each.trackId === edited) : undefined
+    expect(row?.cells.title).toMatchObject({ before: 'By Hand', after: 'By Hand', changed: false })
+    expect(row?.cells.fileName.after).toBe('Demo Artist - By Hand.mp3')
+  })
+})
+
+describe('what the user typed for a track whose file was not written', () => {
+  function previewedWith(mayRename: (path: string) => boolean): {
+    run: Orchestrator
+    preview: Preview
+  } {
+    const stages = createDemoStages(1, { mayRename })
+    const run = createOrchestrator({
+      db: testDatabase.db,
+      stages,
+      limits: () => ({ cpu: 4, gpu: 1, network: 4, claude: 1, io: 2 }),
+      listMountedVolumes: () => NO_VOLUMES,
+      mode: () => mode,
+      batchFiles,
+      onTrackApplied: (batchId, trackId) => commitManualEdits(testDatabase.db, batchId, trackId)
+    })
+    const preview = createPreview({
+      db: testDatabase.db,
+      stages,
+      orchestrator: run,
+      batchFiles,
+      listMountedVolumes: () => NO_VOLUMES
+    })
+    return { run, preview }
+  }
+
+  it('stays out of the track and locks nothing, while a track that was written gets both', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const [failing, written] = ids as [number, number]
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { run, preview } = previewedWith((path) => path !== paths[0])
+    const started = run.start({ trackIds: ids, stages: ['demoLookup'] })
+    await run.whenFinished()
+    const batchId = started.ok ? started.value.batchId : -1
+    for (const trackId of ids) {
+      preview.edit({ batchId, trackId, field: 'title', value: `By Hand ${trackId}` })
+    }
+
+    // Act
+    await preview.approve(batchId)
+    await run.whenFinished()
+
+    // Assert
+    const track = (id: number): unknown => getTrackById(testDatabase.db, id, NO_VOLUMES)
+    expect(track(failing)).toMatchObject({
+      title: 'track-01.mp3',
+      lockedFields: [],
+      path: paths[0]
+    })
+    expect(track(written)).toMatchObject({
+      title: `By Hand ${written}`,
+      lockedFields: ['title']
+    })
+  })
+
+  it('renames nothing unless it was told which files are generated', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(1)
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const stages = createDemoStages(1)
+    const run = orchestrator(stages)
+    const started = run.start({ trackIds: ids, stages: ['demoLookup'] })
+    await run.whenFinished()
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    await run.applyBatch(started.ok ? started.value.batchId : -1)
+    await run.whenFinished()
+
+    // Assert
+    expect(filesUnder(library)).toEqual([paths[0]?.slice(folder.length + 1)])
   })
 })

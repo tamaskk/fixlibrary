@@ -12,6 +12,16 @@ import type {
 } from './library'
 import type { PipelineState, RunProgress } from './pipeline'
 import type {
+  ApproveOutcome,
+  PreviewEdit,
+  PreviewExclude,
+  PreviewPage,
+  PreviewRow,
+  PreviewRowsRequest,
+  PreviewState,
+  UndoOutcome
+} from './preview'
+import type {
   FolderKind,
   KeyService,
   KeyTestResult,
@@ -46,7 +56,14 @@ export const IPC_CHANNELS = {
   pipelineState: 'pipeline:state',
   pipelinePause: 'pipeline:pause',
   pipelineResume: 'pipeline:resume',
-  pipelineCancel: 'pipeline:cancel'
+  pipelineCancel: 'pipeline:cancel',
+  previewState: 'preview:state',
+  previewRows: 'preview:rows',
+  previewEdit: 'preview:edit',
+  previewSetExcluded: 'preview:setExcluded',
+  previewApprove: 'preview:approve',
+  previewDiscard: 'preview:discard',
+  previewUndoLast: 'preview:undoLast'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -119,5 +136,27 @@ export interface FixLibraryApi {
     cancel: () => Promise<void>
     /** Calls the listener as a run goes on, and once more when it has ended. */
     onProgress: (listener: (progress: RunProgress) => void) => () => void
+  }
+  preview: {
+    /** The batch that waits for approval, and whether a batch can be undone. */
+    state: () => Promise<PreviewState>
+    /** One page of the rows of the batch that waits for approval. */
+    rows: (request: PreviewRowsRequest) => Promise<Result<PreviewPage>>
+    /**
+     * Sets one field of one row by hand. Resolves with the row as it is afterwards:
+     * what follows from the field, such as the file name, is brought up to date.
+     */
+    edit: (edit: PreviewEdit) => Promise<Result<PreviewRow>>
+    /** Takes rows out of the batch, or back in. Tracks are named by id only. */
+    setExcluded: (request: PreviewExclude) => Promise<Result<PreviewState>>
+    /**
+     * Starts writing the rows that were left in. This is the only call that makes
+     * the app change files, and it acts on the one batch that waits for approval.
+     */
+    approve: (batchId: number) => Promise<Result<ApproveOutcome>>
+    /** Gives the batch up; nothing it proposed is written. */
+    discard: (batchId: number) => Promise<Result<PreviewState>>
+    /** Puts the files of the last batch that wrote back to what they were. */
+    undoLast: () => Promise<Result<UndoOutcome>>
   }
 }

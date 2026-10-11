@@ -142,6 +142,17 @@ Switches
 - In a table whose column header shows the label, the switch label may be visually hidden, as for inputs.
 - For a setting that takes effect at once. A choice between more than two values is a select.
 
+Checkboxes
+
+- A 16px box, radius-sm, surface with a text-muted border; checked: primary with a white check. The button around it is 28px, the smallest click target. Hover: border text when off, primary-hover when on. Focus ring and disabled state as for switches.
+- Always named with an `aria-label` that says what it switches and for which row. Used in tables, for a choice per row; a single setting is a switch.
+- The component is `ui/checkbox.tsx`.
+
+Tabs
+
+- For views of the same data (the changes and the errors of a batch), never for navigation between pages. A row of triggers on a 1px border line, space-4 apart: Small 500 in text-muted, 32px high; the active one is in text color with a straight 2px primary bottom edge. A count after the name is in the Data role.
+- Arrow keys move between the tabs; focus ring as for buttons. The component is `ui/tabs.tsx`.
+
 Color inputs
 
 - The system color picker behind a 32px swatch (radius-sm, border; border text-muted on hover), with the hex value next to it in lower case in the Data role, so the choice is never shown by color alone.
@@ -182,10 +193,20 @@ Tables
 - Sorting: a column header that sorts is a button in the Label role. The sorted column is in text color with an up or down arrow and `aria-sort`; a third click removes the sorting. Rows without a value in the sorted column come last in both directions.
 - Selection: click selects a row, Shift + click the range from the last clicked row, Cmd + click adds or removes one row. With the table focused: arrows, Page Up, Page Down, Home and End move and select, Shift extends, Cmd + A selects every row shown, Escape clears. The row the keys move from has a 1px border outline while the table has the focus. A search or filter that hides a selected row takes it out of the selection. A row that cannot be processed (offline, file missing) is in text-muted.
 - A row is surface on hover. A table has a 1px border and radius-lg, and never shrinks below 192px in height. A secondary column (the file format) is in the Small role and text-muted.
-- The column template of a table is a constant in its component, in whole pixels; it is the one place where sizes are not Tailwind classes, because the virtualizer positions the rows itself.
+- The column template of a table is a constant in its component, in whole pixels (fixed columns) or `minmax` with a pixel minimum and an `fr` share (text columns); it is the one place where sizes are not Tailwind classes, because the virtualizer positions the rows itself.
 - A table is a `role="grid"` that takes the focus as a whole (2px primary ring), with `aria-rowcount` for all rows, not only the ones in the page.
 - Above the table: search and filters as labelled fields in one row, with the number of rows on the right (`shown / all` when a filter hides some). Below it, the selection bar: the number of selected rows on the left; on the right the choice of what to run, as a labelled select, and the actions, Secondary before Primary. With nothing to choose from, the select and the actions are disabled and the select says so. The answer to an action appears as a status line under the bar.
 - When a search or a filter leaves no row, the table gives way to an empty state with a Secondary "Szűrők törlése" button.
+
+Batch preview
+
+- The page "Előnézet": tabs "Változások" and "Hibák" (with the number of skipped tracks), one "Szűrő" select with the row count on the right, the table, and under it the bar of the approval: on the left how many tracks will be written, how many were taken out and how many failed; on the right "Elvetés" (Secondary, confirms as Danger) and "Jóváhagyás" (Primary). The confirmation of the approval names the numbers and the mode. "Utolsó batch visszavonása" (Secondary, confirms as Danger) sits in the page header while there is something to undo.
+- Columns: a checkbox (checked means the row will be written) and the state icon come first, then the columns of the kind of batch. For a run: file name, artist, title, mix, style, energy, and from 896px on the source with the lowest confidence in percent, in Small and text-muted.
+- A changed value: the old one struck through in text-muted (marked up as a deletion), then the new one in text (an insertion), in one line; the tooltip spells out both. The file name is the exception while the table is narrower than 896px: two names do not fit side by side there, so only the new one is shown, and the old one is in the tooltip, in the name of the row and in the markup for assistive technology. A value that was empty before shows only the new one. A row that will not be written (taken out, or failed) is in text-muted.
+- State icon: check in success, warning triangle in warning with the warnings in the tooltip, alert circle in danger-text with the reason a track was skipped.
+- Keys, with the table focused: arrows up and down, Page Up, Page Down, Home and End move between rows; left and right between the cells that can be edited; Space takes the row out or back in; Enter edits the cell. The row has the 1px border outline of other tables, the cell a 1px primary outline. A double click edits a cell too.
+- Editing in place: the cell becomes a field of 28px with a hidden label that names the row and the column. Text and energy save on Enter and when the field is left, Escape gives up; a style is a select and saves when chosen. After Enter, Escape or a chosen style the focus returns to the table; when the field is left for another control, the focus stays there. A click on a checkbox leaves the focus on the table, on that row. Space and Enter do nothing on a row that failed. A value the field cannot hold is answered with a danger status line above the table, until the next edit or a change of tab or filter. A dialog returns the focus to the button that opened it, or to the page heading when that button is gone or disabled.
+- With no batch waiting, the page is an empty state that leads to the Library page; that page shows a warning status line with "Előnézet megnyitása" while a batch waits.
 
 Cards
 

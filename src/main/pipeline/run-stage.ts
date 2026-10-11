@@ -1,4 +1,5 @@
 // Runs one stage for one track so that its failure cannot stop the batch.
+import { describeError } from '../services/error-text'
 import { logger } from '../services/logger'
 import { AppError, TRACK_ERROR_MESSAGES, type ErrorCode, type TrackError } from '@shared/errors'
 
@@ -57,6 +58,10 @@ function toTrackError(run: StageRun, error: unknown, logged: unknown = error): T
   const limit = Math.max(1, Math.ceil(run.timeoutMs / 1000))
   const message = code === 'TIMEOUT' ? `No result within ${limit} s` : TRACK_ERROR_MESSAGES[code]
 
-  logger.warn(`Track ${run.trackId} skipped in stage ${run.stage}: ${code}`, logged)
+  // One line written by the app: an error of the file system carries a path, and a
+  // file name can hold a line break.
+  logger.warn(
+    `Track ${run.trackId} skipped in stage ${run.stage}: ${code} (${describeError(logged)})`
+  )
   return { trackId: run.trackId, stage: run.stage, code, message }
 }
