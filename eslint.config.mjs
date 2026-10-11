@@ -39,5 +39,39 @@ export default defineConfig(
       ...eslintPluginReactRefresh.configs.vite.rules
     }
   },
+  {
+    // `electron-log/main` registers IPC handlers of its own, outside src/main/ipc/handle.ts.
+    // The app logs through src/main/services/logger.ts, which uses the plain Node entry.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/main/services/logger.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['electron-log', 'electron-log/*'],
+              message: 'Use src/main/services/logger.ts.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    files: ['src/main/services/logger.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            { name: 'electron-log', message: 'Import electron-log/node.' },
+            { name: 'electron-log/main', message: 'Import electron-log/node.' },
+            { name: 'electron-log/renderer', message: 'Import electron-log/node.' }
+          ]
+        }
+      ]
+    }
+  },
   eslintConfigPrettier
 )

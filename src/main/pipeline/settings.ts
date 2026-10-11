@@ -18,6 +18,7 @@ import {
   type SettingsSnapshot,
   type Style
 } from '@shared/settings'
+import { logger } from '../services/logger'
 
 /** Facts about the machine that the defaults depend on. */
 export interface SettingsEnvironment {
@@ -33,7 +34,7 @@ function readGroup<T>(db: AppDatabase, group: string, schema: z.ZodType<T>, fall
     return getSetting(db, group, schema) ?? fallback
   } catch (error) {
     // A stored value this version cannot read must not keep the Settings page from opening.
-    console.error(`Stored setting "${group}" is invalid; using its default`, error)
+    logger.error(`Stored setting "${group}" is invalid; using its default`, error)
     return fallback
   }
 }

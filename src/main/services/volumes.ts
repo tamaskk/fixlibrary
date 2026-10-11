@@ -1,5 +1,6 @@
 import { readdirSync, statSync } from 'fs'
 import { join } from 'path'
+import { logger } from './logger'
 
 const VOLUMES_ROOT = '/Volumes'
 
@@ -30,7 +31,7 @@ export function listMountedVolumes(
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('Could not list the mounted volumes', error)
+      logger.error('Could not list the mounted volumes', error)
     }
     return new Set()
   }

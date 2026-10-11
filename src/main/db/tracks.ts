@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import { tracks } from './schema'
 import { normalizeTrackPath, volumeNameOfPath } from './track-paths'
+import { logger } from '../services/logger'
 
 export const STAGE_STATUSES = ['pending', 'done', 'failed', 'skipped'] as const
 export const MAX_TRACK_PAGE_SIZE = 500
@@ -34,7 +35,7 @@ function toTrack(row: TrackRow, mountedVolumes: ReadonlySet<string>): Track {
   const stageStatus = stageStatusSchema.safeParse(row.stageStatus)
   if (!stageStatus.success) {
     // One unreadable row must not hide the rest of the library: it reads as "nothing done yet".
-    console.error(`Track ${row.id} has an unreadable stage status; treating it as empty`)
+    logger.error(`Track ${row.id} has an unreadable stage status; treating it as empty`)
   }
   return {
     ...row,

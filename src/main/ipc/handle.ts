@@ -1,8 +1,13 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { fileURLToPath, pathToFileURL } from 'url'
 import type { z } from 'zod'
+import { createLogLimiter } from '../services/log-limiter'
+import { logger } from '../services/logger'
 
 let rendererEntryUrl: string | null = null
+
+// A page that keeps sending bad calls must not be able to fill the log with them.
+const logRejection = createLogLimiter((line) => logger.error(line), { limit: 20, windowMs: 10_000 })
 
 /**
  * Tells the app which document is its own page. Call once, before a window loads:
@@ -57,19 +62,19 @@ export function handleIpc<Arguments extends unknown[], Value>(
 ): void {
   ipcMain.handle(channel, async (event, ...args: unknown[]) => {
     if (!isTrustedSender(event)) {
-      console.error(`Rejected IPC call on ${channel}: not from the app's page`)
+      logRejection(`Rejected IPC call on ${channel}: not from the app's page`)
       throw new Error('IPC call from an unknown page')
     }
     const parsed = argumentsSchema.safeParse(args)
     if (!parsed.success) {
-      console.error(`Rejected IPC call on ${channel}: invalid arguments`)
+      logRejection(`Rejected IPC call on ${channel}: invalid arguments`)
       throw new Error('Invalid IPC arguments')
     }
     try {
       return await handler(event, ...parsed.data)
     } catch (error) {
       // The detail (it can hold a file path) stays in the main process.
-      console.error(`IPC handler for ${channel} failed`, error)
+      logger.error(`IPC handler for ${channel} failed`, error)
       throw new Error('The request failed')
     }
   })
