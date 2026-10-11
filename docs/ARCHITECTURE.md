@@ -208,6 +208,12 @@ Pipeline runs:
 - Restart: quitting tells the running jobs to stop and puts them back in line. At the next start the batch that was being computed or applied is taken up again: `done` jobs are not run again. A batch the user paused stays paused; one that had paused for a missing drive goes on, and pauses again if the drive is still away. After a crash the jobs that were running go back in line too, but the start counts: a job that was running in three crashes is recorded as failed, so a file that makes the app crash cannot do so forever.
 - The apply phase never writes a track that a stage failed for, approved or not.
 - What listens to a run (progress, the sleep blocker) cannot stop it by failing, and may act on the run from inside a report: the last report of a run goes out after the run is over.
+- A run is started from the Library page with `library:run`: track ids, or the whole library, and the names of the functions to run. `pipeline:state` tells the page which functions exist and which run is active; `pipeline:pause`, `pipeline:resume` and `pipeline:cancel` take no argument and act on the one active run.
+- `pipeline:progress` events go to the page at most four times a second. A report that says something new about the run itself (paused, went on, ended, another batch or phase) is never held back, because a run may stand still for minutes after it.
+- While a run works, `services/power.ts` holds off sleep with Electron's `powerSaveBlocker` (`prevent-app-suspension`); a paused run with nothing running lets the Mac sleep.
+- At startup the app scans the library first and then takes up a run that was interrupted, so both do not read the drive at once. Quitting calls `shutdown` on the orchestrator before the sidecar is stopped and the database is closed.
+- Long work in the sidecar runs inside `cancellable(job_id)` and checks its stop event between steps. The bridge takes a job id and an abort signal with a call: on abort the call is rejected at once and `job.cancel` is sent. A job has five seconds to stop. No method uses this before T-013.
+- No real stage exists before T-013. In development, `FIXLIB_DEMO_STAGES=1` adds two stages that only wait (`pipeline/stages/demo.ts`), so a run can be tried and tested end to end; `FIXLIB_DEMO_STAGE_MS` sets how long they take. The packaged app ignores both.
 - Progress is reported as counts per stage and an estimate of the time left: per stage, how long its last 50 jobs took, times the jobs left, over how many run at once. There is no estimate while a stage with jobs left has not finished one.
 
 Python sidecar:
@@ -298,10 +304,12 @@ There is no server, preview or staging environment.
 
 Environment variables (names only; values live in `.env.local` for development and in the app's Settings, encrypted via the macOS Keychain, when packaged):
 
-| Name                    | Used by                     | Main process only |
-| ----------------------- | --------------------------- | ----------------- |
-| ACOUSTID_API_KEY        | `src/main/services/lookup/` | yes               |
-| DISCOGS_CONSUMER_KEY    | `src/main/services/lookup/` | yes               |
-| DISCOGS_CONSUMER_SECRET | `src/main/services/lookup/` | yes               |
+| Name                    | Used by                                | Main process only |
+| ----------------------- | -------------------------------------- | ----------------- |
+| ACOUSTID_API_KEY        | `src/main/services/lookup/`            | yes               |
+| DISCOGS_CONSUMER_KEY    | `src/main/services/lookup/`            | yes               |
+| DISCOGS_CONSUMER_SECRET | `src/main/services/lookup/`            | yes               |
+| FIXLIB_DEMO_STAGES      | `src/main/index.ts` (development only) | yes               |
+| FIXLIB_DEMO_STAGE_MS    | `src/main/index.ts` (development only) | yes               |
 
 The packaged app ignores `.env` files.

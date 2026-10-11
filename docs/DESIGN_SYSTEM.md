@@ -184,7 +184,7 @@ Tables
 - A row is surface on hover. A table has a 1px border and radius-lg, and never shrinks below 192px in height. A secondary column (the file format) is in the Small role and text-muted.
 - The column template of a table is a constant in its component, in whole pixels; it is the one place where sizes are not Tailwind classes, because the virtualizer positions the rows itself.
 - A table is a `role="grid"` that takes the focus as a whole (2px primary ring), with `aria-rowcount` for all rows, not only the ones in the page.
-- Above the table: search and filters as labelled fields in one row, with the number of rows on the right (`shown / all` when a filter hides some). Below it, the selection bar: the number of selected rows on the left, the actions on the right, Secondary before Primary. The answer to an action appears as a status line under the bar.
+- Above the table: search and filters as labelled fields in one row, with the number of rows on the right (`shown / all` when a filter hides some). Below it, the selection bar: the number of selected rows on the left; on the right the choice of what to run, as a labelled select, and the actions, Secondary before Primary. With nothing to choose from, the select and the actions are disabled and the select says so. The answer to an action appears as a status line under the bar.
 - When a search or a filter leaves no row, the table gives way to an empty state with a Secondary "Szűrők törlése" button.
 
 Cards
@@ -202,6 +202,8 @@ Progress
 - Pipeline runs show a percent bar, counts per stage, elapsed time and an estimate. A library scan, which takes seconds to a few minutes, shows its phase, counts and percent only. Never an indeterminate spinner for work longer than 3 seconds.
 - The bar (`ui/progress-bar.tsx`) is 4px high, radius-full, surface-hover with a primary fill, and is always named for assistive technology. The percent and the counts stand next to it in the Data role.
 - Work with no known end (finding the files of a scan) shows a rising count instead of a bar.
+- Run panel: a card with padding space-4 at the top of the page, only while a run is active. A heading in the H3 role says the phase and whether it runs or is paused; "Szünet" or "Folytatás" (Secondary) and "Megszakítás" (Danger, with a confirmation) sit to its right. Under the bar, in one wrapping row: finished and all steps with the percent, the elapsed time as a clock, the time left in words ("kb. 12 perc"), and the number of errors as a danger status line. Under that, the steps per function in text-muted. The elapsed time does not run while the run is paused.
+- While the run panel is shown, the note about the last scan is hidden, and the run buttons of the selection bar are disabled. When the run has ended, a status line says how in the place of the panel.
 
 Empty states
 
