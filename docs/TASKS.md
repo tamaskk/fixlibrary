@@ -12,7 +12,6 @@ Package 1: foundations.
 
 Package 2: pipeline frame.
 
-- [ ] T-010 (base, M) File operations, backup and undo
 - [ ] T-011 (base, L) Batch preview frame
 - [ ] T-012 (base, M) Claude CLI service
 
@@ -96,3 +95,4 @@ Nothing planned. See docs/PRD.md §07 before proposing anything.
 - [x] T-007 (base, S) Logging and the skip-and-list error framework. Not done here: a batch that runs past a broken MP3 and lists it on the "Hibák" tab needs the orchestrator (T-009) and the preview (T-011); the stage runner they will use is in place and tested.
 - [x] T-008 (base, M) Library scan and track selection: `pipeline/scanner.ts`, `tags.read`, scan at startup, the virtualized track table with search, filters, sorting and selection, `library:list` and `library:run`. Not done: `library:run` only answers with the tracks a run would process, and the function chooser is missing, both until T-009; the cover column shows the cover state, thumbnails come with the cover task (F2); one state icon per row, the icons per function come with the stages; the 5 minute / 30 second scan limits, the unplugged drive and scrolling 3000 real rows were not measured on the real external drive.
 - [x] T-009 (base, L) Pipeline orchestrator and job queue: the `jobs` table, stages, the queue, the orchestrator, `job.cancel`, the sleep blocker, `library:run` and the `pipeline:*` channels, the run panel and the function chooser. Not done: no real stage exists before T-013, so runs use two stand-in stages that only wait and exist in development only (`FIXLIB_DEMO_STAGES=1`); `job.cancel` within 5 s is proven with a stand-in job, not a real Python method; "no file changed after compute" is proven only with stand-in stages; the sleep assertion (`pmset -g assertions`) was not checked by hand; nothing starts the apply phase before T-011; the rate limiters per lookup service come with T-014.
+- [x] T-010 (base, M) File operations, backup and undo: `services/file-ops.ts`, `pipeline/batch-files.ts`, the `batch_files` journal, backups in place, copies in the clean library, atomic writes, the free space check, undo and the pruning of older backups. Not done: no real stage writes yet, so all of it is proven with stand-in stages on generated files in temp folders; the "Undo last batch" button and the message with the needed and free GB come with the preview (T-011), until then nothing in the page can apply or undo a batch; copies are checked by size, not by sha256; nothing was tried on the real external drive (exFAT has no clones, so backups there are real copies).

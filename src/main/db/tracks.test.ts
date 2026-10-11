@@ -345,6 +345,7 @@ describe('file state for rescans', () => {
       {
         id: scanned,
         path: '/Music/a.mp3',
+        originalPath: '/Music/a.mp3',
         fileSizeBytes: 8_000_000,
         fileMtimeMs: 1_790_000_000_000,
         fileMissing: false,
@@ -353,6 +354,7 @@ describe('file state for rescans', () => {
       {
         id: neverScanned,
         path: '/Music/b.mp3',
+        originalPath: '/Music/b.mp3',
         fileSizeBytes: null,
         fileMtimeMs: null,
         fileMissing: false,

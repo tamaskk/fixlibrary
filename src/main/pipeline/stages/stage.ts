@@ -1,4 +1,5 @@
 import type { Track } from '../../db/tracks'
+import type { TrackFiles } from '../batch-files'
 import type { JobPhase, Resource } from '@shared/pipeline'
 
 export interface StageContext {
@@ -8,6 +9,11 @@ export interface StageContext {
    */
   signal: AbortSignal
   batchId: number
+  /**
+   * The only way a stage can change the file of its track: backed up or copied
+   * first, written in one step. Null in the compute phase, which changes no file.
+   */
+  files: TrackFiles | null
 }
 
 export interface StageResult {

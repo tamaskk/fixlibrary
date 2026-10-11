@@ -1,7 +1,7 @@
 import { asc, count, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
-import { tracks } from './schema'
+import { AUDIO_FORMATS, COVER_STATUSES, styles, tracks } from './schema'
 import { normalizeTrackPath, volumeNameOfPath } from './track-paths'
 import { logger } from '../services/logger'
 
@@ -63,6 +63,8 @@ function toInsert(row: NewTrack): TrackInsert {
 export interface TrackFileState {
   id: number
   path: string
+  /** Where the file was first found. In clean library mode the original stays there. */
+  originalPath: string
   fileSizeBytes: number | null
   fileMtimeMs: number | null
   fileMissing: boolean
@@ -160,6 +162,7 @@ export function listTrackFileStates(db: AppDatabase): TrackFileState[] {
     .select({
       id: tracks.id,
       path: tracks.path,
+      originalPath: tracks.originalPath,
       fileSizeBytes: tracks.fileSizeBytes,
       fileMtimeMs: tracks.fileMtimeMs,
       fileMissing: tracks.fileMissing,
@@ -218,4 +221,93 @@ export function listTrackAvailability(
       offline: volumeName !== null && !mountedVolumes.has(volumeName),
       fileMissing
     }))
+}
+
+// Tag text in a snapshot is no longer than this, whatever wrote the snapshot.
+const MAX_SNAPSHOT_TEXT = 1000
+const text = z.string().max(MAX_SNAPSHOT_TEXT).nullable()
+const size = z.number().int().min(0).nullable()
+
+// What undo puts back: everything a batch may have changed about a track. Not the id,
+// not where the file was first found, and not when the row was created. Every field
+// may be missing: a snapshot written by an older version of the app has fewer.
+const restorableTrackSchema = z
+  .object({
+    format: z.enum(AUDIO_FORMATS),
+    durationMs: size,
+    bitrateKbps: size,
+    sampleRateHz: size,
+    fileSizeBytes: size,
+    fileMtimeMs: size,
+    fileMissing: z.boolean(),
+    artist: text,
+    title: text,
+    mix: text,
+    album: text,
+    label: text,
+    year: z.number().int().nullable(),
+    bpm: z.number().nullable(),
+    camelotKey: text,
+    musicalKey: text,
+    energy: z.number().int().min(1).max(10).nullable(),
+    primaryStyleId: z.number().int().nullable(),
+    secondaryStyleId: z.number().int().nullable(),
+    coverStatus: z.enum(COVER_STATUSES),
+    lufs: z.number().nullable(),
+    truePeakDbtp: z.number().nullable(),
+    acoustId: text,
+    musicbrainzRecordingId: text,
+    stageStatus: stageStatusSchema
+  })
+  .partial()
+
+export type TrackSnapshot = z.output<typeof restorableTrackSchema>
+
+/** The fields undo can put back from a `before` snapshot, or null if it is not one. */
+export function parseTrackSnapshot(before: unknown): TrackSnapshot | null {
+  const parsed = restorableTrackSchema.safeParse(before)
+  return parsed.success ? parsed.data : null
+}
+
+/** The path a `before` snapshot of a batch item holds, or null if it holds none. */
+export function pathOfSnapshot(before: unknown): string | null {
+  const parsed = z.object({ path: z.string().min(1) }).safeParse(before)
+  return parsed.success ? parsed.data.path : null
+}
+
+/** The track that has this path, if any. */
+export function findTrackIdByPath(db: AppDatabase, path: string): number | undefined {
+  return db
+    .select({ id: tracks.id })
+    .from(tracks)
+    .where(eq(tracks.path, normalizeTrackPath(path)))
+    .get()?.id
+}
+
+/**
+ * Puts a track back to what a snapshot holds. The path is not taken from the
+ * snapshot: the caller says where the file really is now. A style that was deleted
+ * since is left out, because the track can no longer point at it.
+ */
+export function restoreTrack(
+  db: AppDatabase,
+  id: number,
+  snapshot: TrackSnapshot,
+  path: string
+): boolean {
+  const styleIds = new Set(
+    db
+      .select({ id: styles.id })
+      .from(styles)
+      .all()
+      .map((style) => style.id)
+  )
+  const known = (styleId: number | null | undefined): number | null | undefined =>
+    typeof styleId === 'number' && !styleIds.has(styleId) ? null : styleId
+  return updateTrack(db, id, {
+    ...snapshot,
+    primaryStyleId: known(snapshot.primaryStyleId),
+    secondaryStyleId: known(snapshot.secondaryStyleId),
+    path
+  })
 }

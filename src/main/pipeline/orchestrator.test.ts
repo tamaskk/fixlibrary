@@ -12,6 +12,7 @@ import { insertTracks, setTracksMissing } from '../db/tracks'
 import { logger } from '../services/logger'
 import { AppError } from '@shared/errors'
 import type { Resource, ResourceLimits, RunProgress } from '@shared/pipeline'
+import { stubBatchFiles } from './batch-files.test-util'
 import { createOrchestrator, type Orchestrator } from './orchestrator'
 import { validateStages } from './stages'
 import type { Stage, StageResult } from './stages/stage'
@@ -96,6 +97,7 @@ function orchestrator(stages: Stage[], db = testDatabase.db): Orchestrator {
     limits: () => limits,
     listMountedVolumes: () => mounted,
     mode: () => 'clean_library',
+    batchFiles: stubBatchFiles(),
     onProgress: (report) => progress.push(report),
     onBusyChange: (isBusy) => busy.push(isBusy)
   })
@@ -683,7 +685,7 @@ describe('closing the app and starting it again', () => {
       .set({ approved: true })
       .where(eq(batchItems.trackId, approved))
       .run()
-    first.applyBatch(batchId)
+    await first.applyBatch(batchId)
     await vi.advanceTimersByTimeAsync(100)
     first.shutdown()
     await vi.advanceTimersByTimeAsync(1000)
@@ -755,6 +757,7 @@ describe('what listens to a run', () => {
       limits: () => limits,
       listMountedVolumes: () => mounted,
       mode: () => 'clean_library',
+      batchFiles: stubBatchFiles(),
       onProgress: () => {
         throw new Error('Object has been destroyed')
       },
@@ -784,6 +787,7 @@ describe('a listener that acts on the run from inside a report', () => {
       limits: () => limits,
       listMountedVolumes: () => mounted,
       mode: () => 'clean_library',
+      batchFiles: stubBatchFiles(),
       onProgress: (report) => {
         progress.push(report)
         onProgress(report)
@@ -982,7 +986,7 @@ describe('starting a run', () => {
     const firstId = first.ok ? first.value.batchId : -1
     await vi.runAllTimersAsync()
     testDatabase.db.update(batchItems).set({ approved: true }).run()
-    run.applyBatch(firstId)
+    await run.applyBatch(firstId)
     await vi.advanceTimersByTimeAsync(100)
     run.cancel()
 
@@ -1044,7 +1048,7 @@ describe('the apply phase', () => {
     started = []
 
     // Act
-    const applying = run.applyBatch(batchId)
+    const applying = await run.applyBatch(batchId)
     await vi.runAllTimersAsync()
 
     // Assert
@@ -1076,7 +1080,7 @@ describe('the apply phase', () => {
     started = []
 
     // Act
-    run.applyBatch(batchId)
+    await run.applyBatch(batchId)
     await vi.runAllTimersAsync()
 
     // Assert
@@ -1101,7 +1105,7 @@ describe('the apply phase', () => {
     const batchId = result.ok ? result.value.batchId : -1
     await vi.runAllTimersAsync()
     testDatabase.db.update(batchItems).set({ approved: true }).run()
-    run.applyBatch(batchId)
+    await run.applyBatch(batchId)
     await vi.advanceTimersByTimeAsync(100)
 
     // Act
@@ -1125,7 +1129,7 @@ describe('the apply phase', () => {
     busy = []
 
     // Act
-    const applying = run.applyBatch(batchId)
+    const applying = await run.applyBatch(batchId)
 
     // Assert
     expect(applying).toEqual({ ok: true, value: { batchId } })
@@ -1143,10 +1147,10 @@ describe('the apply phase', () => {
     const batchId = result.ok ? result.value.batchId : -1
 
     // Act
-    const whileComputing = run.applyBatch(batchId)
+    const whileComputing = await run.applyBatch(batchId)
     run.cancel()
-    const afterCancel = run.applyBatch(batchId)
-    const unknown = run.applyBatch(999_999)
+    const afterCancel = await run.applyBatch(batchId)
+    const unknown = await run.applyBatch(999_999)
 
     // Assert
     expect(whileComputing).toEqual({ ok: false, code: 'RUN_ACTIVE' })

@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { insertBackup } from '../db/backups'
+import { createBatch } from '../db/batches'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { setSetting } from '../db/settings'
 import { listStyles } from '../db/styles'
@@ -619,5 +621,65 @@ describe('styles', () => {
     // Assert
     expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
     expect(listStyles(testDatabase.db)).toHaveLength(DEFAULT_STYLES.length)
+  })
+})
+
+describe('the backup folder while a batch can still be undone', () => {
+  const local = { homeDir: '/Users/dj', cpuCount: 8 }
+
+  function withBackup(): void {
+    const [trackId] = insertTracks(testDatabase.db, [
+      { path: '/m/a.mp3', originalPath: '/m/a.mp3', format: 'mp3' }
+    ])
+    const batchId = createBatch(testDatabase.db, { type: 'run', mode: 'in_place', items: [] })
+    insertBackup(testDatabase.db, {
+      batchId,
+      trackId: trackId as number,
+      originalPath: '/m/a.mp3',
+      backupPath: '/b/1/1.mp3'
+    })
+  }
+
+  it('cannot be changed', () => {
+    // Arrange
+    const first = makeFolder('Backups A')
+    const second = makeFolder('Backups B')
+    setFolder(testDatabase.db, 'backup', first, local)
+    withBackup()
+
+    // Act
+    const result = setFolder(testDatabase.db, 'backup', second, local)
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'BACKUPS_IN_USE' })
+    expect(getSettingsSnapshot(testDatabase.db, local).settings.library.backupFolder).toBe(first)
+  })
+
+  it('does not move with the library either, when it is the default one next to it', () => {
+    // Arrange
+    const music = makeFolder('Music A')
+    const other = makeFolder('Elsewhere', 'Music B')
+    setFolder(testDatabase.db, 'libraryRoot', music, local)
+    withBackup()
+
+    // Act
+    const result = setFolder(testDatabase.db, 'libraryRoot', other, local)
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'BACKUPS_IN_USE' })
+    expect(getSettingsSnapshot(testDatabase.db, local).settings.library.rootFolder).toBe(music)
+  })
+
+  it('can be changed once no backup is left', () => {
+    // Arrange
+    const first = makeFolder('Backups A')
+    const second = makeFolder('Backups B')
+    setFolder(testDatabase.db, 'backup', first, local)
+
+    // Act
+    const result = setFolder(testDatabase.db, 'backup', second, local)
+
+    // Assert
+    expect(result.ok).toBe(true)
   })
 })

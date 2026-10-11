@@ -2,6 +2,7 @@
 import { realpathSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import type { z } from 'zod'
+import { hasBackups } from '../db/backups'
 import type { AppDatabase } from '../db/connection'
 import { getSetting, setSetting } from '../db/settings'
 import { listStyles, replaceStyles } from '../db/styles'
@@ -262,6 +263,16 @@ export function setFolder(
     libraryFoldersOverlap({ ...current, library }, environment)
   ) {
     return { ok: false, code: 'INVALID_INPUT' }
+  }
+  // Undo reads the backups from the folder in use. That folder also moves with the
+  // library while no backup folder is chosen.
+  const backupFolderBefore = resolveEffectiveSettings(current, environment).backupFolder
+  const backupFolderAfter = resolveEffectiveSettings(
+    { ...current, library },
+    environment
+  ).backupFolder
+  if (backupFolderBefore !== backupFolderAfter && hasBackups(db)) {
+    return { ok: false, code: 'BACKUPS_IN_USE' }
   }
 
   db.transaction((tx) => {

@@ -152,8 +152,11 @@ describe('the demo stages', () => {
     const track = { id: 1 } as Parameters<NonNullable<typeof analyze>['run']>[1]
 
     // Act
-    const quick = await createDemoStages(1)[0]?.run({ signal: stop.signal, batchId: 1 }, track)
-    const stopped = analyze?.run({ signal: stop.signal, batchId: 1 }, track)
+    const quick = await createDemoStages(1)[0]?.run(
+      { signal: stop.signal, batchId: 1, files: null },
+      track
+    )
+    const stopped = analyze?.run({ signal: stop.signal, batchId: 1, files: null }, track)
     stop.abort()
 
     // Assert

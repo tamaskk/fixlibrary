@@ -399,6 +399,24 @@ describe('scanning again', () => {
     expect(storedTracks().map((track) => track.fileMissing)).toEqual([false])
   })
 
+  it('does not take the original of a track for a new track when the track works on a copy', async () => {
+    // Arrange
+    const original = addFile('a.mp3')
+    await scanner().scan()
+    const id = storedTracks()[0]?.id as number
+    // What clean library mode does: the track points at its copy, outside the library.
+    updateTrack(testDatabase.db, id, { path: join(folder, 'Clean', 'a.mp3') })
+    readCalls = []
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { found: 1, added: 0, unchanged: 1 } })
+    expect(readCalls).toEqual([])
+    expect(storedTracks()).toMatchObject([{ id, originalPath: original }])
+  })
+
   it('leaves the tracks of another folder alone', async () => {
     // Arrange
     insertTracks(testDatabase.db, [
@@ -727,5 +745,21 @@ describe.skipIf(!existsSync(PYTHON_PATH))('scanning with the real sidecar', () =
       ['sine.mp3', 44_100, 320],
       ['sine.wav', 44_100, 706]
     ])
+  })
+})
+
+describe('a scan while a batch changes files', () => {
+  it('does not start: it would take half-renamed files for missing and new tracks', async () => {
+    // Arrange
+    writeFileSync(join(library, 'a.mp3'), 'a')
+    const scans = scanner({ isChangingFiles: () => true })
+
+    // Act
+    const result = await scans.scan()
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(scans.isRunning()).toBe(false)
+    expect(readCalls).toEqual([])
   })
 })

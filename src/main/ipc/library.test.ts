@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { batches } from '../db/schema'
 import { insertTracks } from '../db/tracks'
+import { stubBatchFiles } from '../pipeline/batch-files.test-util'
 import { createOrchestrator, type Orchestrator } from '../pipeline/orchestrator'
 import type { LibraryScanner } from '../pipeline/scanner'
 import type { Stage } from '../pipeline/stages/stage'
@@ -75,7 +76,8 @@ beforeEach(() => {
     stages,
     limits: () => ({ cpu: 2, gpu: 1, network: 4, claude: 1, io: 2 }),
     listMountedVolumes: () => new Set(),
-    mode: () => 'clean_library'
+    mode: () => 'clean_library',
+    batchFiles: stubBatchFiles()
   })
   setRendererEntry({ filePath: APP_PAGE })
   registerLibraryIpc({

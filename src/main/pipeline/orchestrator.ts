@@ -27,6 +27,7 @@ import {
   type NewJob
 } from '../db/jobs'
 import { getTrackById, getTracksByIds, type Track } from '../db/tracks'
+import { describeError } from '../services/error-text'
 import { logger } from '../services/logger'
 import { AppError, TRACK_ERROR_MESSAGES, type Result, type TrackError } from '@shared/errors'
 import {
@@ -36,10 +37,11 @@ import {
   type ResourceLimits,
   type RunProgress
 } from '@shared/pipeline'
+import type { BatchFiles, UndoSummary } from './batch-files'
 import { createJobQueue } from './queue'
 import { runStage } from './run-stage'
 import { withDependencies } from './stages'
-import type { Stage } from './stages/stage'
+import type { Stage, StageContext } from './stages/stage'
 
 // A job that was running when the app crashed is started again. One that was
 // interrupted this often is the likely reason the app crashes, and is given up.
@@ -58,6 +60,13 @@ export interface OrchestratorDependencies {
   listMountedVolumes: () => ReadonlySet<string>
   /** In place or clean library, as the settings say when a run starts. */
   mode: () => BatchMode
+  /** How the apply phase changes files, and how a batch is undone. */
+  batchFiles: BatchFiles
+  /**
+   * True while something else works on the files of the library, such as a scan or
+   * the cleanup at startup: no batch is applied or undone then.
+   */
+  libraryBusy?: () => boolean
   /** May be called very often; whoever passes it on limits how often. */
   onProgress?: (progress: RunProgress) => void
   /** True while jobs run or may start by themselves; the app must not sleep then. */
@@ -69,8 +78,16 @@ export interface OrchestratorDependencies {
 export interface Orchestrator {
   /** Starts the compute phase of a new batch for the given tracks and stages. */
   start: (request: unknown) => Result<{ batchId: number }>
-  /** Starts the apply phase of a batch that waits for approval. */
-  applyBatch: (batchId: number) => Result<{ batchId: number }>
+  /**
+   * Starts the apply phase of a batch that waits for approval, unless its backups or
+   * copies would not fit on their volume (`NOT_ENOUGH_SPACE`).
+   */
+  applyBatch: (batchId: number) => Promise<Result<{ batchId: number }>>
+  /**
+   * Puts the files and tracks of the last batch that wrote back to what they were.
+   * Refused while a batch is computed or applied.
+   */
+  undoLast: () => Promise<Result<UndoSummary>>
   /** At startup: goes on with the batch the app was working on when it stopped. */
   recover: () => void
   /** No new job starts; the running ones finish. */
@@ -88,6 +105,8 @@ export interface Orchestrator {
    */
   shutdown: () => void
   progress: () => RunProgress | null
+  /** True while files of the library are being changed, or are about to be. */
+  changingFiles: () => boolean
   /** Resolves when no run is active any more; at once if there is none. */
   whenFinished: () => Promise<void>
 }
@@ -101,6 +120,8 @@ interface RunJob {
 
 interface Run {
   batchId: number
+  /** In place or clean library, as it was when the batch was created. */
+  mode: BatchMode
   phase: JobPhase
   /** The jobs of every phase by track and stage name: a stage looks its dependencies up here. */
   byTrack: Map<number, Map<string, RunJob>>
@@ -353,6 +374,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const done of waiters) done()
   }
 
+  // True while the apply phase is being prepared, a batch is being undone or old
+  // backups are being deleted: each takes time, and nothing else may start in between.
+  let busyWithFiles = false
+  // The deleting of older backups that is going on, or null.
+  let pruning: Promise<void> | null = null
+
   function endPhaseIfDone(): void {
     const active = run
     if (!active || active.unfinished > 0) return
@@ -364,6 +391,18 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     })
     logger.info(`Batch ${active.batchId}: the ${active.phase} phase ended as ${status}`)
     leave(active, status)
+    if (status === 'applied') {
+      // Only the last batch can be undone: the backups of the ones before it go.
+      // An apply or an undo that is asked for meanwhile waits for this to end.
+      pruning = dependencies.batchFiles
+        .pruneOlderBackups(active.batchId)
+        .catch((error: unknown) =>
+          logger.error(`Older backups could not be deleted: ${describeError(error)}`)
+        )
+        .finally(() => {
+          pruning = null
+        })
+    }
   }
 
   function pauseBecause(reason: 'user' | 'offline'): void {
@@ -376,6 +415,22 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     logger.info(`Batch ${run.batchId} paused (${reason})`)
     report()
     updateBusy()
+  }
+
+  function stageContext(active: Run, job: RunJob, signal: AbortSignal): StageContext {
+    return {
+      signal,
+      batchId: active.batchId,
+      // Only an apply stage gets a way to change the file of its track.
+      files:
+        job.stage.phase === 'apply'
+          ? dependencies.batchFiles.forTrack(
+              { id: active.batchId, mode: active.mode },
+              job.trackId,
+              signal
+            )
+          : null
+    }
   }
 
   /** Runs one job. Never rejects: the queue relies on that. */
@@ -422,7 +477,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
           if (controller.signal.aborted) return stopped
           return Promise.race([
             job.stage.run(
-              { signal: AbortSignal.any([timeout, controller.signal]), batchId: active.batchId },
+              stageContext(active, job, AbortSignal.any([timeout, controller.signal])),
               track
             ),
             stopped
@@ -480,6 +535,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   function begin(batch: Batch, phase: JobPhase, pauseReason: Run['pauseReason']): void {
     const active: Run = {
       batchId: batch.id,
+      mode: batch.mode,
       phase,
       byTrack: new Map(),
       phaseJobs: [],
@@ -540,8 +596,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     updateBusy()
   }
 
+  const libraryBusy = (): boolean => dependencies.libraryBusy?.() ?? false
+
   function isActive(): boolean {
-    return run !== null || findActiveBatch(db) !== undefined
+    return run !== null || busyWithFiles || findActiveBatch(db) !== undefined
   }
 
   return {
@@ -599,15 +657,51 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       return { ok: true, value: { batchId } }
     },
 
-    applyBatch(batchId) {
+    async applyBatch(batchId) {
+      await pruning
+      await dependencies.batchFiles.settled()
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
-      if (isActive()) return { ok: false, code: 'RUN_ACTIVE' }
+      if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
       const batch = getBatch(db, batchId)
       if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
+
+      busyWithFiles = true
+      try {
+        // Before anything is written: a batch that runs out of room halfway would
+        // leave part of the library changed and part not.
+        const space = await dependencies.batchFiles.checkSpace(batchId)
+        if (!space.enough) {
+          logger.warn(
+            `Batch ${batchId} not applied: it needs ${space.neededBytes} bytes, ${space.freeBytes} are free`
+          )
+          return { ok: false, code: 'NOT_ENOUGH_SPACE' }
+        }
+      } finally {
+        busyWithFiles = false
+      }
+      if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
+      // A scan may have started while the room was measured.
+      if (libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
+
       setBatchStatus(db, batchId, 'applying')
       logger.info(`Batch ${batchId}: the apply phase started`)
       begin({ ...batch, status: 'applying' }, 'apply', null)
       return { ok: true, value: { batchId } }
+    },
+
+    async undoLast() {
+      await pruning
+      // A stage of a cancelled batch may still be finishing a copy or a rename.
+      await dependencies.batchFiles.settled()
+      if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
+      // Never while a batch is being worked on: its files are changing.
+      if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
+      busyWithFiles = true
+      try {
+        return await dependencies.batchFiles.undoLast()
+      } finally {
+        busyWithFiles = false
+      }
     },
 
     recover() {
@@ -702,6 +796,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       for (const done of waiters) done()
     },
 
+    changingFiles: () =>
+      busyWithFiles || pruning !== null || run?.phase === 'apply' || dependencies.batchFiles.busy(),
     progress: () => (run ? snapshot(run, currentState(run)) : null),
 
     whenFinished: () =>
