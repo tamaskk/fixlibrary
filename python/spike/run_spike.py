@@ -54,9 +54,7 @@ def analyse_bpm_and_key(track: Path) -> tuple[float, float, str, str, float]:
 
 def load_pinned_model() -> BagOfModels:
     """Fetch the pinned htdemucs weights, verify their SHA-256, then load them."""
-    model_path = Path(
-        hf_hub_download(MODEL_REPO, MODEL_FILE, revision=MODEL_REVISION, token=False)
-    )
+    model_path = Path(hf_hub_download(MODEL_REPO, MODEL_FILE, revision=MODEL_REVISION, token=False))
     digest = hashlib.sha256()
     with model_path.open("rb") as model_file:
         for chunk in iter(lambda: model_file.read(1 << 20), b""):
