@@ -1,12 +1,12 @@
 // Finds the audio files under the library root and keeps the `tracks` table in step
 // with them. Read only: a scan never changes, moves or deletes a library file.
+import type { Dir } from 'fs'
 import { lstat, opendir, realpath, stat } from 'fs/promises'
 import { extname, join, sep } from 'path'
 import type { AppDatabase } from '../db/connection'
 import type { AUDIO_FORMATS } from '../db/schema'
 import { normalizeTrackPath, volumeNameOfPath } from '../db/track-paths'
 import {
-  getTrackById,
   insertTracks,
   listTrackFileStates,
   setTracksMissing,
@@ -15,10 +15,12 @@ import {
   type TrackChanges,
   type TrackFileState
 } from '../db/tracks'
+import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
 import { AppError, type ErrorCode, type Result } from '@shared/errors'
 import type { ScanProgress, ScanSummary } from '@shared/library'
 import { TAG_BATCH_SIZE, type FileTags } from '@shared/rpc'
+import { toOneLine } from '@shared/text'
 import {
   isUnsuitableLibraryRoot,
   libraryFoldersOverlap,
@@ -38,6 +40,16 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, AudioFormat>> = {
 
 // The walk reports how far it is after this many files, so a slow drive shows progress.
 const WALK_PROGRESS_STEP = 200
+// When a batch fails its files are read one by one. This many failures in a row mean
+// that the sidecar is the problem, not the files.
+const MAX_SINGLE_FAILURES_IN_A_ROW = 3
+const MAX_LOGGED_ERROR_LENGTH = 500
+
+// Failures of the sidecar that one bad file in a batch can cause.
+const BATCH_FAILURE_CODES: readonly ErrorCode[] = ['PYTHON_ERROR', 'PYTHON_CRASHED', 'TIMEOUT']
+
+// A tree of folders that cannot be read must not push the rest out of the log.
+const logSkipped = createLogLimiter((line) => logger.warn(line), { limit: 20, windowMs: 10_000 })
 
 export interface ScanDependencies {
   db: AppDatabase
@@ -46,12 +58,16 @@ export interface ScanDependencies {
   readTags: (paths: string[]) => Promise<FileTags[]>
   listMountedVolumes: () => ReadonlySet<string>
   onProgress?: (progress: ScanProgress) => void
+  /** The path with its links resolved. Replaced in tests that need a path on a volume. */
+  resolvePath?: (path: string) => Promise<string>
 }
 
 export interface LibraryScanner {
   /** Starts a scan, or joins the one that is running. Never rejects. */
   scan: () => Promise<Result<ScanSummary>>
   isRunning: () => boolean
+  /** The running scan, or null. Unlike `scan`, this never starts one. */
+  current: () => Promise<Result<ScanSummary>> | null
 }
 
 interface FoundFile {
@@ -66,8 +82,17 @@ interface FoundFile {
 
 interface WalkResult {
   files: FoundFile[]
-  /** False when a folder could not be read, so files may exist that were not seen. */
+  /** False when something could not be looked at, so files may exist that were not seen. */
   complete: boolean
+}
+
+/**
+ * An error as one line of the app's own making. A file name may hold a line break
+ * or text that looks like a log line, and a raw error carries the name in its stack.
+ */
+function describeError(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  return toOneLine(text, MAX_LOGGED_ERROR_LENGTH)
 }
 
 /** Hidden entries: `._*` AppleDouble files, `.Trashes`, `.Spotlight-V100`, `.fseventsd`, … */
@@ -84,41 +109,156 @@ async function walkLibrary(
   const seen = new Set<string>()
   let complete = true
   const pending = [root]
+  const skip = (what: string, error: unknown): void => {
+    complete = false
+    logSkipped(`Scan: ${what} could not be read and was skipped: ${describeError(error)}`)
+  }
 
   for (let folder = pending.pop(); folder !== undefined; folder = pending.pop()) {
+    let entries: Dir
     try {
-      for await (const entry of await opendir(folder)) {
+      // A folder that was swapped for a link since it was listed is not entered.
+      if (folder !== root && (await realpath(folder)) !== folder) {
+        skip('a folder that is now a link', new Error('not the folder that was listed'))
+        continue
+      }
+      entries = await opendir(folder)
+    } catch (error) {
+      // The root itself failing is the caller's to explain (the drive is gone).
+      if (folder === root) throw error
+      skip('a folder', error)
+      continue
+    }
+
+    try {
+      for await (const entry of entries) {
         if (isHidden(entry.name)) continue
         const diskPath = join(folder, entry.name)
-        // Some file systems do not say what an entry is; then the entry itself is asked.
-        // Links are never followed: a link could lead out of the library or into a loop.
-        const kind = entry.isFile() || entry.isDirectory() ? entry : await lstat(diskPath)
-        if (kind.isDirectory()) {
-          if (!excludedFolders.has(normalizeTrackPath(diskPath))) pending.push(diskPath)
-          continue
-        }
-        const format = FORMAT_BY_EXTENSION[extname(entry.name).toLowerCase()]
-        if (!kind.isFile() || format === undefined) continue
+        try {
+          // Some file systems do not say what an entry is; then the entry itself is asked.
+          // Links are never followed: a link could lead out of the library or into a loop.
+          const kind = entry.isFile() || entry.isDirectory() ? entry : await lstat(diskPath)
+          if (kind.isDirectory()) {
+            if (!excludedFolders.has(normalizeTrackPath(diskPath))) pending.push(diskPath)
+            continue
+          }
+          const format = FORMAT_BY_EXTENSION[extname(entry.name).toLowerCase()]
+          if (!kind.isFile() || format === undefined) continue
 
-        const trackPath = normalizeTrackPath(diskPath)
-        if (seen.has(trackPath)) {
-          logger.warn('Scan: two files differ only in how their name is composed; one is skipped')
-          continue
+          const trackPath = normalizeTrackPath(diskPath)
+          if (seen.has(trackPath)) {
+            logSkipped('Scan: two files differ only in how their name is composed; one is skipped')
+            continue
+          }
+          // lstat, so a file swapped for a link since it was listed is not measured.
+          const state = await lstat(diskPath)
+          if (!state.isFile()) continue
+          seen.add(trackPath)
+          files.push({
+            diskPath,
+            trackPath,
+            format,
+            sizeBytes: state.size,
+            mtimeMs: Math.trunc(state.mtimeMs)
+          })
+          if (files.length % WALK_PROGRESS_STEP === 0) onFound(files.length)
+        } catch (error) {
+          // One entry that went away between listing and reading does not end the folder.
+          skip('an entry', error)
         }
-        const { size, mtimeMs } = await stat(diskPath)
-        seen.add(trackPath)
-        files.push({ diskPath, trackPath, format, sizeBytes: size, mtimeMs: Math.trunc(mtimeMs) })
-        if (files.length % WALK_PROGRESS_STEP === 0) onFound(files.length)
       }
     } catch (error) {
-      // The root itself failing is the caller's to explain (the drive is gone);
-      // a folder below it is skipped, and nothing is marked missing in this scan.
       if (folder === root) throw error
-      complete = false
-      logger.warn('Scan: a folder could not be read and was skipped', error)
+      skip('the rest of a folder', error)
     }
   }
   return { files, complete }
+}
+
+function unreadableTags(path: string): FileTags {
+  return {
+    path,
+    readable: false,
+    durationMs: null,
+    bitrateKbps: null,
+    sampleRateHz: null,
+    artist: null,
+    title: null,
+    album: null,
+    label: null,
+    year: null,
+    hasCover: false
+  }
+}
+
+/** The sidecar answered about other files than it was asked about. Never retried. */
+class AnswerMismatch extends AppError {
+  constructor() {
+    super('PYTHON_ERROR', 'tags.read answered for different files')
+  }
+}
+
+function isBatchFailure(error: unknown): error is AppError {
+  return (
+    error instanceof AppError &&
+    !(error instanceof AnswerMismatch) &&
+    BATCH_FAILURE_CODES.includes(error.code)
+  )
+}
+
+/** Asks for the tags of the files and checks that the answer is about exactly them. */
+async function readChecked(
+  files: readonly FoundFile[],
+  readTags: ScanDependencies['readTags']
+): Promise<FileTags[]> {
+  const tags = await readTags(files.map((file) => file.diskPath))
+  const matches =
+    tags.length === files.length &&
+    files.every((file, index) => tags[index]?.path === file.diskPath)
+  if (!matches) throw new AnswerMismatch()
+  return tags
+}
+
+/**
+ * The tags of one batch. When the batch as a whole fails, its files are read one by
+ * one, so that a single file the sidecar cannot cope with is recorded as unreadable
+ * instead of stopping this scan and every later one at the same place.
+ *
+ * A sidecar that is not running fails every call the same way. That is told apart
+ * from bad files by how the single reads go: several failures in a row, or a crash
+ * with no file read at all, end the scan with the sidecar's error.
+ */
+async function readBatch(
+  batch: readonly FoundFile[],
+  readTags: ScanDependencies['readTags'],
+  stillReachable: () => Promise<boolean>
+): Promise<FileTags[]> {
+  try {
+    return await readChecked(batch, readTags)
+  } catch (error) {
+    if (!isBatchFailure(error) || !(await stillReachable())) throw error
+    logger.warn(`Scan: a batch failed (${error.code}); reading its files one by one`)
+  }
+
+  const tags: FileTags[] = []
+  let failuresInARow = 0
+  let anyRead = false
+  let lastFailure: AppError | null = null
+  for (const file of batch) {
+    try {
+      const [single] = await readChecked([file], readTags)
+      tags.push(single ?? unreadableTags(file.diskPath))
+      failuresInARow = 0
+      anyRead = true
+    } catch (error) {
+      failuresInARow += 1
+      if (!isBatchFailure(error) || failuresInARow >= MAX_SINGLE_FAILURES_IN_A_ROW) throw error
+      lastFailure = error
+      tags.push(unreadableTags(file.diskPath))
+    }
+  }
+  if (!anyRead && lastFailure?.code === 'PYTHON_CRASHED') throw lastFailure
+  return tags
 }
 
 function tagFields(tags: FileTags): TrackChanges {
@@ -141,6 +281,7 @@ function fileFields(file: FoundFile): TrackChanges {
 
 async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSummary>> {
   const { db, environment, readTags, listMountedVolumes, onProgress } = dependencies
+  const resolvePath = dependencies.resolvePath ?? realpath
   const fail = (code: ErrorCode): Result<ScanSummary> => ({ ok: false, code })
 
   const settings = readSettings(db)
@@ -149,9 +290,9 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
 
   // An unclean eject can leave an empty folder under /Volumes. Scanning that would
   // find nothing and mark the whole library missing, so the mount itself is checked.
-  const rootIsReachable = async (): Promise<string | null> => {
+  const reachableRoot = async (): Promise<string | null> => {
     try {
-      const resolved = await realpath(chosenRoot)
+      const resolved = await resolvePath(chosenRoot)
       const volume = volumeNameOfPath(resolved)
       if (volume !== null && !listMountedVolumes().has(volume)) return null
       return (await stat(resolved)).isDirectory() ? resolved : null
@@ -159,8 +300,9 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
       return null
     }
   }
+  const stillReachable = async (): Promise<boolean> => (await reachableRoot()) !== null
 
-  const root = await rootIsReachable()
+  const root = await reachableRoot()
   if (root === null) return fail('LIBRARY_UNAVAILABLE')
   // The rules were checked when the folders were chosen; what the paths point to
   // may have changed since.
@@ -168,12 +310,13 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     return fail('LIBRARY_ROOT_UNSUITABLE')
   }
 
+  // Compared with the paths of the walk, which are spelled as the disk spells them.
   const { backupFolder } = resolveEffectiveSettings(settings, environment)
-  const excluded = new Set(
-    [backupFolder, settings.library.cleanLibraryFolder]
-      .filter((folder): folder is string => folder !== null)
-      .map(normalizeTrackPath)
-  )
+  const excluded = new Set<string>()
+  for (const folder of [backupFolder, settings.library.cleanLibraryFolder]) {
+    if (folder === null) continue
+    excluded.add(normalizeTrackPath(await resolvePath(folder).catch(() => folder)))
+  }
 
   try {
     onProgress?.({ phase: 'walking', found: 0 })
@@ -192,7 +335,10 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
       const same =
         known !== undefined &&
         known.fileSizeBytes === file.sizeBytes &&
-        known.fileMtimeMs === file.mtimeMs
+        known.fileMtimeMs === file.mtimeMs &&
+        // A file that could not be read is tried again: the cause may have been the
+        // drive or the reader, not the file.
+        known.stageStatus.scan !== 'failed'
       if (!same) {
         toRead.push(file)
         continue
@@ -208,24 +354,19 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
       updated: 0,
       unchanged,
       missing: 0,
-      unreadable: 0
+      unreadable: 0,
+      complete: walk.complete
     }
 
     for (let start = 0; start < toRead.length; start += TAG_BATCH_SIZE) {
       onProgress?.({ phase: 'reading', done: start, total: toRead.length })
       const batch = toRead.slice(start, start + TAG_BATCH_SIZE)
-      const tags = await readTags(batch.map((file) => file.diskPath))
-      if (tags.length !== batch.length) {
-        throw new AppError('PYTHON_ERROR', 'tags.read answered for a different number of files')
-      }
+      const tags = await readBatch(batch, readTags, stillReachable)
 
       const inserts: NewTrack[] = []
       const updates: { id: number; changes: TrackChanges }[] = []
       batch.forEach((file, index) => {
-        const fileTags = tags[index]
-        if (fileTags === undefined || fileTags.path !== file.diskPath) {
-          throw new AppError('PYTHON_ERROR', 'tags.read answered for a different file')
-        }
+        const fileTags = tags[index] ?? unreadableTags(file.diskPath)
         if (!fileTags.readable) summary.unreadable += 1
         const scanStatus = fileTags.readable ? ('done' as const) : ('failed' as const)
         const known = stored.get(file.trackPath)
@@ -240,15 +381,14 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
           })
           return
         }
-        // Only the scan's own entry changes; what other stages recorded stays.
-        const current = getTrackById(db, known.id, new Set())?.stageStatus ?? {}
         updates.push({
           id: known.id,
           changes: {
             ...fileFields(file),
             ...tagFields(fileTags),
             fileMissing: false,
-            stageStatus: { ...current, scan: scanStatus }
+            // Only the scan's own entry changes; what other stages recorded stays.
+            stageStatus: { ...known.stageStatus, scan: scanStatus }
           }
         })
       })
@@ -260,13 +400,17 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     onProgress?.({ phase: 'reading', done: toRead.length, total: toRead.length })
 
     // A drive that went away during the scan must not make its tracks look deleted.
-    if ((await rootIsReachable()) === null) return fail('LIBRARY_UNAVAILABLE')
-    if (walk.complete) {
-      const foundPaths = new Set(walk.files.map((file) => file.trackPath))
-      const rootPrefix = normalizeTrackPath(root) + sep
-      const gone = [...stored.values()].filter(
-        (state) => state.path.startsWith(rootPrefix) && !foundPaths.has(state.path)
-      )
+    if (!(await stillReachable())) return fail('LIBRARY_UNAVAILABLE')
+
+    const foundPaths = new Set(walk.files.map((file) => file.trackPath))
+    const rootPrefix = normalizeTrackPath(root) + sep
+    const gone = [...stored.values()].filter(
+      (state) => state.path.startsWith(rootPrefix) && !foundPaths.has(state.path)
+    )
+    // A library that had tracks and now shows no file at all is far more likely to be
+    // unreadable (a permission the app lost, an empty mount) than emptied.
+    if (walk.files.length === 0 && gone.length > 0) summary.complete = false
+    if (summary.complete) {
       setTracksMissing(
         db,
         gone.filter((state) => !state.fileMissing).map((state) => state.id),
@@ -278,8 +422,8 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     return { ok: true, value: summary }
   } catch (error) {
     // What was written before the failure stays; the next scan picks up from there.
-    logger.error('The library scan stopped', error)
-    if ((await rootIsReachable()) === null) return fail('LIBRARY_UNAVAILABLE')
+    logger.error(`The library scan stopped: ${describeError(error)}`)
+    if (!(await stillReachable())) return fail('LIBRARY_UNAVAILABLE')
     return fail(error instanceof AppError ? error.code : 'UNEXPECTED')
   }
 }
@@ -291,7 +435,7 @@ export function createLibraryScanner(dependencies: ScanDependencies): LibrarySca
     scan() {
       running ??= runScan(dependencies)
         .catch((error: unknown): Result<ScanSummary> => {
-          logger.error('The library scan failed', error)
+          logger.error(`The library scan failed: ${describeError(error)}`)
           return { ok: false, code: 'UNEXPECTED' }
         })
         .finally(() => {
@@ -299,6 +443,7 @@ export function createLibraryScanner(dependencies: ScanDependencies): LibrarySca
         })
       return running
     },
-    isRunning: () => running !== null
+    isRunning: () => running !== null,
+    current: () => running
   }
 }

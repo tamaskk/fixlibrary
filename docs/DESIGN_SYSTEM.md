@@ -159,7 +159,8 @@ Navigation
 Status lines
 
 - A state shown as an icon and words together in the Small role: success (check), danger-text (cross), warning (triangle), text-muted (dash). `success` and `warning` may be used as text on bg and surface; both pass AA there.
-- A status that appears after an action sits in a `role="status"` element, so it is announced.
+- A status that appears after an action sits in a `role="status"` element, so it is announced. The element is in the page before the status is, and empty until then: a live region that appears already filled is often not announced.
+- The component is `ui/status-line.tsx`.
 
 Settings pages
 
@@ -190,7 +191,7 @@ Modals
 
 Progress
 
-- Long runs show a percent bar, counts per stage, elapsed time and an estimate. Never an indeterminate spinner for work longer than 3 seconds.
+- Pipeline runs show a percent bar, counts per stage, elapsed time and an estimate. A library scan, which takes seconds to a few minutes, shows its phase, counts and percent only. Never an indeterminate spinner for work longer than 3 seconds.
 - The bar (`ui/progress-bar.tsx`) is 4px high, radius-full, surface-hover with a primary fill, and is always named for assistive technology. The percent and the counts stand next to it in the Data role.
 - Work with no known end (finding the files of a scan) shows a rising count instead of a bar.
 

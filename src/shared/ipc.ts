@@ -30,7 +30,8 @@ export const IPC_CHANNELS = {
   systemCheckTools: 'system:checkTools',
   systemOpenLogFolder: 'system:openLogFolder',
   libraryStatus: 'library:status',
-  libraryScan: 'library:scan'
+  libraryScan: 'library:scan',
+  libraryFollowScan: 'library:followScan'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -77,6 +78,11 @@ export interface FixLibraryApi {
      * is running, also one started by the app, this joins it.
      */
     scan: () => Promise<Result<ScanSummary>>
+    /**
+     * Resolves with the result of the scan that is running, or with null at once
+     * when none is. Unlike `scan`, it never starts one.
+     */
+    followScan: () => Promise<Result<ScanSummary> | null>
     /** Calls the listener while a scan runs. Returns the function that stops it. */
     onScanProgress: (listener: (progress: ScanProgress) => void) => () => void
   }

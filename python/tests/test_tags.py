@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import struct
 from pathlib import Path
 
 import pytest
@@ -110,6 +112,65 @@ def test_a_broken_or_missing_file_does_not_fail_the_batch(tmp_path: Path) -> Non
         str(text),
     ]
     assert [entry["readable"] for entry in result["files"]] == [False, True, False, False]
+
+
+def test_a_header_with_an_absurd_sample_rate_does_not_fail_the_batch(tmp_path: Path) -> None:
+    # An 80-bit float near its maximum: the bitrate mutagen derives from it is too
+    # large to be converted, which used to raise out of the whole call.
+    comm = struct.pack(">hLh", 1, 1, 16) + b"\x7f\xfe" + b"\xff" * 8
+    body = b"AIFF" + b"COMM" + struct.pack(">L", len(comm)) + comm
+    broken = tmp_path / "huge-rate.aiff"
+    broken.write_bytes(b"FORM" + struct.pack(">L", len(body)) + body)
+    good = copy_fixture("sine.mp3", tmp_path)
+
+    result = tags.read_tags([str(broken), str(good)])
+
+    assert result["files"][1]["readable"] is True
+    assert result["files"][0]["bitrateKbps"] is None
+
+
+def test_a_file_whose_tag_claims_to_be_huge_is_not_parsed(tmp_path: Path) -> None:
+    path = tmp_path / "bomb.mp3"
+    # 0x08 0x00 0x00 0x00 as a synchsafe size is 16 MiB, one byte over the limit with 0x01.
+    path.write_bytes(b"ID3\x03\x00\x00\x08\x00\x00\x01" + (FIXTURES / "sine.mp3").read_bytes())
+
+    result = tags.read_file_tags(str(path))
+
+    assert result["readable"] is False
+
+
+def test_a_link_and_a_pipe_are_not_read(tmp_path: Path) -> None:
+    target = copy_fixture("sine.mp3", tmp_path)
+    link = tmp_path / "link.mp3"
+    link.symlink_to(target)
+    pipe = tmp_path / "pipe.mp3"
+    os.mkfifo(pipe)
+
+    result = tags.read_tags([str(link), str(pipe)])
+
+    assert [entry["readable"] for entry in result["files"]] == [False, False]
+
+
+def test_characters_that_reverse_the_reading_direction_are_removed(tmp_path: Path) -> None:
+    path = copy_fixture("sine.mp3", tmp_path)
+    id3 = ID3()
+    id3.add(TIT2(encoding=3, text=["Track\u202egnp.exe\u2066"]))
+    id3.save(path, v2_version=3)
+
+    result = tags.read_file_tags(str(path))
+
+    assert result["title"] == "Trackgnp.exe"
+
+
+def test_the_largest_possible_answer_fits_one_line_of_the_bridge() -> None:
+    # Every character written as two \\uXXXX escapes, the longest a path can be on macOS.
+    entry = tags._unreadable("\U0001f3b5" * 256)
+    for key in ("artist", "title", "album", "label"):
+        entry[key] = "\U0001f3b5" * tags.MAX_TEXT_LENGTH
+
+    line = server._encode({"jsonrpc": "2.0", "id": 1, "result": {"files": [entry] * 50}})
+
+    assert len(line) < 1024 * 1024
 
 
 def test_a_file_of_another_audio_format_is_not_a_track(tmp_path: Path) -> None:

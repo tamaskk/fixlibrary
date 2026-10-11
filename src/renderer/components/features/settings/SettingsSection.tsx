@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { Card } from '@/components/ui/card'
 import type { ActionFeedback } from '@/lib/use-action-feedback'
-import { StatusLine } from './StatusLine'
+import { StatusLine } from '@/components/ui/status-line'
 
 type SettingsSectionProps = {
   title: string

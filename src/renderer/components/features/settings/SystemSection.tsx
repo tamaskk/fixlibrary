@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import type { ToolCheck, ToolCheckFailure } from '@shared/tools'
 import { SettingsSection } from './SettingsSection'
-import { StatusLine } from './StatusLine'
+import { StatusLine } from '@/components/ui/status-line'
 
 const FAILURES: Record<ToolCheckFailure, string> = {
   missing: 'Hiányzik',

@@ -197,8 +197,12 @@ const LIBRARY_FOLDER_KINDS: readonly FolderKind[] = ['libraryRoot', 'cleanLibrar
  */
 export function isUnsuitableLibraryRoot(folder: string, environment: SettingsEnvironment): boolean {
   const volumesRoot = join(sep, 'Volumes')
+  // The data volume shows the home folder a second time, under a path that is not
+  // above the first one.
+  const homeOnDataVolume = join(sep, 'System', 'Volumes', 'Data', environment.homeDir)
   return (
     isInsideOrSame(environment.homeDir, folder) ||
+    isInsideOrSame(homeOnDataVolume, folder) ||
     (isInsideOrSame(folder, volumesRoot) && isInsideOrSame(volumesRoot, folder))
   )
 }

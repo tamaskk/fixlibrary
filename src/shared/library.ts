@@ -10,6 +10,11 @@ export interface ScanSummary {
   missing: number
   /** Files of a known format that could not be read; they are listed without tags. */
   unreadable: number
+  /**
+   * False when part of the library could not be looked at. Such a scan marks
+   * nothing missing, because a file it did not see may still be there.
+   */
+  complete: boolean
 }
 
 export type ScanProgress =

@@ -33,15 +33,18 @@ const INSERT_CHUNK_SIZE = 500
 // Ids are bound one by one in an `in (…)` list.
 const ID_CHUNK_SIZE = 500
 
+function readStageStatus(id: number, stored: unknown): StageStatus {
+  const stageStatus = stageStatusSchema.safeParse(stored)
+  if (stageStatus.success) return stageStatus.data
+  // One unreadable row must not hide the rest of the library: it reads as "nothing done yet".
+  logger.error(`Track ${id} has an unreadable stage status; treating it as empty`)
+  return {}
+}
+
 function toTrack(row: TrackRow, mountedVolumes: ReadonlySet<string>): Track {
-  const stageStatus = stageStatusSchema.safeParse(row.stageStatus)
-  if (!stageStatus.success) {
-    // One unreadable row must not hide the rest of the library: it reads as "nothing done yet".
-    logger.error(`Track ${row.id} has an unreadable stage status; treating it as empty`)
-  }
   return {
     ...row,
-    stageStatus: stageStatus.success ? stageStatus.data : {},
+    stageStatus: readStageStatus(row.id, row.stageStatus),
     offline: row.volumeName !== null && !mountedVolumes.has(row.volumeName)
   }
 }
@@ -63,6 +66,7 @@ export interface TrackFileState {
   fileSizeBytes: number | null
   fileMtimeMs: number | null
   fileMissing: boolean
+  stageStatus: StageStatus
 }
 
 /** Inserts all rows or none. Returns the new ids in input order. */
@@ -140,10 +144,12 @@ export function listTrackFileStates(db: AppDatabase): TrackFileState[] {
       path: tracks.path,
       fileSizeBytes: tracks.fileSizeBytes,
       fileMtimeMs: tracks.fileMtimeMs,
-      fileMissing: tracks.fileMissing
+      fileMissing: tracks.fileMissing,
+      stageStatus: tracks.stageStatus
     })
     .from(tracks)
     .all()
+    .map((row) => ({ ...row, stageStatus: readStageStatus(row.id, row.stageStatus) }))
 }
 
 /** Applies all changes or none. A change for an id that does not exist is ignored. */

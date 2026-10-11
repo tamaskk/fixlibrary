@@ -328,7 +328,11 @@ describe('file state for rescans', () => {
   it('lists what the last scan saw of every track', () => {
     // Arrange
     const [scanned, neverScanned] = insertTracks(testDatabase.db, [
-      newTrack('/Music/a.mp3', { fileSizeBytes: 8_000_000, fileMtimeMs: 1_790_000_000_000 }),
+      newTrack('/Music/a.mp3', {
+        fileSizeBytes: 8_000_000,
+        fileMtimeMs: 1_790_000_000_000,
+        stageStatus: { scan: 'done' }
+      }),
       newTrack('/Music/b.mp3')
     ])
 
@@ -342,14 +346,16 @@ describe('file state for rescans', () => {
         path: '/Music/a.mp3',
         fileSizeBytes: 8_000_000,
         fileMtimeMs: 1_790_000_000_000,
-        fileMissing: false
+        fileMissing: false,
+        stageStatus: { scan: 'done' }
       },
       {
         id: neverScanned,
         path: '/Music/b.mp3',
         fileSizeBytes: null,
         fileMtimeMs: null,
-        fileMissing: false
+        fileMissing: false,
+        stageStatus: {}
       }
     ])
   })

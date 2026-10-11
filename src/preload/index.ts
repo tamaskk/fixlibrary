@@ -30,7 +30,9 @@ const api: FixLibraryApi = {
   library: {
     status: () => ipcRenderer.invoke(IPC_CHANNELS.libraryStatus),
     scan: () => ipcRenderer.invoke(IPC_CHANNELS.libraryScan),
+    followScan: () => ipcRenderer.invoke(IPC_CHANNELS.libraryFollowScan),
     onScanProgress: (listener) => {
+      if (typeof listener !== 'function') throw new TypeError('The listener must be a function')
       // The page gets the payload only, never the event with its sender.
       const forward = (_event: unknown, progress: Parameters<typeof listener>[0]): void =>
         listener(progress)

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ErrorCode } from '@shared/errors'
+import type { ErrorCode, Result } from '@shared/errors'
 import type { LibraryStatus, ScanProgress, ScanSummary } from '@shared/library'
 
 type LibraryData =
@@ -27,6 +27,30 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     set({ data: { status: 'ready', rootChosen, trackCount } })
   }
 
+  /** Shows a scan while it runs and its result when it ends. `null` means there was none. */
+  async function track(run: () => Promise<Result<ScanSummary> | null>): Promise<void> {
+    if (get().scanning) return
+    set({ scanning: true, progress: null })
+    let stopListening: (() => void) | null = null
+    try {
+      stopListening = window.api.library.onScanProgress((progress) => set({ progress }))
+      const result = await run()
+      if (result !== null) {
+        set({
+          lastScan: result.ok
+            ? { ok: true, summary: result.value }
+            : { ok: false, code: result.code }
+        })
+      }
+      applyStatus(await window.api.library.status())
+    } catch {
+      set({ lastScan: { ok: false, code: 'UNEXPECTED' } })
+    } finally {
+      stopListening?.()
+      set({ scanning: false, progress: null })
+    }
+  }
+
   return {
     data: { status: 'loading' },
     scanning: false,
@@ -38,30 +62,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         const status = await window.api.library.status()
         applyStatus(status)
         // A scan the app started at launch: follow it, so its result shows up here.
-        if (status.scanning) void get().scan()
+        if (status.scanning) void track(() => window.api.library.followScan())
       } catch {
         set({ data: { status: 'error' } })
       }
     },
 
-    async scan() {
-      if (get().scanning) return
-      set({ scanning: true, progress: null })
-      const stopListening = window.api.library.onScanProgress((progress) => set({ progress }))
-      try {
-        const result = await window.api.library.scan()
-        set({
-          lastScan: result.ok
-            ? { ok: true, summary: result.value }
-            : { ok: false, code: result.code }
-        })
-        applyStatus(await window.api.library.status())
-      } catch {
-        set({ lastScan: { ok: false, code: 'UNEXPECTED' } })
-      } finally {
-        stopListening()
-        set({ scanning: false, progress: null })
-      }
-    }
+    scan: () => track(() => window.api.library.scan())
   }
 })

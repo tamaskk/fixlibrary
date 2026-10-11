@@ -466,6 +466,15 @@ describe('unsuitable library roots', () => {
     expect([volumes, drive, root]).toEqual([true, false, true])
   })
 
+  it('refuses the data volume, which holds the home folder under a second path', () => {
+    // Act
+    const dataVolume = isUnsuitableLibraryRoot('/System/Volumes/Data', environment)
+    const usersThere = isUnsuitableLibraryRoot('/System/Volumes/Data/Users', environment)
+
+    // Assert
+    expect([dataVolume, usersThere]).toEqual([true, true])
+  })
+
   it('reports folders that came to overlap after they were chosen', () => {
     // Arrange
     const library = makeFolder('Music')

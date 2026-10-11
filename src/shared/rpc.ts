@@ -6,8 +6,9 @@ import { z } from 'zod'
 export const TAG_BATCH_SIZE = 50
 
 // Tag text comes out of a file, so it is untrusted: the sidecar cuts it to one line of
-// at most this length, and anything longer is refused here.
-const tagText = z.string().min(1).max(500).nullable()
+// at most this length, and anything longer is refused here. The limit also keeps the
+// largest possible answer for one batch below the line limit of the bridge.
+const tagText = z.string().min(1).max(300).nullable()
 const positiveInt = z.number().int().positive().nullable()
 
 const fileTagsSchema = z.object({

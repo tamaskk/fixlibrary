@@ -33,4 +33,8 @@ export function registerLibraryIpc({ db, scanner }: LibraryIpcDependencies): voi
   // Resolves when the scan is over. While one runs, this joins it: the page that
   // opens during the scan at startup gets that scan's result.
   handleIpc(IPC_CHANNELS.libraryScan, noArguments, () => scanner.scan())
+
+  // For the page that opens while the app is scanning by itself: it gets that scan's
+  // result without the risk of starting a second scan if the first has just ended.
+  handleIpc(IPC_CHANNELS.libraryFollowScan, noArguments, () => scanner.current())
 }

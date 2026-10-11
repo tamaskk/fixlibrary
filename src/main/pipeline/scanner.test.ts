@@ -118,7 +118,15 @@ describe('scanning a library for the first time', () => {
     // Assert
     expect(result).toEqual({
       ok: true,
-      value: { found: 4, added: 4, updated: 0, unchanged: 0, missing: 0, unreadable: 0 }
+      value: {
+        found: 4,
+        added: 4,
+        updated: 0,
+        unchanged: 0,
+        missing: 0,
+        unreadable: 0,
+        complete: true
+      }
     })
     expect(storedNames()).toEqual(['House/Deep/c.aif', 'House/b.WAV', 'Techno/d.Aiff', 'a.mp3'])
     expect(storedTracks().map((track) => track.format)).toEqual(['aiff', 'wav', 'aiff', 'mp3'])
@@ -261,7 +269,15 @@ describe('scanning again', () => {
     // Assert
     expect(result).toEqual({
       ok: true,
-      value: { found: 2, added: 0, updated: 0, unchanged: 2, missing: 0, unreadable: 0 }
+      value: {
+        found: 2,
+        added: 0,
+        updated: 0,
+        unchanged: 2,
+        missing: 0,
+        unreadable: 0,
+        complete: true
+      }
     })
     expect(readCalls).toEqual([])
   })
@@ -327,6 +343,43 @@ describe('scanning again', () => {
     expect(missing).toEqual([true, false])
     expect(afterReturn).toEqual([false, false])
     expect(storedTracks()).toHaveLength(2)
+  })
+
+  it('tries a file again that could not be read, although the file has not changed', async () => {
+    // Arrange
+    addFile('fine.mp3')
+    addFile('flaky.mp3')
+    const failing = async (paths: string[]): Promise<FileTags[]> =>
+      (await fakeReadTags(paths)).map((tags) =>
+        basename(tags.path) === 'flaky.mp3' ? { ...tags, readable: false } : tags
+      )
+    await scanner({ readTags: failing }).scan()
+    readCalls = []
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(readCalls).toEqual([[join(library, 'flaky.mp3')]])
+    expect(result).toMatchObject({ ok: true, value: { updated: 1, unchanged: 1, unreadable: 0 } })
+    expect(storedTracks().map((track) => track.stageStatus)).toEqual([
+      { scan: 'done' },
+      { scan: 'done' }
+    ])
+  })
+
+  it('marks nothing missing when a library that had tracks shows no file at all', async () => {
+    // Arrange
+    const path = addFile('a.mp3')
+    await scanner().scan()
+    rmSync(path)
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { found: 0, missing: 0, complete: false } })
+    expect(storedTracks().map((track) => track.fileMissing)).toEqual([false])
   })
 
   it('leaves the tracks of another folder alone', async () => {
@@ -408,6 +461,62 @@ describe('a scan that cannot run or has to stop', () => {
     // Assert
     expect(result).toEqual({ ok: false, code: 'LIBRARY_UNAVAILABLE' })
     expect(storedTracks().map((track) => track.fileMissing)).toEqual([false, false])
+  })
+
+  it('does not scan a folder left behind under /Volumes by a drive that is not mounted', async () => {
+    // Arrange
+    addFile('a.mp3')
+    await scanner().scan()
+    rmSync(join(library, 'a.mp3'))
+    const onDrive = { resolvePath: async () => '/Volumes/DJ SSD/Music' }
+
+    // Act
+    const unmounted = await scanner(onDrive).scan()
+
+    // Assert
+    expect(unmounted).toEqual({ ok: false, code: 'LIBRARY_UNAVAILABLE' })
+    expect(storedTracks().map((track) => track.fileMissing)).toEqual([false])
+  })
+
+  it('records the one file that fails its batch as unreadable and reads the rest', async () => {
+    // Arrange
+    for (let index = 0; index < 60; index += 1) addFile(`${index}.mp3`)
+    addFile('poison.mp3')
+    const readTags = async (paths: string[]): Promise<FileTags[]> => {
+      if (paths.some((path) => basename(path) === 'poison.mp3')) {
+        throw new AppError('PYTHON_ERROR', 'tags.read: OverflowError')
+      }
+      return fakeReadTags(paths)
+    }
+
+    // Act
+    const result = await scanner({ readTags }).scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { found: 61, added: 61, unreadable: 1 } })
+    expect(
+      storedTracks()
+        .filter((track) => track.stageStatus.scan === 'failed')
+        .map((track) => basename(track.path))
+    ).toEqual(['poison.mp3'])
+  })
+
+  it('gives up after three single files in a row fail, because then the engine is down', async () => {
+    // Arrange
+    for (let index = 0; index < 120; index += 1) addFile(`${index}.mp3`)
+    let calls = 0
+    const readTags = async (): Promise<FileTags[]> => {
+      calls += 1
+      throw new AppError('TIMEOUT', 'tags.read: no answer')
+    }
+
+    // Act
+    const result = await scanner({ readTags }).scan()
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'TIMEOUT' })
+    expect(calls).toBe(4)
+    expect(storedTracks()).toEqual([])
   })
 
   it('reports that the audio engine stopped, with the code of that failure', async () => {

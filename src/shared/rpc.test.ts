@@ -133,7 +133,7 @@ describe('RPC_SCHEMAS', () => {
   })
 
   it.each([
-    ['tag text longer than the sidecar may send', { title: 'x'.repeat(501) }],
+    ['tag text longer than the sidecar may send', { title: 'x'.repeat(301) }],
     ['a year that is not a year', { year: 20245 }],
     ['a negative duration', { durationMs: -1 }],
     ['a missing cover flag', { hasCover: undefined }]
