@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 import { Switch as SwitchPrimitive } from 'radix-ui'
 
 type SwitchProps = Omit<React.ComponentProps<typeof SwitchPrimitive.Root>, 'id' | 'children'> & {

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 
 type EmptyStateProps = {
   /** One line saying what belongs here. */

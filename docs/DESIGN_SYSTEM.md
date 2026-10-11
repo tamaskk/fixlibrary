@@ -241,6 +241,7 @@ Rules:
 
 - Tokens live in `src/renderer/styles/globals.css` as CSS variables with the exact names above, exposed to Tailwind through `@theme` (Tailwind v4). This file and globals.css change in the same commit.
 - Primitives live in `src/renderer/components/ui/` (shadcn/ui restyled with these tokens).
+- Class names are joined with `cn` from `src/renderer/lib/cn.ts`, never with the bare `cn` package (ESLint refuses it). The package reads an unknown `text-…` class as a text color and drops it when a real color follows; the project's own knows the font sizes of §03. A font size added to globals.css is added to that file too, and a test compares the two.
 - Layout widths are tokens too: `--container-sidebar` (220px), `--container-form` (720px), `--container-modal` (480px).
 - Cue colors in the UI come from Settings at runtime; the `--color-cue-*` tokens are only the defaults.
 - Anything not defined here: ask before inventing it.

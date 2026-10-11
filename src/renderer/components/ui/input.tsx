@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 
 type InputProps = Omit<React.ComponentProps<'input'>, 'id'> & {
   /** Always visible, above the field. The placeholder is a hint, never the label. */

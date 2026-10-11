@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 
 type SelectProps = Omit<React.ComponentProps<'select'>, 'id'> & {
   /** Always visible, above the field. */
