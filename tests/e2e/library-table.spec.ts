@@ -145,6 +145,16 @@ test('the table is searched, filtered and sorted, and Cmd+A then selects what is
     await expect(title).toHaveAttribute('aria-sort', 'descending')
     await expect(grid.getByRole('row').nth(1)).toContainText(trackName(19))
 
+    // At the smallest window the format column gives its room to the title; a wider
+    // window shows it.
+    await expect(grid.getByRole('columnheader', { name: 'Formátum' })).toHaveCount(0)
+    await expect(grid).toHaveAttribute('aria-colcount', '8')
+    expect(await grid.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800))
+    await expect(grid.getByRole('columnheader', { name: 'Formátum' })).toBeVisible()
+    await expect(grid).toHaveAttribute('aria-colcount', '9')
+    expect(await grid.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+
     // Nothing matches: the table gives way to a line that says so.
     await page.getByLabel('Állapot').selectOption('offline')
     await expect(page.getByText('Nincs a keresésnek és a szűrőknek megfelelő track.')).toBeVisible()

@@ -22,11 +22,19 @@ import type { Style } from '@shared/settings'
 // DESIGN_SYSTEM §04: table rows are 36px high.
 const ROW_HEIGHT = 36
 // Fixed columns are multiples of 32px, each wide enough for its header with the sort
-// arrow; artist and title share what is left. At the minimum window (1024px) every
-// column fits; below its minimum width the table scrolls sideways inside itself.
-const COLUMNS = '32px 32px minmax(96px, 2fr) minmax(96px, 3fr) 64px 64px 96px 96px 96px'
-// The minimums of the columns, the eight gaps between them and the padding of a row.
-const MIN_TABLE_WIDTH = 32 + 32 + 96 + 96 + 64 + 64 + 96 + 96 + 96 + 8 * 8 + 18
+// arrow; artist and title share what is left. Below its minimum width the table
+// scrolls sideways inside itself.
+const BASE_COLUMNS = '32px 32px minmax(96px, 2fr) minmax(128px, 3fr) 64px 64px 96px 96px'
+const FORMAT_COLUMN = '96px'
+const COLUMN_GAP = 8
+// The padding of a row and its left edge.
+const ROW_INSET = 18
+// The minimums of the base columns and the seven gaps between them.
+const MIN_BASE_WIDTH = 32 + 32 + 96 + 128 + 64 + 64 + 96 + 96 + 7 * COLUMN_GAP + ROW_INSET
+// The format is the least needed column. It joins once the table is wide enough for
+// it without pressing the title together (DESIGN_SYSTEM §08: wide tables gain columns);
+// at the minimum window the title gets its room instead.
+const FORMAT_FROM_WIDTH = 896
 
 // The state comes first, so it is never the column that is scrolled out of sight.
 const HEADERS: readonly {
@@ -36,6 +44,8 @@ const HEADERS: readonly {
   hidden?: true
   /** Sets a left-aligned column off from the right-aligned numbers before it. */
   indent?: true
+  /** Left out while the table is too narrow for it. */
+  wideOnly?: true
 }[] = [
   { label: 'Állapot', hidden: true },
   { label: 'Cover', hidden: true },
@@ -45,7 +55,7 @@ const HEADERS: readonly {
   { label: 'Key', sortKey: 'key', indent: true },
   { label: 'Energy', sortKey: 'energy', numeric: true },
   { label: 'Stílus', sortKey: 'style', indent: true },
-  { label: 'Formátum', sortKey: 'format' }
+  { label: 'Formátum', sortKey: 'format', wideOnly: true }
 ]
 
 const COVERS: Record<TrackCoverStatus, { icon: LucideIcon; label: string; className: string }> = {
@@ -119,6 +129,17 @@ export function LibraryTable({
   onClearSelection
 }: LibraryTableProps): React.JSX.Element {
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  // Measured here: the virtualizer only reports a change of the height it scrolls in.
+  const [tableWidth, setTableWidth] = React.useState(0)
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setTableWidth(entry.contentRect.width)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
   const gridId = React.useId()
   // The row the arrow keys move from. It follows the mouse as well.
   const [cursorId, setCursorId] = React.useState<number | null>(null)
@@ -182,6 +203,13 @@ export function LibraryTable({
     }
   }
 
+  // A column that is sorted by stays, however narrow the table: otherwise the order
+  // of the rows would have no visible reason.
+  const showFormat = tableWidth >= FORMAT_FROM_WIDTH || sort?.key === 'format'
+  const headers = HEADERS.filter((header) => showFormat || !header.wideOnly)
+  const columns = showFormat ? `${BASE_COLUMNS} ${FORMAT_COLUMN}` : BASE_COLUMNS
+  const minWidth = MIN_BASE_WIDTH + (showFormat ? 96 + COLUMN_GAP : 0)
+
   const virtualRows = virtualizer.getVirtualItems()
   // Only a row that is in the page can be named: the others are not rendered.
   const cursorIsRendered = virtualRows.some((item) => item.index === cursorIndex)
@@ -194,20 +222,20 @@ export function LibraryTable({
       aria-label="Trackek"
       aria-multiselectable="true"
       aria-rowcount={rows.length + 1}
-      aria-colcount={HEADERS.length}
+      aria-colcount={headers.length}
       aria-activedescendant={cursorIsRendered ? `${gridId}-${cursorId}` : undefined}
       onKeyDown={handleKeyDown}
       className="group min-h-48 flex-1 overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
     >
-      <div style={{ minWidth: MIN_TABLE_WIDTH }}>
+      <div style={{ minWidth }}>
         <div role="rowgroup" className="sticky top-0 z-10">
           <div
             role="row"
             aria-rowindex={1}
             className="grid h-9 items-center gap-2 border-b border-border bg-surface px-2"
-            style={{ gridTemplateColumns: COLUMNS }}
+            style={{ gridTemplateColumns: columns }}
           >
-            {HEADERS.map(({ label, sortKey, numeric, hidden, indent }) => {
+            {headers.map(({ label, sortKey, numeric, hidden, indent }) => {
               const sorted = sortKey !== undefined && sort?.key === sortKey
               const SortIcon = sorted && sort.descending ? ArrowDown : ArrowUp
               return (
@@ -277,7 +305,7 @@ export function LibraryTable({
                 )}
                 style={{
                   height: ROW_HEIGHT,
-                  gridTemplateColumns: COLUMNS,
+                  gridTemplateColumns: columns,
                   transform: `translateY(${item.start}px)`
                 }}
               >
@@ -305,7 +333,12 @@ export function LibraryTable({
                   text={row.styleId === null ? null : (styleNames.get(row.styleId) ?? null)}
                   className="pl-2"
                 />
-                <TextCell text={row.format.toUpperCase()} className="text-small text-text-muted" />
+                {showFormat && (
+                  <TextCell
+                    text={row.format.toUpperCase()}
+                    className="text-small text-text-muted"
+                  />
+                )}
               </div>
             )
           })}
