@@ -61,7 +61,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
       ipc/               one file per domain; registers handlers, validates input, calls a pipeline or service
       pipeline/          business logic: orchestrator, queue, stages/, naming, style, cues, playlists
       services/          side-effect adapters: python-bridge, file-ops, claude-cli, binaries, keychain, logger, rekordbox-xml, lookup/
-      db/                schema.ts, migrations/, query functions
+      db/                connection.ts, schema.ts, migrations/, one query module per table group (tracks.ts, settings.ts, …)
     preload/             contextBridge exposure of window.api. No logic.
     renderer/            React app (index.html, main.tsx, App.tsx)
       pages/             one file per screen. Thin: reads stores, calls window.api.
@@ -86,7 +86,18 @@ Do not add a dependency that overlaps with a row in this table without asking.
     fixtures/real/       real music (gitignored, never committed)
 ```
 
-SQLite: `src/main/db/` holds one connection (WAL mode) opened at startup, the Drizzle schema and the query functions. The file lives at `app.getPath('userData')/fixlibrary.db`. Applied migrations are never edited; every schema change is a new migration.
+SQLite: `src/main/db/` holds one connection (WAL mode, foreign keys on) opened at startup, the Drizzle schema and the query functions. The file lives at `app.getPath('userData')/fixlibrary.db`. Applied migrations are never edited; every schema change is a new migration.
+
+- Startup opens the database and runs the pending migrations before IPC, the sidecar and the window. If the database cannot be opened or migrated, or was written by a newer version of the app, the app shows an error and quits. Only one instance of the app runs at a time.
+- Migrations run with foreign keys off (a table rebuild would otherwise cascade into the child tables), followed by a foreign key check; the keys are on for everything else.
+- Rows that undo depends on never disappear as a side effect: a batch with backups cannot be deleted, a track that a batch refers to cannot be deleted, and deleting a track only clears the link on its backup rows.
+- Track paths are stored normalized and NFC-composed, and the volume name is always derived from the path.
+- Settings keys that start with `secret.` are reserved for encrypted values (task 6); `setSetting` refuses them.
+- Migrations are generated with `npx drizzle-kit generate --name <what_changed>` and committed. The packaged app reads them from `Resources/migrations` (`extraResources`).
+- Query functions take the database as their first argument, so tests run them against a temporary file built by the real migrations (`src/main/db/database.test-util.ts`).
+- JSON columns are typed `unknown` in the schema and validated with Zod by the query function that reads them.
+- A track stores the name of its volume (`/Volumes/<name>`), or null on the startup disk. Queries return `offline: true` for a track whose volume is not in the set of mounted volumes (`services/volumes.ts`, which counts mount points only, not leftover folders); an offline track must not be processed.
+- End-to-end tests start the app with `--user-data-dir` pointing at a temp folder, so they never touch the developer's database.
 
 Where new code belongs:
 

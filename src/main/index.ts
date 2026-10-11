@@ -1,12 +1,34 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
+import { closeDatabase, initDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 
 let pythonBridge: PythonBridge | null = null
 let stoppingSidecar = false
+
+/** Opens the database and applies pending migrations. Returns false if the app cannot run. */
+function openAppDatabase(): boolean {
+  const migrationsFolder = app.isPackaged
+    ? join(process.resourcesPath, 'migrations')
+    : join(app.getAppPath(), 'src/main/db/migrations')
+  const databasePath = join(app.getPath('userData'), 'fixlibrary.db')
+  try {
+    initDatabase(databasePath, migrationsFolder)
+    return true
+  } catch (error) {
+    // Without its state the app would re-process the library, so it does not start.
+    console.error('The database could not be opened', error)
+    // The file holds the undo records, so the user is told where it is and to keep it.
+    dialog.showErrorBox(
+      'Az adatbázis nem nyitható meg',
+      `Az alkalmazás leáll. Ne töröld az adatbázist, mert a visszavonás adatai benne vannak.\n\n${databasePath}`
+    )
+    return false
+  }
+}
 
 function startPythonSidecar(): void {
   // Development only: the packaged runtime and its path come with T-041.
@@ -59,11 +81,28 @@ function createWindow(): void {
   }
 }
 
+// Two instances would share one database and could process the same library twice.
+const isOnlyInstance = app.requestSingleInstanceLock()
+if (!isOnlyInstance) app.quit()
+
+app.on('second-instance', () => {
+  const [window] = BrowserWindow.getAllWindows()
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  window.focus()
+})
+
 app.whenReady().then(() => {
+  if (!isOnlyInstance) return
+
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  if (!openAppDatabase()) {
+    app.quit()
+    return
+  }
   registerAppIpc()
   startPythonSidecar()
   createWindow()
@@ -84,6 +123,10 @@ app.on('before-quit', (event) => {
     pythonBridge = null
     app.quit()
   })
+})
+
+app.on('will-quit', () => {
+  closeDatabase()
 })
 
 app.on('window-all-closed', () => {
