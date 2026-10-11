@@ -1,4 +1,4 @@
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 
 type ProgressBarProps = {
   /** 0 to 100. */

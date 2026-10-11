@@ -42,8 +42,11 @@ export default defineConfig(
   {
     // `electron-log/main` registers IPC handlers of its own, outside src/main/ipc/handle.ts.
     // The app logs through src/main/services/logger.ts, which uses the plain Node entry.
+    //
+    // The bare `cn` does not know the project's font sizes and drops them next to a
+    // text color. Components use the configured one in src/renderer/lib/cn.ts.
     files: ['src/**/*.{ts,tsx}'],
-    ignores: ['src/main/services/logger.ts'],
+    ignores: ['src/main/services/logger.ts', 'src/renderer/lib/cn.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -53,7 +56,11 @@ export default defineConfig(
               group: ['electron-log', 'electron-log/*'],
               message: 'Use src/main/services/logger.ts.'
             }
-          ]
+          ],
+          paths: ['cn', 'cn/config', 'clsx', 'tailwind-merge'].map((name) => ({
+            name,
+            message: 'Use cn from @/lib/cn.'
+          }))
         }
       ]
     }

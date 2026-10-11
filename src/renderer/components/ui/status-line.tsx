@@ -1,4 +1,4 @@
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 import { AlertTriangle, Check, Minus, X, type LucideIcon } from 'lucide-react'
 
 export type StatusTone = 'success' | 'danger' | 'warning' | 'neutral'

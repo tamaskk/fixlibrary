@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { cn } from 'cn'
+import { cn } from '@/lib/cn'
 import {
   ArrowDown,
   ArrowUp,
