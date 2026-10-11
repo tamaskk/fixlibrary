@@ -15,7 +15,7 @@ Main process (Electron, Node)
     |
     +--->  SQLite (better-sqlite3 + Drizzle)        app state, cache, jobs
     +--->  Python sidecar (JSON-RPC over stdio)     all audio analysis and file audio work
-    +--->  Bundled binaries (yt-dlp, ffmpeg, fpcalc, mp3gain)
+    +--->  External tools (ffmpeg, fpcalc, mp3gain bundled; yt-dlp as a Python module)
     +--->  claude CLI (`claude -p`, headless)       style, mood, prompt parsing
     +--->  Online lookups (AcoustID, MusicBrainz, Discogs, Beatport, iTunes, Cover Art Archive)
     +--->  Library files on the external drive
@@ -78,7 +78,7 @@ Do not add a dependency that overlaps with a row in this table without asking.
     spike/               T-002 environment spike script; results in python/SPIKE.md
     runtime/             python-build-standalone CPython (gitignored)
     pyproject.toml, uv.lock   locked for arm64 macOS only
-  resources/bin/         downloaded binaries (gitignored)
+  resources/bin/         ffmpeg, fpcalc, mp3gain and their licences, from scripts/fetch-binaries.sh (gitignored)
   scripts/               fetch-python-runtime.sh, fetch-binaries.sh, build-python.sh, build-dmg.sh
   tests/
     e2e/                 Playwright tests against the built app
@@ -130,6 +130,27 @@ State:
 - Renderer state is UI state plus a cache of what main returned. Main is always the authority.
 - Optimistic updates: none in v1.
 
+External tools:
+
+| Tool    | Version    | How it gets here                                                                 | Licence                    |
+| ------- | ---------- | -------------------------------------------------------------------------------- | -------------------------- |
+| ffmpeg  | 9.0.2      | built from the ffmpeg.org source by the script, with LAME 4.0 linked in          | LGPL 2.1 or later          |
+| mp3gain | 1.6.2      | built from source by the script, with libmpg123 1.33.7 linked in                 | LGPL 2.1 or later          |
+| fpcalc  | 1.6.1      | official Chromaprint `macos-arm64` release binary                                | MIT, with LGPL FFmpeg code |
+| yt-dlp  | 2026.08.19 | Python package in the sidecar environment (`python/uv.lock`), run as `-m yt_dlp` | Unlicense                  |
+
+- `scripts/fetch-binaries.sh` installs ffmpeg, mp3gain and fpcalc into `resources/bin/`, with their licence texts and a `NOTICE.txt`. Every download is checked against a pinned SHA-256 before it is used. The source pins equal the hashes Homebrew publishes for the same URLs; the fpcalc pins are the digests GitHub publishes. Every tool must contain an arm64 slice and may link only against system libraries. The build ignores Homebrew and the caller's compiler settings, so it needs only the Xcode Command Line Tools.
+- ffmpeg is deliberately small: audio only, the formats the app converts between, `file` and `pipe` as the only protocols. It is not the `ffmpeg-static` build the plan named: that binary is compiled with `--enable-nonfree` and may not be redistributed. A new format or filter means a new configure flag in the script.
+- The script records the SHA-256 of every installed file. `./scripts/fetch-binaries.sh --verify` checks them, and `build:mac` and `build:unpack` run it first, so packaging stops if a tool is missing or was changed.
+- yt-dlp is not a bundled binary. The official single-file build unpacks itself on every start (20 s per call on an M1, against 0.1 s as a module), and electron-builder cannot sign the folder build. As a Python package it is pinned and hash-checked by `uv.lock` like every other dependency. Task 43 therefore updates a Python package, not a file in `userData`.
+- `services/binaries.ts` is the only place that knows how to start the tools: `resources/bin/` in development, `Resources/bin/` in the packaged app, and the sidecar's interpreter with `-I -m yt_dlp` for yt-dlp. Nothing falls back to a tool on the PATH. `checkAll()` runs each tool with its version switch, an empty environment and a neutral working directory, and returns a version or a reason code, never raw output.
+- Not verified in the packaged app: it has no Python runtime before task 41, so yt-dlp is reported as missing there, and the packaged app itself does not start yet because of its signing settings (task 42).
+- Rules for the code that will call the tools with untrusted input:
+  - ffmpeg: `-nostdin`, an absolute input path, the input format forced with `-f` from the app's own check of the file, and an app-generated output name. Tag text never goes into a filter string.
+  - yt-dlp: the URL is validated in the main process and passed after `--`; always `--ignore-config`, `--no-playlist` and an explicit `--ffmpeg-location`; never `--exec`, `--cookies-from-browser` or `-U`.
+  - mp3gain: always `-s s`, absolute paths, and only files the app has identified as MP3.
+  - All of them: an argument array, an explicit minimal environment, a timeout.
+
 Python sidecar:
 
 - One long-running process, started by `services/python-bridge.ts` when the app is ready and stopped on quit (`shutdown`, then SIGKILL after 3 s). It speaks JSON-RPC 2.0, one JSON document per line: requests on stdin, responses and `progress` notifications on stdout.
@@ -159,7 +180,7 @@ Never:
 
 - The renderer imports from `src/main`, uses Node APIs, or receives `ipcRenderer` itself.
 - `services/` or `db/` import from `pipeline/`, `ipc/` or the renderer.
-- Anything but `services/python-bridge.ts` spawns or talks to the Python process.
+- Anything but `services/python-bridge.ts` spawns or talks to the Python sidecar. The one other use of the interpreter is `services/binaries.ts`, which runs yt-dlp as a module in its own short-lived process.
 - Anything but `services/file-ops.ts` renames, moves, overwrites or deletes a library file.
 - A command line built by string concatenation. External tools are spawned with an argument array, never through a shell.
 - A secret in the renderer, in a log, or in plain text in the database.
