@@ -46,6 +46,13 @@ _writer: ProtocolWriter | None = None
 # The jobs that can be told to stop, by the id the app gave them.
 _jobs_lock = threading.Lock()
 _jobs: dict[str, threading.Event] = {}
+# Ids that were cancelled while no such job was running. A cancel can overtake the
+# job it is meant for: both arrive as requests and are answered on different threads.
+# Insertion ordered, and cut to the newest when it grows.
+_cancelled_early: dict[str, None] = {}
+MAX_CANCELLED_EARLY = 256
+# The same limit as in src/shared/rpc.ts.
+MAX_JOB_ID_LENGTH = 64
 
 
 class JobCancelled(Exception):
@@ -137,18 +144,32 @@ def report_progress(job_id: str, percent: float) -> None:
     )
 
 
+def _check_job_id(job_id: object) -> str:
+    if not isinstance(job_id, str) or not 1 <= len(job_id) <= MAX_JOB_ID_LENGTH:
+        raise ValueError(f"jobId must be a string of 1 to {MAX_JOB_ID_LENGTH} characters")
+    return job_id
+
+
 @contextmanager
 def cancellable(job_id: str) -> Iterator[threading.Event]:
     """Makes the work inside the block a job that `job.cancel` can stop.
 
     The block gets an event that is set once the app asks the job to stop. A long
-    method checks it between its steps, at least every few seconds, and then calls
-    `raise_if_cancelled` or returns: a job has to be gone within 5 seconds.
+    method enters the block first of all, checks the event between its steps, at
+    least every few seconds, and then calls `raise_if_cancelled` or returns: a job
+    has to be gone within 5 seconds.
+
+    The app gives every attempt of a job its own id. An id cannot be used again
+    while the job that has it is still running.
     """
+    _check_job_id(job_id)
     event = threading.Event()
     with _jobs_lock:
         if job_id in _jobs:
             raise ValueError("a job with this id is already running")
+        # The cancel was faster than the job: it starts out as told to stop.
+        if _cancelled_early.pop(job_id, "absent") is None:
+            event.set()
         _jobs[job_id] = event
     try:
         yield event
@@ -165,13 +186,19 @@ def raise_if_cancelled(event: threading.Event) -> None:
 
 @rpc("job.cancel")
 def cancel_job(job_id: str) -> dict[str, bool]:
-    """Ask a running job to stop. `cancelled` is false when no such job is running."""
-    if not isinstance(job_id, str):
-        raise ValueError("jobId must be a string")
+    """Ask a job to stop. `cancelled` is false when no such job is running yet.
+
+    The id is remembered then, so that a job which registers a moment later is
+    stopped as it starts.
+    """
+    _check_job_id(job_id)
     with _jobs_lock:
         event = _jobs.get(job_id)
-    if event is None:
-        return {"cancelled": False}
+        if event is None:
+            _cancelled_early[job_id] = None
+            while len(_cancelled_early) > MAX_CANCELLED_EARLY:
+                del _cancelled_early[next(iter(_cancelled_early))]
+            return {"cancelled": False}
     event.set()
     return {"cancelled": True}
 
@@ -258,6 +285,10 @@ def _run_method(request: Request) -> dict[str, Any]:
         result = function(**arguments)
         # Serialise here so a result that is not JSON becomes this request's error.
         json.dumps(result, allow_nan=False)
+    except JobCancelled:
+        # Asked for by the app, which no longer waits for this answer.
+        logger.info("RPC method %s stopped on request", request.method)
+        return _error_response(request.request_id, INTERNAL_ERROR, "JobCancelled")
     except Exception as error:
         logger.exception("RPC method %s failed", request.method)
         return _error_response(

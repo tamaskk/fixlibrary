@@ -1,3 +1,4 @@
+import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { StatusLine } from '@/components/ui/status-line'
@@ -28,7 +29,9 @@ function describeStart(count: number, skipped: number): string {
 }
 
 function describeFailure(code: ErrorCode): string {
-  if (code === 'RUN_ACTIVE') return 'Már fut egy futás. Várd meg a végét, vagy szakítsd meg.'
+  if (code === 'RUN_ACTIVE') {
+    return 'Most nem indítható futás: egy már fut, épp folytatódik, vagy az előbb indult. Próbáld újra kicsit később.'
+  }
   if (code === 'INVALID_INPUT') return 'Nincs futtatható track: offline, vagy nincs meg a fájljuk.'
   return errorMessage(code)
 }
@@ -45,6 +48,13 @@ export function SelectionBar({
 }: SelectionBarProps): React.JSX.Element {
   const nothingToRun = functions.length === 0
   const blocked = nothingToRun || runActive
+  const reasonId = React.useId()
+  // Why nothing can be started, for whoever cannot see the panel above.
+  const reason = runActive
+    ? 'Már fut egy futás.'
+    : nothingToRun
+      ? 'Ebben a verzióban még nincs futtatható funkció.'
+      : null
 
   return (
     <section aria-label="Futtatás">
@@ -67,7 +77,7 @@ export function SelectionBar({
             onChange={(event) => onChoose(event.target.value)}
           >
             {nothingToRun ? (
-              <option value="">Nincs futtatható funkció</option>
+              <option value="">Nincs funkció</option>
             ) : (
               <>
                 <option value="all">Minden funkció</option>
@@ -82,6 +92,7 @@ export function SelectionBar({
         </div>
         <Button
           variant="secondary"
+          aria-describedby={reason ? reasonId : undefined}
           disabled={blocked || requesting}
           onClick={() => onRun('library')}
         >
@@ -89,6 +100,7 @@ export function SelectionBar({
         </Button>
         <Button
           variant="primary"
+          aria-describedby={reason ? reasonId : undefined}
           disabled={blocked || selectedCount === 0}
           loading={requesting}
           onClick={() => onRun('selection')}
@@ -96,6 +108,11 @@ export function SelectionBar({
           Futtatás a kijelölteken
         </Button>
       </div>
+      {reason && (
+        <p id={reasonId} className="sr-only">
+          {reason}
+        </p>
+      )}
       {/* In the page before there is an answer, so the answer is announced. */}
       <div role="status">
         {outcome !== null &&

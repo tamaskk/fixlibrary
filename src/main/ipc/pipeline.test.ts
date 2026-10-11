@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunProgress } from '@shared/pipeline'
 
 // The module registers nothing by being imported, but it imports Electron.
@@ -15,7 +15,8 @@ function progress(changes: Partial<RunProgress> = {}): RunProgress {
     pauseReason: null,
     counts: { total: 100, done: 0, failed: 0, skipped: 0, running: 1 },
     stages: [],
-    startedAt: 0,
+    tracks: { total: 20, failed: 0 },
+    elapsedMs: 0,
     remainingMs: null,
     ...changes
   }
@@ -25,7 +26,47 @@ function done(report: RunProgress): number {
   return report.counts.done
 }
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('createRunProgressSender', () => {
+  it('still sends the newest report that it held back, when its time has come', () => {
+    // Arrange
+    vi.useFakeTimers()
+    const sent: RunProgress[] = []
+    const send = createRunProgressSender((report) => sent.push(report))
+    const withDone = (count: number): RunProgress =>
+      progress({ counts: { total: 40, done: count, failed: 0, skipped: 0, running: 1 } })
+
+    // Act: three jobs finish within 100 ms, then nothing happens for minutes.
+    send(withDone(37))
+    vi.advanceTimersByTime(50)
+    send(withDone(38))
+    vi.advanceTimersByTime(50)
+    send(withDone(39))
+    vi.advanceTimersByTime(10 * 60_000)
+
+    // Assert
+    expect(sent.map(done)).toEqual([37, 39])
+  })
+
+  it('drops a held report when a report that must not wait overtakes it', () => {
+    // Arrange
+    vi.useFakeTimers()
+    const sent: RunProgress[] = []
+    const send = createRunProgressSender((report) => sent.push(report))
+
+    // Act
+    send(progress())
+    send(progress({ counts: { total: 40, done: 5, failed: 0, skipped: 0, running: 1 } }))
+    send(progress({ state: 'finished', outcome: 'preview' }))
+    vi.advanceTimersByTime(60_000)
+
+    // Assert
+    expect(sent.map((report) => report.state)).toEqual(['running', 'finished'])
+  })
+
   it('passes on at most four reports a second while nothing about the run itself changes', () => {
     // Arrange
     let time = 0
@@ -43,6 +84,7 @@ describe('createRunProgressSender', () => {
 
     // Assert: 100 reports in two seconds.
     expect(sent.map(done)).toEqual([0, 13, 26, 39, 52, 65, 78, 91])
+    expect(sent.length).toBeLessThanOrEqual(8)
   })
 
   it('never holds back a report that says the run paused, went on or ended', () => {

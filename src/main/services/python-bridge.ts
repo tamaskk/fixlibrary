@@ -322,6 +322,12 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
         return
       }
       const { job } = callOptions
+      // Checked now and not when the job is stopped: with an id the sidecar would
+      // refuse, the stop could never be passed on.
+      if (job && !RPC_SCHEMAS['job.cancel'].params.safeParse({ jobId: job.id }).success) {
+        reject(new AppError('INVALID_INPUT', `${method}: the job id has the wrong shape`))
+        return
+      }
       if (job?.signal.aborted) {
         reject(new AppError('UNEXPECTED', `${method}: stopped before it was sent`))
         return
@@ -333,36 +339,48 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
       }
       const id = nextId++
       const timeoutMs = callOptions.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS
+      // A call that is over, however it ended, no longer listens for the stop.
+      const stopListening = (): void => job?.signal.removeEventListener('abort', onStop)
       const timer = setTimeout(() => {
         if (settle(id)) {
+          stopListening()
           reject(new AppError('TIMEOUT', `${method}: no answer within ${timeoutMs} ms`))
         }
       }, timeoutMs)
+
+      function onStop(): void {
+        const stopped = settle(id)
+        // Answered, timed out or rejected with the sidecar already.
+        if (!stopped || !job) return
+        reject(new AppError('UNEXPECTED', `${method}: stopped`))
+        // A call that never reached the sidecar started no job there, and a sidecar
+        // that is being stopped takes its jobs with it.
+        if (!stopped.sent || (state !== 'running' && state !== 'restarting')) return
+        // The job's own result is no longer waited for, whatever the sidecar answers.
+        call('job.cancel', { jobId: job.id }, { timeoutMs: JOB_CANCEL_TIMEOUT_MS }).then(
+          ({ cancelled }) => {
+            // Not found yet: the sidecar remembers the id and stops the job as it starts.
+            if (!cancelled) log(`job.cancel for ${method} found no running job`)
+          },
+          (error: unknown) => log(`job.cancel for ${method} got no answer: ${String(error)}`)
+        )
+      }
 
       pending.set(id, {
         method,
         request: encodeRpcRequest(id, method, validParams.data),
         sent: false,
-        resolve: resolve as (result: unknown) => void,
-        reject,
+        resolve: (result) => {
+          stopListening()
+          resolve(result as RpcMethods[M]['result'])
+        },
+        reject: (error) => {
+          stopListening()
+          reject(error)
+        },
         timer
       })
-      job?.signal.addEventListener(
-        'abort',
-        () => {
-          const stopped = settle(id)
-          // Answered, timed out or rejected with the sidecar already.
-          if (!stopped) return
-          reject(new AppError('UNEXPECTED', `${method}: stopped`))
-          // A call that never reached the sidecar started no job there.
-          if (!stopped.sent) return
-          // Whatever the sidecar answers: the job's own result is no longer waited for.
-          call('job.cancel', { jobId: job.id }, { timeoutMs: JOB_CANCEL_TIMEOUT_MS }).catch(
-            (error: unknown) => log(`job.cancel for ${method} got no answer: ${String(error)}`)
-          )
-        },
-        { once: true }
-      )
+      job?.signal.addEventListener('abort', onStop, { once: true })
       sendWaitingCalls()
     })
   }

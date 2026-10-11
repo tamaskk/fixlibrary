@@ -16,12 +16,14 @@ import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
 import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
 import { selectableStages, STAGES, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
+import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
 import { resolveToolLocations } from './services/binaries'
 import { readEnvFile } from './services/env-file'
 import { keychainCipher } from './services/keychain'
 import { logger, startFileLogging } from './services/logger'
 import { createSleepBlocker } from './services/power'
+import { createTimedCache } from './services/timed-cache'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import { createMountedVolumesCache, listMountedVolumes } from './services/volumes'
 import { AppError } from '@shared/errors'
@@ -31,6 +33,11 @@ import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
 let pythonBridge: PythonBridge | null = null
 let stoppingSidecar = false
 let orchestrator: Orchestrator | null = null
+
+// How old the limits of a run may be before the settings are read again.
+const LIMITS_MAX_AGE_MS = 1000
+// Longer than this and a timer no longer means what it says.
+const MAX_DEMO_STAGE_MS = 600_000
 
 /** Opens the database and applies pending migrations. Returns false if the app cannot run. */
 function openAppDatabase(): boolean {
@@ -81,6 +88,14 @@ function stopAfterUncaughtException(): void {
       ? 'Az alkalmazás újraindul. A részletek a logban vannak.'
       : 'Az alkalmazás leáll. A részletek a logban vannak.'
   )
+  try {
+    // Puts the running jobs back in line without counting an attempt: this crash is
+    // the app's, not theirs.
+    orchestrator?.shutdown()
+  } catch (error) {
+    logger.error('The run could not be put aside', error)
+  }
+  orchestrator = null
   closeDatabase()
   if (relaunch) app.relaunch()
   // The sidecar ends by itself when its input closes.
@@ -138,10 +153,11 @@ function startPythonSidecar(): void {
  * that only wait, so a run can be tried and tested end to end while no real stage
  * exists. The packaged app never has them.
  */
-function availableStages(): ReturnType<typeof createDemoStages> {
+function availableStages(): Stage[] {
   if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') return [...STAGES]
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])
-  return [...STAGES, ...createDemoStages(Number.isFinite(ms) && ms > 0 ? ms : undefined)]
+  const usable = Number.isInteger(ms) && ms >= 1 && ms <= MAX_DEMO_STAGE_MS
+  return [...STAGES, ...createDemoStages(usable ? ms : undefined)]
 }
 
 function registerLibraryAndPipeline(): void {
@@ -176,33 +192,48 @@ function registerLibraryAndPipeline(): void {
   const runs = createOrchestrator({
     db,
     stages,
-    // Read whenever a job could start, so a changed worker count applies to a running run.
-    limits: () => ({
-      ...FIXED_RESOURCE_LIMITS,
-      cpu: resolveEffectiveSettings(readSettings(db), environment).workerCount
-    }),
+    // Asked for whenever a job could start, so a changed worker count applies to a
+    // running run; read from the settings at most once a second.
+    limits: createTimedCache(
+      () => ({
+        ...FIXED_RESOURCE_LIMITS,
+        cpu: resolveEffectiveSettings(readSettings(db), environment).workerCount
+      }),
+      LIMITS_MAX_AGE_MS
+    ),
     listMountedVolumes,
     mode: () => readSettings(db).library.mode,
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })
   orchestrator = runs
+  const functions = selectableStages(stages)
+  // A failure here must not keep the window from opening: the run stays where it is
+  // in the database, and the next start tries again.
+  const takeUpRun = (): void => {
+    try {
+      runs.recover()
+    } catch (error) {
+      logger.error('The interrupted run could not be taken up', error)
+    }
+  }
 
   // The scanner above always asks afresh: it decides whether tracks are marked missing.
   registerLibraryIpc({
     db,
     scanner,
     orchestrator: runs,
+    functions,
     listMountedVolumes: createMountedVolumesCache(1000)
   })
-  registerPipelineIpc({ orchestrator: runs, functions: selectableStages(stages) })
+  registerPipelineIpc({ orchestrator: runs, functions })
 
   // Picks up what changed on the drive since the last run. Without a chosen folder
   // there is nothing to scan, and a drive that is not connected ends the scan at once.
   // A run that was interrupted goes on after the scan, so both do not read the
   // drive at the same time.
   if (readSettings(db).library.rootFolder === null) {
-    runs.recover()
+    takeUpRun()
     return
   }
   void scanner
@@ -217,7 +248,7 @@ function registerLibraryAndPipeline(): void {
         logger.warn(`Startup scan did not finish: ${result.code}`)
       }
     })
-    .finally(() => runs.recover())
+    .finally(takeUpRun)
 }
 
 function createWindow(): void {

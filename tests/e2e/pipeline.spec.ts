@@ -94,7 +94,7 @@ test('a run on 20 selected tracks is started, paused, resumed and finishes', asy
     // Exactly the 20 tracks: two stages each make 40 steps.
     await expect(panel.getByRole('heading', { name: 'Elemzés folyamatban' })).toBeVisible()
     await expect(panel.getByText(/\/ 40 · \d+%/)).toBeVisible()
-    await expect(panel.getByRole('progressbar', { name: 'Elemzés' })).toBeVisible()
+    await expect(panel.getByRole('progressbar', { name: 'Futás előrehaladása' })).toBeVisible()
     // A second run cannot be started while this one is active.
     await expect(bar.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeDisabled()
     await expect(bar.getByRole('button', { name: 'Futtatás a teljes könyvtáron' })).toBeDisabled()
@@ -111,7 +111,7 @@ test('a run on 20 selected tracks is started, paused, resumed and finishes', asy
     await panel.getByRole('button', { name: 'Folytatás' }).click()
     await expect(panel.getByRole('heading', { name: 'Elemzés folyamatban' })).toBeVisible()
 
-    await expect(page.getByText('A futás kész: 40 lépés lefutott.')).toBeVisible({
+    await expect(page.getByText('A futás kész: 20 track feldolgozva.')).toBeVisible({
       timeout: 20_000
     })
     await expect(panel).toHaveCount(0)
@@ -151,7 +151,9 @@ test('a run on the whole library is cancelled after a confirmation', async () =>
 
 test('a run goes on after the app was closed and started again', async () => {
   test.setTimeout(90_000)
-  const first = await launch(1000)
+  // Short enough to finish in time on a machine with few cores, long enough for the
+  // app to be closed in the middle.
+  const first = await launch(500)
   try {
     await scanLibrary(first.app, first.page)
     const bar = first.page.getByRole('region', { name: 'Futtatás' })
@@ -164,12 +166,12 @@ test('a run goes on after the app was closed and started again', async () => {
     await first.app.close()
   }
 
-  const second = await launch(1000)
+  const second = await launch(500)
   try {
     const panel = second.page.getByRole('region', { name: 'Futás állapota' })
     // The run is taken up by itself, with what was done still counted.
     await expect(panel.getByText(/^[1-9]\d* \/ 80/)).toBeVisible({ timeout: 15_000 })
-    await expect(second.page.getByText('A futás kész: 80 lépés lefutott.')).toBeVisible({
+    await expect(second.page.getByText('A futás kész: 40 track feldolgozva.')).toBeVisible({
       timeout: 45_000
     })
   } finally {

@@ -190,6 +190,53 @@ describe('python bridge with a stand-in process', () => {
     ])
   })
 
+  it('refuses a job whose id the sidecar would not accept, before anything is sent', async () => {
+    // Arrange
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+      shutdownGraceMs: 50
+    })
+    const stop = new AbortController()
+
+    // Act
+    const errors = await Promise.all(
+      ['', 'x'.repeat(65)].map((id) =>
+        sidecar
+          .call('echo', { value: 1 }, { job: { id, signal: stop.signal } })
+          .catch((caught: unknown) => caught)
+      )
+    )
+
+    // Assert
+    expect(errors).toMatchObject([{ code: 'INVALID_INPUT' }, { code: 'INVALID_INPUT' }])
+  })
+
+  it('stops listening for the stop once a job has answered', async () => {
+    // Arrange
+    const answerAll =
+      'require("readline").createInterface({ input: process.stdin }).on("line", (line) => { const { id, params } = JSON.parse(line); console.log(JSON.stringify({ jsonrpc: "2.0", id, result: { value: params.value } })) }); setInterval(() => {}, 1000)'
+    const sidecar = startBridge({
+      pythonPath: process.execPath,
+      args: ['-e', answerAll],
+      shutdownGraceMs: 50
+    })
+    const stop = new AbortController()
+    const removed = vi.spyOn(stop.signal, 'removeEventListener')
+
+    // Act
+    const result = await sidecar.call(
+      'echo',
+      { value: 'done' },
+      { job: { id: 'job-9', signal: stop.signal } }
+    )
+    stop.abort()
+
+    // Assert
+    expect(result).toEqual({ value: 'done' })
+    expect(removed).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+
   it('sends nothing for a job that is stopped before it starts', async () => {
     // Arrange
     const sidecar = startBridge({

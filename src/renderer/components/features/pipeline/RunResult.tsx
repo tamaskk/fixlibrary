@@ -9,6 +9,9 @@ type RunResultProps = {
 
 // The region is always in the page, so what appears in it is announced.
 export function RunResult({ finished }: RunResultProps): React.JSX.Element {
+  const failed = finished?.tracks.failed ?? 0
+  const processed = (finished?.tracks.total ?? 0) - failed
+
   return (
     <div role="status">
       {finished !== null && (
@@ -16,15 +19,16 @@ export function RunResult({ finished }: RunResultProps): React.JSX.Element {
           {finished.outcome === 'cancelled' ? (
             <StatusLine tone="neutral">A futás megszakítva. A fájljaid nem változtak.</StatusLine>
           ) : (
-            <StatusLine tone="success">
-              A futás kész: {formatCount(finished.counts.done)} lépés lefutott
-              {finished.counts.skipped > 0 && `, ${formatCount(finished.counts.skipped)} kimaradt`}.
-            </StatusLine>
-          )}
-          {finished.counts.failed > 0 && (
-            <StatusLine tone="danger">
-              Hibák: {formatCount(finished.counts.failed)}. Az érintett trackek kimaradtak.
-            </StatusLine>
+            <>
+              <StatusLine tone="success">
+                A futás kész: {formatCount(processed)} track feldolgozva.
+              </StatusLine>
+              {failed > 0 && (
+                <StatusLine tone="danger">
+                  {formatCount(failed)} tracknél hiba történt. Ezek kimaradtak.
+                </StatusLine>
+              )}
+            </>
           )}
         </div>
       )}

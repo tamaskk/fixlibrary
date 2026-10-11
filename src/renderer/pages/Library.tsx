@@ -40,6 +40,8 @@ export function Library(): React.JSX.Element {
   const choice = usePipelineStore((state) => state.choice)
   const runProgress = usePipelineStore((state) => state.progress)
   const runFinished = usePipelineStore((state) => state.lastFinished)
+  const runProgressAt = usePipelineStore((state) => state.progressAt)
+  const runActionFailed = usePipelineStore((state) => state.actionFailed)
   const loadPipeline = usePipelineStore((state) => state.load)
   const choose = usePipelineStore((state) => state.choose)
   const chosenStages = usePipelineStore((state) => state.chosenStages)
@@ -96,6 +98,8 @@ export function Library(): React.JSX.Element {
           {runProgress !== null && (
             <RunPanel
               progress={runProgress}
+              receivedAt={runProgressAt}
+              actionFailed={runActionFailed}
               onPause={() => void pauseRun()}
               onResume={() => void resumeRun()}
               onCancel={() => void cancelRun()}
@@ -108,10 +112,13 @@ export function Library(): React.JSX.Element {
               {scanning ? scanPhaseLabel(progress) : ''}
             </p>
             {/* With no folder and no tracks the empty state below says what is wrong. */}
-            {/* While a run is shown, the note about the last scan gives its room to it. */}
+            {/* A run and its result take the place of the note about the last scan. */}
             <ScanResult
               outcome={
-                scanning || runProgress !== null || (!hasTracks && !ready.rootChosen)
+                scanning ||
+                runProgress !== null ||
+                runFinished !== null ||
+                (!hasTracks && !ready.rootChosen)
                   ? null
                   : lastScan
               }
@@ -170,7 +177,10 @@ export function Library(): React.JSX.Element {
                 onChoose={choose}
                 runActive={runProgress !== null}
                 requesting={requestingRun}
-                outcome={runProgress === null ? lastRun : null}
+                // The note that a run started is only news until the run itself reports.
+                outcome={
+                  lastRun?.ok && (runProgress !== null || runFinished !== null) ? null : lastRun
+                }
                 onRun={(scope) => void run(scope, chosenStages())}
               />
             </>

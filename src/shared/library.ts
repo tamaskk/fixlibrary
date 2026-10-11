@@ -78,8 +78,11 @@ export type LibraryPageRequest = z.input<typeof libraryPageRequestSchema>
 /** More ids than a library can hold is a broken or hostile page, not a selection. */
 export const MAX_RUN_TRACKS = 20_000
 
+/** More names than the app can have functions. */
+export const MAX_RUN_STAGES = 50
+
 // The names of the functions to run; the app adds the stages they depend on.
-const requestedStages = z.array(z.string().min(1).max(40)).min(1).max(50)
+const requestedStages = z.array(z.string().min(1).max(40)).min(1).max(MAX_RUN_STAGES)
 
 export const runRequestSchema = z.discriminatedUnion('scope', [
   z.strictObject({

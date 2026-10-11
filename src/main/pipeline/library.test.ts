@@ -147,7 +147,8 @@ describe('resolveRunTargets', () => {
     const targets = resolveRunTargets(
       testDatabase.db,
       { scope: 'selection', trackIds: selected, stages: ['bpmKey'] },
-      MOUNTED
+      MOUNTED,
+      ['bpmKey']
     )
 
     // Assert
@@ -166,7 +167,8 @@ describe('resolveRunTargets', () => {
     const targets = resolveRunTargets(
       testDatabase.db,
       { scope: 'library', stages: ['bpmKey'] },
-      MOUNTED
+      MOUNTED,
+      ['bpmKey']
     )
 
     // Assert
@@ -183,12 +185,14 @@ describe('resolveRunTargets', () => {
     const selection = resolveRunTargets(
       testDatabase.db,
       { scope: 'selection', trackIds: [offline, online, missing, 999_999], stages: ['bpmKey'] },
-      MOUNTED
+      MOUNTED,
+      ['bpmKey']
     )
     const library = resolveRunTargets(
       testDatabase.db,
       { scope: 'library', stages: ['bpmKey'] },
-      MOUNTED
+      MOUNTED,
+      ['bpmKey']
     )
 
     // Assert
@@ -204,7 +208,8 @@ describe('resolveRunTargets', () => {
     const targets = resolveRunTargets(
       testDatabase.db,
       { scope: 'selection', trackIds: [id, id, id], stages: ['bpmKey'] },
-      MOUNTED
+      MOUNTED,
+      ['bpmKey']
     )
 
     // Assert
@@ -221,6 +226,12 @@ describe('resolveRunTargets', () => {
     ['an unknown scope', { scope: 'everything', stages: ['bpmKey'] }],
     ['ids with the library scope', { scope: 'library', trackIds: [1], stages: ['bpmKey'] }],
     ['no function', { scope: 'library', stages: [] }],
+    ['a function that cannot be asked for', { scope: 'library', stages: ['writeTags'] }],
+    ['one such function among others', { scope: 'library', stages: ['bpmKey', 'writeTags'] }],
+    [
+      'more functions than there can be',
+      { scope: 'library', stages: new Array(51).fill('bpmKey') }
+    ],
     ['a run without functions', { scope: 'library' }],
     [
       'more ids than a library can hold',
@@ -229,7 +240,7 @@ describe('resolveRunTargets', () => {
     ['no request', null]
   ])('refuses %s', (_name, request) => {
     // Act
-    const targets = resolveRunTargets(testDatabase.db, request, MOUNTED)
+    const targets = resolveRunTargets(testDatabase.db, request, MOUNTED, ['bpmKey'])
 
     // Assert
     expect(targets).toEqual({ ok: false, code: 'INVALID_INPUT' })

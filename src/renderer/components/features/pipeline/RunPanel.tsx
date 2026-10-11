@@ -9,6 +9,10 @@ import type { JobCounts, RunProgress } from '@shared/pipeline'
 
 type RunPanelProps = {
   progress: RunProgress
+  /** When this report arrived, by the clock of the page. */
+  receivedAt: number
+  /** True when the last pause, resume or cancel could not be passed on. */
+  actionFailed: boolean
   onPause: () => void
   onResume: () => void
   onCancel: () => void
@@ -36,6 +40,8 @@ function useNow(ticking: boolean): number {
 
 export function RunPanel({
   progress,
+  receivedAt,
+  actionFailed,
   onPause,
   onResume,
   onCancel
@@ -46,7 +52,13 @@ export function RunPanel({
   const { counts } = progress
   const finished = finishedOf(counts)
   const percent = counts.total === 0 ? 0 : Math.floor((finished / counts.total) * 100)
-  const phase = PHASE_LABELS[progress.phase]
+  const heading = `${PHASE_LABELS[progress.phase]} ${paused ? 'szünetel' : 'folyamatban'}`
+  // The report says how long the run had worked when it was sent; while the run goes
+  // on, the time since then is added here. A paused run stands still.
+  const elapsedMs = progress.elapsedMs + (paused ? 0 : Math.max(0, now - receivedAt))
+  const steps = progress.stages
+    .map((stage) => `${stageLabel(stage.stage)} ${finishedOf(stage)} / ${stage.total}`)
+    .join(', ')
 
   return (
     <section
@@ -54,14 +66,11 @@ export function RunPanel({
       className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4"
     >
       <div className="flex items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h2 className="text-h3">{paused ? `${phase} szünetel` : `${phase} folyamatban`}</h2>
-          {progress.pauseReason === 'offline' && (
-            <StatusLine tone="warning">
-              A könyvtár lemeze nincs csatlakoztatva. Csatlakoztasd, és folytasd a futást.
-            </StatusLine>
-          )}
-        </div>
+        <h2 className="min-w-0 truncate text-h3">{heading}</h2>
+        {/* Says it again when it changes: the run started, paused or went on. */}
+        <p role="status" className="sr-only">
+          {heading}
+        </p>
         <div className="flex shrink-0 gap-2">
           {paused ? (
             <Button variant="secondary" onClick={onResume}>
@@ -79,16 +88,14 @@ export function RunPanel({
       </div>
 
       <div className="flex flex-col gap-2">
-        <ProgressBar percent={percent} label={phase} />
+        <ProgressBar percent={percent} label="Futás előrehaladása" />
         <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-small text-text-muted">
           <span className="font-mono text-data text-text tabular-nums">
             {formatCount(finished)} / {formatCount(counts.total)} · {percent}%
           </span>
           <span>
             Eltelt:{' '}
-            <span className="font-mono text-data tabular-nums">
-              {formatElapsed(now - progress.startedAt)}
-            </span>
+            <span className="font-mono text-data tabular-nums">{formatElapsed(elapsedMs)}</span>
           </span>
           <span>
             Hátravan:{' '}
@@ -98,20 +105,39 @@ export function RunPanel({
                 ? 'még nem becsülhető'
                 : formatRemaining(progress.remainingMs)}
           </span>
-          {counts.failed > 0 && (
-            <StatusLine tone="danger">Hibák: {formatCount(counts.failed)}</StatusLine>
+          {progress.tracks.failed > 0 && (
+            <StatusLine tone="danger">
+              Hibás track: {formatCount(progress.tracks.failed)}
+            </StatusLine>
           )}
         </div>
-        <ul aria-label="Lépések" className="flex flex-wrap gap-x-6 gap-y-1 text-text-muted">
-          {progress.stages.map((stage) => (
-            <li key={stage.stage} className="flex items-baseline gap-2 text-small">
-              <span>{stageLabel(stage.stage)}</span>
-              <span className="font-mono text-data tabular-nums">
-                {formatCount(finishedOf(stage))} / {formatCount(stage.total)}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {/* One line, whatever there is to say: the panel must not grow and push the
+            table and the run buttons out of a small window. */}
+        <div className="h-5 min-w-0">
+          {actionFailed ? (
+            <StatusLine tone="danger">A művelet nem sikerült. Próbáld újra.</StatusLine>
+          ) : progress.pauseReason === 'offline' ? (
+            <StatusLine tone="warning" className="truncate">
+              A könyvtár lemeze nincs csatlakoztatva. Csatlakoztasd, és folytasd a futást.
+            </StatusLine>
+          ) : (
+            <p
+              aria-label={`Lépések: ${steps}`}
+              title={steps}
+              className="truncate text-small text-text-muted"
+            >
+              {progress.stages.map((stage, index) => (
+                <span key={stage.stage}>
+                  {index > 0 && <span aria-hidden="true"> · </span>}
+                  {stageLabel(stage.stage)}{' '}
+                  <span className="font-mono text-data tabular-nums">
+                    {formatCount(finishedOf(stage))} / {formatCount(stage.total)}
+                  </span>
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
       </div>
 
       <Dialog open={confirming} onOpenChange={setConfirming}>

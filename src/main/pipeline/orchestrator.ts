@@ -25,7 +25,7 @@ import {
   type JobStatus,
   type NewJob
 } from '../db/jobs'
-import { getTrackById, type Track } from '../db/tracks'
+import { getTrackById, getTracksByIds, type Track } from '../db/tracks'
 import { logger } from '../services/logger'
 import { AppError, TRACK_ERROR_MESSAGES, type Result, type TrackError } from '@shared/errors'
 import {
@@ -111,7 +111,12 @@ interface Run {
   durations: Map<string, number[]>
   controllers: Map<number, AbortController>
   pauseReason: 'user' | 'offline' | null
-  startedAt: number
+  /** The tracks that a stage of this phase failed for. */
+  failedTracks: Set<number>
+  /** How long the phase worked before the last pause, in this session of the app. */
+  activeMs: number
+  /** Since when it has been working again; null while it is paused. */
+  activeSince: number | null
   /** Jobs of this phase that are running now. */
   running: number
   /** Jobs of this phase that are neither done, failed nor skipped. */
@@ -213,7 +218,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       pauseReason: active.pauseReason,
       counts: total,
       stages: perStage,
-      startedAt: active.startedAt,
+      tracks: { total: active.byTrack.size, failed: active.failedTracks.size },
+      elapsedMs: active.activeMs + (active.activeSince === null ? 0 : now() - active.activeSince),
       remainingMs: state === 'finished' ? null : estimate(active)
     }
   }
@@ -299,6 +305,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       setBatchItemError(tx, active.batchId, error)
     })
     setStatus(active, job, 'failed')
+    active.failedTracks.add(job.trackId)
     for (const dependent of dependentsOf(active, job)) skipWithDependents(active, dependent)
   }
 
@@ -361,6 +368,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   function pauseBecause(reason: 'user' | 'offline'): void {
     if (!run || run.pauseReason !== null) return
     run.pauseReason = reason
+    if (run.activeSince !== null) run.activeMs += now() - run.activeSince
+    run.activeSince = null
     queue.pause()
     setBatchPause(db, run.batchId, reason)
     logger.info(`Batch ${run.batchId} paused (${reason})`)
@@ -477,7 +486,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       durations: new Map(),
       controllers: new Map(),
       pauseReason,
-      startedAt: now(),
+      failedTracks: new Set(),
+      activeMs: 0,
+      activeSince: pauseReason === null ? now() : null,
       running: 0,
       unfinished: 0
     }
@@ -501,6 +512,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       counts.total += 1
       if (isOver(job.status)) counts[job.status] += 1
       else active.unfinished += 1
+      if (job.status === 'failed') active.failedTracks.add(job.trackId)
       active.counts.set(stage.name, counts)
     }
     skipJobs(db, withoutStage)
@@ -543,9 +555,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       // Decided again here, whatever the caller checked: only a track that is in the
       // library, online and has its file is worked on.
       const mounted = listMountedVolumes()
+      const wanted = [...new Set(parsed.data.trackIds)]
+      // Read together and put back in the order that was asked for.
+      const found = new Map(getTracksByIds(db, wanted, mounted).map((track) => [track.id, track]))
       const tracks: Track[] = []
-      for (const id of new Set(parsed.data.trackIds)) {
-        const track = getTrackById(db, id, mounted)
+      for (const id of wanted) {
+        const track = found.get(id)
         if (track && !track.offline && !track.fileMissing) tracks.push(track)
       }
       if (tracks.length === 0) return { ok: false, code: 'INVALID_INPUT' }
@@ -623,6 +638,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     resume() {
       if (!run || run.pauseReason === null) return
       run.pauseReason = null
+      run.activeSince = now()
       setBatchPause(db, run.batchId, null)
       logger.info(`Batch ${run.batchId} resumed`)
       queue.resume()

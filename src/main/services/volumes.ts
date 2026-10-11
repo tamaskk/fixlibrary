@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { logger } from './logger'
+import { createTimedCache } from './timed-cache'
 
 const VOLUMES_ROOT = '/Volumes'
 
@@ -48,10 +49,5 @@ export function createMountedVolumesCache(
   list: () => ReadonlySet<string> = listMountedVolumes,
   now: () => number = Date.now
 ): () => ReadonlySet<string> {
-  let cached: { volumes: ReadonlySet<string>; at: number } | null = null
-  return () => {
-    const time = now()
-    if (cached === null || time - cached.at >= maxAgeMs) cached = { volumes: list(), at: time }
-    return cached.volumes
-  }
+  return createTimedCache(list, maxAgeMs, now)
 }

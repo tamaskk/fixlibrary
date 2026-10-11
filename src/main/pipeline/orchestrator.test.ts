@@ -1137,6 +1137,51 @@ describe('progress', () => {
     })
   })
 
+  it('counts the time it works, not the time it is paused', async () => {
+    // Arrange
+    const trackIds = addTracks(6)
+    limits.cpu = 1
+    const run = orchestrator([fakeStage('bpmKey', { ms: 1000 })])
+    run.start({ trackIds, stages: ['bpmKey'] })
+    await vi.advanceTimersByTimeAsync(2500)
+
+    // Act
+    run.pause()
+    const atPause = run.progress()?.elapsedMs
+    await vi.advanceTimersByTimeAsync(60_000)
+    const afterAnHourOfPause = run.progress()?.elapsedMs
+    run.resume()
+    await vi.advanceTimersByTimeAsync(1500)
+
+    // Assert
+    expect(atPause).toBe(2500)
+    expect(afterAnHourOfPause).toBe(2500)
+    expect(run.progress()?.elapsedMs).toBe(4000)
+  })
+
+  it('says how many tracks the batch has and how many of them failed', async () => {
+    // Arrange
+    const trackIds = addTracks(5)
+    const run = orchestrator([
+      fakeStage('bpmKey', { fails: (trackId) => trackId === trackIds[1] }),
+      fakeStage('lookup', {
+        resource: 'network',
+        fails: (trackId) => trackId === trackIds[1] || trackId === trackIds[4]
+      })
+    ])
+
+    // Act
+    run.start({ trackIds, stages: ['bpmKey', 'lookup'] })
+    await vi.runAllTimersAsync()
+
+    // Assert: one track failed in two stages and counts once.
+    expect(progress.at(-1)).toMatchObject({
+      state: 'finished',
+      tracks: { total: 5, failed: 2 },
+      counts: { failed: 3 }
+    })
+  })
+
   it('estimates the time left from the jobs that have finished', async () => {
     // Arrange
     const trackIds = addTracks(20)

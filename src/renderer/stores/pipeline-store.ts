@@ -12,6 +12,10 @@ interface PipelineState {
   choice: FunctionChoice
   /** The run that is active now, or null. */
   progress: RunProgress | null
+  /** When the report in `progress` arrived, by the clock of the page. */
+  progressAt: number
+  /** True when the last pause, resume or cancel could not be passed on. */
+  actionFailed: boolean
   /** The last report of the run that ended last in this session, or null. */
   lastFinished: RunProgress | null
   load: () => Promise<void>
@@ -32,9 +36,22 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
     if (listening) return
     listening = true
     window.api.pipeline.onProgress((progress) => {
-      if (progress.state === 'finished') set({ progress: null, lastFinished: progress })
-      else set({ progress, lastFinished: null })
+      if (progress.state === 'finished') {
+        set({ progress: null, lastFinished: progress, actionFailed: false })
+      } else {
+        set({ progress, progressAt: Date.now(), lastFinished: null })
+      }
     })
+  }
+
+  /** Passes an action on, and remembers if that failed, so the panel can say so. */
+  async function act(action: () => Promise<void>): Promise<void> {
+    try {
+      await action()
+      set({ actionFailed: false })
+    } catch {
+      set({ actionFailed: true })
+    }
   }
 
   return {
@@ -42,6 +59,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
     functions: [],
     choice: 'all',
     progress: null,
+    progressAt: 0,
+    actionFailed: false,
     lastFinished: null,
 
     async load() {
@@ -53,6 +72,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
           loaded: true,
           functions,
           progress,
+          progressAt: Date.now(),
           // A function that is gone cannot stay chosen.
           choice: choice === 'all' || functions.includes(choice) ? choice : 'all'
         })
@@ -68,8 +88,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => {
       return choice === 'all' ? [...functions] : [choice]
     },
 
-    pause: () => window.api.pipeline.pause(),
-    resume: () => window.api.pipeline.resume(),
-    cancel: () => window.api.pipeline.cancel()
+    pause: () => act(() => window.api.pipeline.pause()),
+    resume: () => act(() => window.api.pipeline.resume()),
+    cancel: () => act(() => window.api.pipeline.cancel())
   }
 })

@@ -8,6 +8,7 @@ let state: PipelineState
 let stateFails: boolean
 let listeners: ((progress: RunProgress) => void)[]
 let calls: string[]
+let actionsFail: boolean
 
 const api = {
   pipeline: {
@@ -15,7 +16,10 @@ const api = {
       if (stateFails) throw new Error('IPC failed')
       return state
     },
-    pause: async () => void calls.push('pause'),
+    pause: async () => {
+      if (actionsFail) throw new Error('IPC failed')
+      calls.push('pause')
+    },
     resume: async () => void calls.push('resume'),
     cancel: async () => void calls.push('cancel'),
     onProgress: (listener) => {
@@ -34,7 +38,8 @@ function progress(changes: Partial<RunProgress> = {}): RunProgress {
     pauseReason: null,
     counts: { total: 40, done: 4, failed: 0, skipped: 0, running: 2 },
     stages: [],
-    startedAt: 0,
+    tracks: { total: 20, failed: 0 },
+    elapsedMs: 0,
     remainingMs: null,
     ...changes
   }
@@ -52,6 +57,7 @@ beforeEach(() => {
   stateFails = false
   listeners = []
   calls = []
+  actionsFail = false
 })
 
 describe('load', () => {
@@ -177,5 +183,21 @@ describe('acting on a run', () => {
 
     // Assert
     expect(calls).toEqual(['pause', 'resume', 'cancel'])
+  })
+
+  it('remembers that an action could not be passed on, until one works again', async () => {
+    // Arrange
+    const store = await freshStore()
+    actionsFail = true
+
+    // Act
+    await store.getState().pause()
+    const afterFailure = store.getState().actionFailed
+    actionsFail = false
+    await store.getState().pause()
+
+    // Assert
+    expect(afterFailure).toBe(true)
+    expect(store.getState().actionFailed).toBe(false)
   })
 })
