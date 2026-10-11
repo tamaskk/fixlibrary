@@ -27,6 +27,17 @@
       "Bash(gh run list *)",
       "Bash(gh run view *)"
     ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(!.env.example)",
+      "Read(secrets/**)",
+      "Read(*.pem)",
+      "Bash(sudo *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(npm publish *)"
+    ],
     "ask": [
       "Bash(git push *)",
       "Bash(git tag *)",
@@ -44,17 +55,6 @@
       "Edit(.claude/settings.json)",
       "Edit(.claude/hooks/**)",
       "Edit(.mcp.json)"
-    ],
-    "deny": [
-      "Read(.env)",
-      "Read(.env.*)",
-      "Read(!.env.example)",
-      "Read(secrets/**)",
-      "Read(*.pem)",
-      "Bash(sudo *)",
-      "Bash(git push --force *)",
-      "Bash(git push -f *)",
-      "Bash(npm publish *)"
     ]
   },
   "hooks": {
@@ -93,5 +93,10 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
   }
 }
