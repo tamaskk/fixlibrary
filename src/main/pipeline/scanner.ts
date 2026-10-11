@@ -331,11 +331,22 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     const stored = new Map<string, TrackFileState>(
       listTrackFileStates(db).map((state) => [state.path, state])
     )
+    // In clean library mode a track points at its copy, and its original stays in
+    // the library untouched. That file is known, not a new track.
+    const originals = new Set(
+      [...stored.values()]
+        .filter((state) => state.originalPath !== state.path)
+        .map((state) => state.originalPath)
+    )
     const toRead: FoundFile[] = []
     const foundAgain: number[] = []
     let unchanged = 0
     for (const file of walk.files) {
       const known = stored.get(file.trackPath)
+      if (known === undefined && originals.has(file.trackPath)) {
+        unchanged += 1
+        continue
+      }
       const same =
         known !== undefined &&
         known.fileSizeBytes === file.sizeBytes &&

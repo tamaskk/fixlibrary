@@ -10,6 +10,7 @@ import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
+import { createBatchFiles } from './pipeline/batch-files'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { createLibraryScanner } from './pipeline/scanner'
 import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
@@ -20,6 +21,7 @@ import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
 import { resolveToolLocations } from './services/binaries'
 import { readEnvFile } from './services/env-file'
+import { createFileOps } from './services/file-ops'
 import { keychainCipher } from './services/keychain'
 import { logger, startFileLogging } from './services/logger'
 import { createSleepBlocker } from './services/power'
@@ -186,6 +188,26 @@ function registerLibraryAndPipeline(): void {
     }
   })
 
+  // The folders of the library as the settings name them now: the only places a
+  // file may be changed in.
+  const folders = (): ReturnType<Parameters<typeof createBatchFiles>[0]['folders']> => {
+    const settings = readSettings(db)
+    return {
+      libraryRoot: settings.library.rootFolder,
+      cleanLibraryFolder: settings.library.cleanLibraryFolder,
+      backupFolder: resolveEffectiveSettings(settings, environment).backupFolder
+    }
+  }
+  const batchFiles = createBatchFiles({
+    db,
+    fileOps: createFileOps({
+      allowedRoots: () =>
+        Object.values(folders()).filter((folder): folder is string => folder !== null)
+    }),
+    folders,
+    listMountedVolumes
+  })
+
   const stages = availableStages()
   // A mistake in the stages is a bug of this build: better to stop here than to run them.
   validateStages(stages)
@@ -203,6 +225,7 @@ function registerLibraryAndPipeline(): void {
     ),
     listMountedVolumes,
     mode: () => readSettings(db).library.mode,
+    batchFiles,
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })
@@ -228,17 +251,19 @@ function registerLibraryAndPipeline(): void {
   })
   registerPipelineIpc({ orchestrator: runs, functions })
 
-  // Picks up what changed on the drive since the last run. Without a chosen folder
-  // there is nothing to scan, and a drive that is not connected ends the scan at once.
-  // A run that was interrupted goes on after the scan, so both do not read the
-  // drive at the same time.
-  if (readSettings(db).library.rootFolder === null) {
-    takeUpRun()
-    return
-  }
-  void scanner
-    .scan()
-    .then((result) => {
+  // In this order, so that no two of them work on the drive at the same time: what
+  // interrupted writes left behind is removed, then the library is scanned for what
+  // changed since the last run, then a run that was interrupted goes on. Without a
+  // chosen folder there is nothing to scan, and a drive that is not connected ends
+  // the scan at once.
+  void (async () => {
+    try {
+      await batchFiles.removeTempFiles()
+    } catch (error) {
+      logger.error('The temp files of interrupted writes could not be removed', error)
+    }
+    if (readSettings(db).library.rootFolder !== null) {
+      const result = await scanner.scan()
       if (result.ok) {
         const { found, added, updated, missing, unreadable } = result.value
         logger.info(
@@ -247,8 +272,9 @@ function registerLibraryAndPipeline(): void {
       } else {
         logger.warn(`Startup scan did not finish: ${result.code}`)
       }
-    })
-    .finally(takeUpRun)
+    }
+    takeUpRun()
+  })()
 }
 
 function createWindow(): void {
