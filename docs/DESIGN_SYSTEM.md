@@ -1,0 +1,190 @@
+# Design System: FixLibrary
+
+Values marked (assumed — confirm) are defaults chosen during bootstrap and listed in PRD §08.
+
+## 01 Brand identity
+
+- Personality: precise, dark, focused (assumed — confirm)
+- Tone in UI copy: plain Hungarian, short sentences, informal "te" form, no exclamation marks. DJ terms stay in English (track, playlist, cue, drop, BPM, key).
+- Feel: dense and calm, like DJ software. Data first: tables and waveforms, no decoration.
+- UI language(s) and locale: hu-HU only. Dates `2026. 10. 11.`, decimal comma (`−11,0 LUFS`), 24-hour time. No currency.
+- Reference: Rekordbox 7 (dark, table driven), Linear (density, restraint).
+
+## 02 Color palette
+
+Use tokens in components. Never raw hex values.
+
+| Token                 | Value   | Use                                                 |
+| --------------------- | ------- | --------------------------------------------------- |
+| --color-bg            | #0B0B0D | Window background                                   |
+| --color-surface       | #16161A | Cards, panels, inputs, table header                 |
+| --color-surface-hover | #1F1F25 | Hovered and selected rows                           |
+| --color-border        | #2A2A31 | Dividers, input borders                             |
+| --color-text          | #F2F2F3 | Body text                                           |
+| --color-text-muted    | #9A9AA3 | Secondary text, captions                            |
+| --color-primary       | #2563EB | Primary button background, focus ring, selection    |
+| --color-primary-hover | #3B82F6 | Hover on primary                                    |
+| --color-primary-text  | #60A5FA | Links and active text on dark backgrounds           |
+| --color-success       | #22C55E | Done states, confirmations                          |
+| --color-warning       | #F59E0B | Non-blocking warnings (low confidence, low bitrate) |
+| --color-danger        | #DC2626 | Destructive button background, error borders        |
+| --color-danger-text   | #F87171 | Error messages on dark backgrounds                  |
+
+Hot cue defaults (editable in Settings; these are the first-run values, assumed — confirm):
+
+| Token         | Value   | Slot               |
+| ------------- | ------- | ------------------ |
+| --color-cue-a | #22C55E | A Start (green)    |
+| --color-cue-b | #22D3EE | B Bassline (aqua)  |
+| --color-cue-c | #A855F7 | C Vocal (purple)   |
+| --color-cue-d | #EF4444 | D Drop 1 (red)     |
+| --color-cue-e | #3B82F6 | E Breakdown (blue) |
+| --color-cue-f | #F97316 | F Drop 2 (orange)  |
+| --color-cue-g | #EAB308 | G Outro (yellow)   |
+| --color-cue-h | #EC4899 | H Drop 3 (pink)    |
+
+Rules:
+
+- One primary color. Accent colors are for state, not decoration. Cue colors appear only on cues.
+- Text on any background passes WCAG AA (4.5:1 for body text). Use `--color-primary-text` and `--color-danger-text` for colored text; `--color-primary` and `--color-danger` are backgrounds for white text.
+- Dark only in v1. There is no light theme and no `.dark` class; never hard-code a color so a second value set can be added later.
+- State is never shown by color alone: pair it with an icon or a label.
+
+## 03 Typography
+
+System fonts, because the app is Mac only and works offline (assumed — confirm).
+Sans: `-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif`. Mono: `ui-monospace, "SF Mono", Menlo, monospace`.
+
+| Role  | Font | Size | Weight | Line height                     |
+| ----- | ---- | ---- | ------ | ------------------------------- |
+| H1    | Sans | 24px | 600    | 1.25                            |
+| H2    | Sans | 18px | 600    | 1.3                             |
+| H3    | Sans | 15px | 600    | 1.35                            |
+| Body  | Sans | 14px | 400    | 1.5                             |
+| Small | Sans | 13px | 400    | 1.45                            |
+| Label | Sans | 11px | 500    | 1.4, uppercase, 0.04em tracking |
+| Data  | Mono | 13px | 400    | 1.45                            |
+
+Rules:
+
+- Numbers in tables (BPM, key, energy, LUFS, time) use the Data role with tabular figures so columns align.
+- Headings use tight letter spacing: H1 -0.02em, H2 -0.01em.
+- Prose line length stays under 70 characters. Table cells truncate with an ellipsis and show the full value in a tooltip.
+- No display sizes: this is a tool, not a landing page.
+
+## 04 Spacing
+
+Base unit: 4px. Only use values from this scale.
+
+| Token    | Value | Typical use                                 |
+| -------- | ----- | ------------------------------------------- |
+| space-1  | 4px   | Icon gaps                                   |
+| space-2  | 8px   | Inside small components, table cell padding |
+| space-3  | 12px  | Input padding                               |
+| space-4  | 16px  | Default gap between elements                |
+| space-6  | 24px  | Card and page padding                       |
+| space-8  | 32px  | Between groups                              |
+| space-12 | 48px  | Between sections                            |
+
+Layout:
+
+- Fixed left sidebar 220px for page navigation; content fills the rest of the window.
+- Table rows are 36px high. Tables fill the available height and scroll inside themselves.
+- Page padding space-6. Settings-style forms have a max width of 720px.
+
+## 05 Border radius and shadows
+
+| Token       | Value  | Use                         |
+| ----------- | ------ | --------------------------- |
+| radius-sm   | 6px    | Inputs, tags, small buttons |
+| radius-md   | 8px    | Buttons, dropdowns          |
+| radius-lg   | 12px   | Cards, modals               |
+| radius-full | 9999px | Pills, energy badges        |
+
+Shadows: one level only, for elevated surfaces (dropdowns, modals).
+`0 8px 24px rgba(0, 0, 0, 0.5)`. Flat cards get a border, not a shadow.
+
+## 06 Components
+
+Reuse before creating. Check `src/renderer/components/ui/` first.
+If a variant is not listed here, ask before adding it.
+
+Buttons
+
+| Variant   | Background  | Text  | Border | Use                                                        |
+| --------- | ----------- | ----- | ------ | ---------------------------------------------------------- |
+| Primary   | primary     | white | none   | One per screen, the main action ("Jóváhagyás", "Futtatás") |
+| Secondary | surface     | text  | border | Supporting actions                                         |
+| Ghost     | transparent | text  | none   | Toolbars, row actions                                      |
+| Danger    | danger      | white | none   | Destructive actions, always confirm                        |
+
+- Height 32px, padding 0 12px, radius-md, Small 500.
+- States: hover (primary-hover, or surface-hover for secondary and ghost), active (darken 8%), focus (2px primary ring with a 2px bg offset), disabled (50% opacity, no pointer).
+- Loading: spinner replaces the label, width stays fixed.
+
+Inputs
+
+- Height 32px, radius-sm, surface background, border color-border, focus ring primary.
+- Label above the field, 11px Label role, always visible. Placeholder is a hint, never the label.
+- Error: border danger, message below in danger-text at 13px.
+
+Tables
+
+- Virtualized for anything that can exceed 100 rows. Sticky header on surface.
+- Selected row: surface-hover background with a 2px primary left edge.
+- Changed values in a batch preview: old value struck through in text-muted, new value in text.
+- Row status uses an icon plus a tooltip: done (success), missing (text-muted), error (danger-text).
+
+Cards
+
+- Surface background, radius-lg, padding space-6, 1px color-border. No shadow.
+
+Modals
+
+- Max width 480px, radius-lg, overlay rgba(0, 0, 0, 0.6).
+- Close on overlay click and on Escape, except while an apply phase is running.
+
+Progress
+
+- Long runs show a percent bar, counts per stage, elapsed time and an estimate. Never an indeterminate spinner for work longer than 3 seconds.
+
+Empty states
+
+- One line saying what belongs here, plus one primary action. Never a blank panel.
+
+## 07 Icons
+
+- Set: Lucide. One set only.
+- Sizes: 16px inline with text and in buttons, 20px standalone.
+- Stroke width 1.75.
+- An icon is never the only label on an action. Add text or an aria-label.
+
+## 08 Window sizes
+
+Desktop only. There are no mobile breakpoints.
+
+| Name    | Window width | Notes                                                           |
+| ------- | ------------ | --------------------------------------------------------------- |
+| min     | 1024px       | Minimum window size is 1024×640. Every screen works here first. |
+| default | 1280px       | Default window size 1280×800                                    |
+| wide    | 1600px+      | Tables gain columns; side panels may sit next to the table      |
+
+Rules:
+
+- No horizontal scrolling of the page. Wide tables scroll horizontally inside themselves.
+- Click targets are at least 28px high.
+- Everything reachable by mouse is reachable by keyboard; batch preview shortcuts are arrows, Space, Enter.
+
+## 09 Motion
+
+- Duration: 150ms for micro interactions, 250ms for panels and modals. No page transitions.
+- Easing: ease-out when entering, ease-in when leaving.
+- Respect prefers-reduced-motion: disable non-essential animation.
+- Progress bars update at most 4 times per second.
+
+## 10 Implementation
+
+- Tokens live in `src/renderer/styles/globals.css` as CSS variables with the exact names above, exposed to Tailwind through `@theme` (Tailwind v4). This file and globals.css change in the same commit.
+- Primitives live in `src/renderer/components/ui/` (shadcn/ui restyled with these tokens).
+- Cue colors in the UI come from Settings at runtime; the `--color-cue-*` tokens are only the defaults.
+- Anything not defined here: ask before inventing it.
