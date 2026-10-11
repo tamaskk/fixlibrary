@@ -4,6 +4,8 @@ import type { EditablePreviewField, PreviewRow } from '@shared/preview'
 /** What a cell may need beyond its row. */
 export interface PreviewColumnContext {
   styleNames: ReadonlyMap<number, string>
+  /** True from the width on at which the table shows its wide-only columns. */
+  wide: boolean
 }
 
 /** How a cell is edited in place. */

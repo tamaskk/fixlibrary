@@ -219,6 +219,8 @@ test('a batch that is given up changes no file', async () => {
       .click()
 
     await expect(page.getByText('A batch elvetve. A fájljaid nem változtak.')).toBeVisible()
+    // The button is gone with the batch: the focus goes to the top of the page.
+    await expect(page.getByRole('heading', { name: 'Előnézet' })).toBeFocused()
     await expect(page.getByText(/Nincs jóváhagyásra váró batch\./)).toBeVisible()
     expect(readdirSync(libraryFolder).sort()).toEqual([1, 2, 3].map((number) => trackName(number)))
   } finally {

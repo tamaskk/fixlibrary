@@ -6,7 +6,7 @@ import type { ErrorCode } from '@shared/errors'
 
 function describeFailure(code: ErrorCode): string {
   if (code === 'RUN_ACTIVE') {
-    return 'Most nem lehet: egy futás dolgozik, a könyvtár beolvasása tart, vagy az előbb kérted. Próbáld újra kicsit később.'
+    return 'Most nem lehet: egy futás dolgozik, vagy a könyvtár beolvasása tart. Próbáld újra kicsit később.'
   }
   if (code === 'INVALID_INPUT') return 'Ez a batch már nem vár jóváhagyásra.'
   if (code === 'WRITE_FAILED') {

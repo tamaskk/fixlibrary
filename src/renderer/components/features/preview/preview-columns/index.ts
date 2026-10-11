@@ -13,5 +13,9 @@ const COLUMNS_BY_BATCH_TYPE: Readonly<Record<string, readonly PreviewColumn[]>> 
 
 /** The columns of the "Változások" tab for a kind of batch. */
 export function columnsFor(batchType: string): readonly PreviewColumn[] {
-  return COLUMNS_BY_BATCH_TYPE[batchType] ?? RUN_COLUMNS
+  // The type is a stored string: only a set of its own is looked up, never what
+  // every object has.
+  return Object.hasOwn(COLUMNS_BY_BATCH_TYPE, batchType)
+    ? (COLUMNS_BY_BATCH_TYPE[batchType] ?? RUN_COLUMNS)
+    : RUN_COLUMNS
 }

@@ -77,8 +77,11 @@ export function BatchPreviewTable({
   )
   const [editing, setEditing] = React.useState<{ trackId: number; columnId: string } | null>(null)
   const context = React.useMemo<PreviewColumnContext>(
-    () => ({ styleNames: new Map(styles.map((style) => [style.id, style.name])) }),
-    [styles]
+    () => ({
+      styleNames: new Map(styles.map((style) => [style.id, style.name])),
+      wide: tableWidth >= WIDE_FROM_WIDTH
+    }),
+    [styles, tableWidth]
   )
 
   const columns = allColumns.filter((column) => tableWidth >= WIDE_FROM_WIDTH || !column.wideOnly)

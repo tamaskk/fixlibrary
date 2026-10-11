@@ -31,7 +31,7 @@ export function BatchPreview(): React.JSX.Element {
   const filter = usePreviewStore((state) => state.filter)
   const busy = usePreviewStore((state) => state.busy)
   const notice = usePreviewStore((state) => state.notice)
-  const editFailed = usePreviewStore((state) => state.editFailed)
+  const editNote = usePreviewStore((state) => state.editNote)
   const load = usePreviewStore((state) => state.load)
   const setTab = usePreviewStore((state) => state.setTab)
   const setFilter = usePreviewStore((state) => state.setFilter)
@@ -46,8 +46,6 @@ export function BatchPreview(): React.JSX.Element {
   const [confirmingUndo, setConfirmingUndo] = React.useState(false)
   const heading = React.useRef<HTMLHeadingElement>(null)
   const undoButton = React.useRef<HTMLButtonElement>(null)
-  // True when the last value typed into a cell was not one the field can hold.
-  const [valueRefused, setValueRefused] = React.useState(false)
 
   // Asked again on every visit: a run may have ended, or a batch been applied, since.
   React.useEffect(() => {
@@ -61,6 +59,12 @@ export function BatchPreview(): React.JSX.Element {
     [rows, tab, filter]
   )
   const counts = React.useMemo(() => countRows(rows ?? []), [rows])
+  /** The button a dialog was opened from, or the top of the page when it is gone or disabled. */
+  function focusOrHeading(button: HTMLButtonElement | null): void {
+    if (button && !button.disabled) button.focus()
+    else heading.current?.focus()
+  }
+
   const columns = batch === null || tab === 'errors' ? ERROR_COLUMNS : columnsFor(batch.type)
 
   return (
@@ -87,12 +91,15 @@ export function BatchPreview(): React.JSX.Element {
       {/* It takes no room of its own: only what it holds is a row of the page. */}
       <div role="status" className="contents">
         <PreviewNoticeLine notice={notice} />
-        {editFailed && (
+        {editNote === 'failed' && (
           <StatusLine tone="danger">
             A változtatás nem sikerült. A sorok újra be lettek töltve.
           </StatusLine>
         )}
-        {valueRefused && <StatusLine tone="danger">Ez az érték nem menthető.</StatusLine>}
+        {editNote === 'refused' && <StatusLine tone="danger">Ez az érték nem menthető.</StatusLine>}
+        {editNote === 'busy' && (
+          <StatusLine tone="neutral">Jóváhagyás közben a batch nem változtatható.</StatusLine>
+        )}
       </div>
 
       {!loaded && (
@@ -212,11 +219,7 @@ export function BatchPreview(): React.JSX.Element {
                       rows={shown}
                       columns={columns}
                       styles={styles}
-                      onEdit={async (trackId, field, value) => {
-                        const taken = await edit(trackId, field, value)
-                        setValueRefused(!taken)
-                        return taken
-                      }}
+                      onEdit={edit}
                       onSetExcluded={(trackId, excluded) => void setExcluded([trackId], excluded)}
                     />
                   )}
@@ -232,6 +235,7 @@ export function BatchPreview(): React.JSX.Element {
                   if (await approve()) setPage('library')
                 }}
                 onDiscard={() => void discard()}
+                onFocusLost={() => heading.current?.focus()}
               />
             </>
           )}
@@ -244,7 +248,7 @@ export function BatchPreview(): React.JSX.Element {
           // to undo and the button is gone.
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            ;(undoButton.current ?? heading.current)?.focus()
+            focusOrHeading(undoButton.current)
           }}
           title="Visszavonod az utolsó batch-et?"
           description="A fájlok visszakerülnek abba az állapotba, amiben a batch előtt voltak, és amit a batch létrehozott, törlődik. A jóváhagyásra váró batch elvész."

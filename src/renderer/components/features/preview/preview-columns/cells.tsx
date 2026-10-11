@@ -9,6 +9,11 @@ type DiffValueProps = {
   format?: (value: PreviewValue) => string | null
   /** For numbers: the Data role, so that columns align. */
   data?: boolean
+  /**
+   * Shows only the new value and leaves the old one to the tooltip and to assistive
+   * technology: for a long value in a column too narrow for two.
+   */
+  compact?: boolean
 }
 
 /**
@@ -19,7 +24,8 @@ type DiffValueProps = {
 export function DiffValue({
   cell,
   format = defaultFormat,
-  data = false
+  data = false,
+  compact = false
 }: DiffValueProps): React.JSX.Element {
   const before = format(cell.before)
   const after = format(cell.after)
@@ -36,7 +42,11 @@ export function DiffValue({
       {/* A value that was not there before has nothing to strike through. */}
       {before !== null && (
         // The old value gives way first: the new one is what will be written.
-        <del className="min-w-0 shrink-4 truncate text-text-muted line-through">{before}</del>
+        <del
+          className={compact ? 'sr-only' : 'min-w-0 shrink-4 truncate text-text-muted line-through'}
+        >
+          {before}
+        </del>
       )}
       <ins className="min-w-0 truncate no-underline">{after ?? EMPTY}</ins>
     </span>

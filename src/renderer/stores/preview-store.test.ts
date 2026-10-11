@@ -129,8 +129,63 @@ describe('the preview store', () => {
 
     // Assert
     expect(taken).toBe(false)
-    expect(usePreviewStore.getState().editFailed).toBe(true)
+    expect(usePreviewStore.getState().editNote).toBe('failed')
     expect(rows).toHaveBeenCalledTimes(2)
+  })
+
+  it('tells a value the field cannot hold from a batch that does not wait any more', async () => {
+    // Arrange
+    let waiting = WAITING
+    stubApi({
+      state: async () => waiting,
+      edit: async () => ({ ok: false, code: 'INVALID_INPUT' })
+    })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().edit(1, 'energy', 99)
+    const whileWaiting = usePreviewStore.getState().editNote
+    waiting = { batch: null, canUndo: false }
+    await usePreviewStore.getState().edit(1, 'energy', 5)
+
+    // Assert
+    expect(whileWaiting).toBe('refused')
+    expect(usePreviewStore.getState()).toMatchObject({ editNote: 'failed', batch: null })
+  })
+
+  it('forgets the note about an edit when the tab or the filter changes', async () => {
+    // Arrange
+    stubApi({ edit: async () => ({ ok: false, code: 'RUN_ACTIVE' }) })
+    await usePreviewStore.getState().load()
+    await usePreviewStore.getState().edit(1, 'title', 'x')
+    const afterEdit = usePreviewStore.getState().editNote
+
+    // Act
+    usePreviewStore.getState().setTab('errors')
+
+    // Assert
+    expect(afterEdit).toBe('busy')
+    expect(usePreviewStore.getState().editNote).toBeNull()
+  })
+
+  it('sends one request for a row whose exclusion is still on its way', async () => {
+    // Arrange
+    let answer: (value: Awaited<ReturnType<PreviewApi['setExcluded']>>) => void = () => {}
+    const setExcluded = vi.fn(
+      () =>
+        new Promise<Awaited<ReturnType<PreviewApi['setExcluded']>>>((resolve) => (answer = resolve))
+    )
+    stubApi({ setExcluded })
+    await usePreviewStore.getState().load()
+
+    // Act
+    const first = usePreviewStore.getState().setExcluded([1], true)
+    const second = usePreviewStore.getState().setExcluded([1], true)
+    answer({ ok: true, value: WAITING })
+    await Promise.all([first, second])
+
+    // Assert
+    expect(setExcluded).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the batch and says what is needed when it does not fit on the drive', async () => {

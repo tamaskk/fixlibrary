@@ -6,5 +6,5 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
 }
 
 export function stageLabel(stage: string): string {
-  return STAGE_LABELS[stage] ?? stage
+  return Object.hasOwn(STAGE_LABELS, stage) ? (STAGE_LABELS[stage] ?? stage) : stage
 }

@@ -30,7 +30,9 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
     header: 'Fájlnév',
     track: 'minmax(160px, 4fr)',
     minWidth: 160,
-    render: (row) => <DiffValue cell={row.cells.fileName} />,
+    // Two file names do not fit side by side in a narrow table: the new one, which is
+    // what will be written, gets the room. The row is still named by the old one.
+    render: (row, context) => <DiffValue cell={row.cells.fileName} compact={!context.wide} />,
     text: (row) => diffText(row.cells.fileName)
   },
   {

@@ -11,6 +11,8 @@ type PreviewActionsProps = {
   busy: 'approve' | 'discard' | 'undo' | null
   onApprove: () => void
   onDiscard: () => void
+  /** Called when a dialog closes and its button is gone or disabled: the page finds the focus a place. */
+  onFocusLost: () => void
 }
 
 const MODE_NOTES: Readonly<Record<PreviewBatch['mode'], string>> = {
@@ -29,11 +31,16 @@ export function PreviewActions({
   counts,
   busy,
   onApprove,
-  onDiscard
+  onDiscard,
+  onFocusLost
 }: PreviewActionsProps): React.JSX.Element {
   const [confirming, setConfirming] = React.useState<'approve' | 'discard' | null>(null)
   const approveButton = React.useRef<HTMLButtonElement>(null)
   const discardButton = React.useRef<HTMLButtonElement>(null)
+  function backTo(button: HTMLButtonElement | null): void {
+    if (button && !button.disabled) button.focus()
+    else onFocusLost()
+  }
   const left = counts.excluded + counts.failed
 
   return (
@@ -78,7 +85,7 @@ export function PreviewActions({
           // it is sent back to the button by hand.
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            approveButton.current?.focus()
+            backTo(approveButton.current)
           }}
           title="Jóváhagyod a változásokat?"
           description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad. ${MODE_NOTES[mode]}`}
@@ -104,7 +111,7 @@ export function PreviewActions({
         <DialogContent
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            discardButton.current?.focus()
+            backTo(discardButton.current)
           }}
           title="Elveted a batch-et?"
           description="Amit a futás kiszámolt és amit itt szerkesztettél, elvész. A fájljaid nem változnak."
