@@ -2,13 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import {
-  checkAll,
-  resolveToolCommand,
-  resolveToolLocations,
-  type ToolCheck,
-  type ToolLocations
-} from './binaries'
+import { checkAll, resolveToolCommand, resolveToolLocations, type ToolLocations } from './binaries'
+import type { ToolCheck } from '@shared/tools'
 
 const REAL_LOCATIONS = resolveToolLocations({
   isPackaged: false,

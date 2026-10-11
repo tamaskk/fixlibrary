@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm'
-import type { z } from 'zod'
+import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import { settings } from './schema'
 
@@ -21,5 +21,37 @@ export function setSetting(db: AppDatabase, key: string, value: unknown): void {
   db.insert(settings)
     .values({ key, value, updatedAt })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt } })
+    .run()
+}
+
+declare const encryptedSecretBrand: unique symbol
+
+/** Ciphertext from the keychain service, base64 encoded. Never a plain value. */
+export type EncryptedSecret = string & { readonly [encryptedSecretBrand]: true }
+
+const encryptedSecretSchema = z.string().min(1)
+
+/** The only write path under the reserved prefix; its type keeps plain text out. */
+export function setEncryptedSecret(db: AppDatabase, name: string, value: EncryptedSecret): void {
+  const key = SECRET_KEY_PREFIX + name
+  const updatedAt = new Date()
+  db.insert(settings)
+    .values({ key, value, updatedAt })
+    .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt } })
+    .run()
+}
+
+export function getEncryptedSecret(db: AppDatabase, name: string): EncryptedSecret | undefined {
+  const row = db
+    .select()
+    .from(settings)
+    .where(eq(settings.key, SECRET_KEY_PREFIX + name))
+    .get()
+  return row === undefined ? undefined : (encryptedSecretSchema.parse(row.value) as EncryptedSecret)
+}
+
+export function deleteEncryptedSecret(db: AppDatabase, name: string): void {
+  db.delete(settings)
+    .where(eq(settings.key, SECRET_KEY_PREFIX + name))
     .run()
 }
