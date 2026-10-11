@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm'
+import { asc, count, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import { tracks } from './schema'
@@ -28,8 +28,10 @@ export type Track = Omit<TrackRow, 'stageStatus'> & {
   offline: boolean
 }
 
-// 28 columns per row; this keeps one statement far below SQLite's bound-parameter limit.
+// 31 columns per row; this keeps one statement far below SQLite's bound-parameter limit.
 const INSERT_CHUNK_SIZE = 500
+// Ids are bound one by one in an `in (…)` list.
+const ID_CHUNK_SIZE = 500
 
 function toTrack(row: TrackRow, mountedVolumes: ReadonlySet<string>): Track {
   const stageStatus = stageStatusSchema.safeParse(row.stageStatus)
@@ -52,6 +54,15 @@ function toInsert(row: NewTrack): TrackInsert {
     originalPath: normalizeTrackPath(row.originalPath),
     volumeName: volumeNameOfPath(path)
   }
+}
+
+/** What a rescan compares a file on disk with. */
+export interface TrackFileState {
+  id: number
+  path: string
+  fileSizeBytes: number | null
+  fileMtimeMs: number | null
+  fileMissing: boolean
 }
 
 /** Inserts all rows or none. Returns the new ids in input order. */
@@ -119,4 +130,44 @@ export function updateTrack(db: AppDatabase, id: number, changes: TrackChanges):
  */
 export function deleteTrack(db: AppDatabase, id: number): boolean {
   return db.delete(tracks).where(eq(tracks.id, id)).run().changes > 0
+}
+
+/** The stored file state of every track, for a rescan to compare the disk with. */
+export function listTrackFileStates(db: AppDatabase): TrackFileState[] {
+  return db
+    .select({
+      id: tracks.id,
+      path: tracks.path,
+      fileSizeBytes: tracks.fileSizeBytes,
+      fileMtimeMs: tracks.fileMtimeMs,
+      fileMissing: tracks.fileMissing
+    })
+    .from(tracks)
+    .all()
+}
+
+/** Applies all changes or none. A change for an id that does not exist is ignored. */
+export function updateTracks(
+  db: AppDatabase,
+  updates: readonly { id: number; changes: TrackChanges }[]
+): void {
+  db.transaction((tx) => {
+    for (const { id, changes } of updates) updateTrack(tx, id, changes)
+  })
+}
+
+/** Marks tracks whose file a scan did or did not find. The rows themselves always stay. */
+export function setTracksMissing(db: AppDatabase, ids: readonly number[], missing: boolean): void {
+  db.transaction((tx) => {
+    for (let start = 0; start < ids.length; start += ID_CHUNK_SIZE) {
+      tx.update(tracks)
+        .set({ fileMissing: missing, updatedAt: new Date() })
+        .where(inArray(tracks.id, ids.slice(start, start + ID_CHUNK_SIZE)))
+        .run()
+    }
+  })
+}
+
+export function countTracks(db: AppDatabase): number {
+  return db.select({ total: count() }).from(tracks).get()?.total ?? 0
 }

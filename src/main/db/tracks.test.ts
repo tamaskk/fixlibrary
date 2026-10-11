@@ -4,11 +4,15 @@ import { batches, batchItems, styles, tracks } from './schema'
 import { createTestDatabase, type TestDatabase } from './database.test-util'
 import {
   MAX_TRACK_PAGE_SIZE,
+  countTracks,
   deleteTrack,
   getTrackById,
   insertTracks,
+  listTrackFileStates,
   listTracks,
+  setTracksMissing,
   updateTrack,
+  updateTracks,
   type NewTrack
 } from './tracks'
 
@@ -317,5 +321,100 @@ describe('reading a track', () => {
 
     // Assert
     expect(track?.primaryStyleId).toBeNull()
+  })
+})
+
+describe('file state for rescans', () => {
+  it('lists what the last scan saw of every track', () => {
+    // Arrange
+    const [scanned, neverScanned] = insertTracks(testDatabase.db, [
+      newTrack('/Music/a.mp3', { fileSizeBytes: 8_000_000, fileMtimeMs: 1_790_000_000_000 }),
+      newTrack('/Music/b.mp3')
+    ])
+
+    // Act
+    const states = listTrackFileStates(testDatabase.db)
+
+    // Assert
+    expect(states).toEqual([
+      {
+        id: scanned,
+        path: '/Music/a.mp3',
+        fileSizeBytes: 8_000_000,
+        fileMtimeMs: 1_790_000_000_000,
+        fileMissing: false
+      },
+      {
+        id: neverScanned,
+        path: '/Music/b.mp3',
+        fileSizeBytes: null,
+        fileMtimeMs: null,
+        fileMissing: false
+      }
+    ])
+  })
+
+  it('marks a whole library missing and found again, keeping the rows', () => {
+    // Arrange
+    const ids = insertTracks(
+      testDatabase.db,
+      Array.from({ length: 1200 }, (_, index) => newTrack(`/Music/${index}.mp3`))
+    )
+
+    // Act
+    setTracksMissing(testDatabase.db, ids, true)
+    const missing = listTrackFileStates(testDatabase.db).filter((state) => state.fileMissing)
+    setTracksMissing(testDatabase.db, ids.slice(0, 700), false)
+    const stillMissing = listTrackFileStates(testDatabase.db).filter((state) => state.fileMissing)
+
+    // Assert
+    expect(missing).toHaveLength(1200)
+    expect(stillMissing).toHaveLength(500)
+    expect(countTracks(testDatabase.db)).toBe(1200)
+  })
+})
+
+describe('updateTracks', () => {
+  it('changes several tracks at once', () => {
+    // Arrange
+    const [first, second] = insertTracks(testDatabase.db, [
+      newTrack('/Music/a.mp3'),
+      newTrack('/Music/b.mp3')
+    ]) as [number, number]
+
+    // Act
+    updateTracks(testDatabase.db, [
+      { id: first, changes: { title: 'Első', fileSizeBytes: 10 } },
+      { id: second, changes: { title: 'Második', fileSizeBytes: 20 } }
+    ])
+
+    // Assert
+    expect(getTrackById(testDatabase.db, first, NO_VOLUMES)).toMatchObject({
+      title: 'Első',
+      fileSizeBytes: 10
+    })
+    expect(getTrackById(testDatabase.db, second, NO_VOLUMES)).toMatchObject({
+      title: 'Második',
+      fileSizeBytes: 20
+    })
+  })
+
+  it('changes nothing when one of the changes is invalid', () => {
+    // Arrange
+    const [first, second] = insertTracks(testDatabase.db, [
+      newTrack('/Music/a.mp3'),
+      newTrack('/Music/b.mp3')
+    ]) as [number, number]
+
+    // Act
+    const update = (): unknown =>
+      updateTracks(testDatabase.db, [
+        { id: first, changes: { title: 'Első' } },
+        { id: second, changes: { energy: 11 } }
+      ])
+
+    // Assert
+    expect(update).toThrow()
+    expect(getTrackById(testDatabase.db, first, NO_VOLUMES)?.title).toBeNull()
   })
 })
