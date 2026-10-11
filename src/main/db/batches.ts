@@ -1,11 +1,19 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
-import { batches, batchItems, type BATCH_MODES, type BATCH_STATUSES } from './schema'
+import {
+  batches,
+  batchItems,
+  type BATCH_MODES,
+  type BATCH_STATUSES,
+  type PAUSE_REASONS
+} from './schema'
 import { trackErrorSchema, type TrackError } from '@shared/errors'
 
 export type BatchMode = (typeof BATCH_MODES)[number]
 export type BatchStatus = (typeof BATCH_STATUSES)[number]
+/** Why a batch is paused: by the user, or because the drive of the library went away. */
+export type PauseReason = (typeof PAUSE_REASONS)[number]
 export type Batch = typeof batches.$inferSelect
 
 /** A batch in one of these states has work left that the app does by itself. */
@@ -68,8 +76,9 @@ export function setBatchStatus(db: AppDatabase, id: number, status: BatchStatus)
   )
 }
 
-export function setBatchPaused(db: AppDatabase, id: number, paused: boolean): void {
-  db.update(batches).set({ paused }).where(eq(batches.id, id)).run()
+/** Pauses the batch for the given reason, or with null takes the pause off. */
+export function setBatchPause(db: AppDatabase, id: number, pauseReason: PauseReason | null): void {
+  db.update(batches).set({ pauseReason }).where(eq(batches.id, id)).run()
 }
 
 /** Every batch that waits for approval becomes `cancelled`: only one batch waits at a time. */

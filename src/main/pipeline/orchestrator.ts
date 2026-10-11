@@ -8,7 +8,7 @@ import {
   listBatchItemStates,
   mergeBatchItemProposal,
   setBatchItemError,
-  setBatchPaused,
+  setBatchPause,
   setBatchStatus,
   type Batch,
   type BatchMode
@@ -302,6 +302,26 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const dependent of dependentsOf(active, job)) skipWithDependents(active, dependent)
   }
 
+  /**
+   * Lets the jobs that waited for a finished one go on. If that cannot be stored,
+   * they are taken off the run in memory, so the run still comes to an end; the
+   * rows stay `queued`, and the batch is the place to look.
+   */
+  function releaseDependents(active: Run, job: RunJob): void {
+    const dependents = dependentsOf(active, job)
+    try {
+      for (const dependent of dependents) resolve(active, dependent)
+    } catch (error) {
+      logger.error(`The jobs that wait for job ${job.id} could not be released`, error)
+      const drop = (each: RunJob): void => {
+        if (each.status !== 'queued') return
+        setStatus(active, each, 'skipped')
+        dependentsOf(active, each).forEach(drop)
+      }
+      dependents.forEach(drop)
+    }
+  }
+
   function trackError(job: RunJob, code: TrackError['code']): TrackError {
     return {
       trackId: job.trackId,
@@ -313,12 +333,15 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   /** Forgets the run and tells whoever waits for its end. */
   function leave(active: Run, outcome: NonNullable<RunProgress['outcome']>): void {
-    tellProgress(snapshot(active, 'finished', outcome))
+    // The run is over before anyone is told: a listener that reacts by cancelling or
+    // pausing finds no run to act on.
+    const last = snapshot(active, 'finished', outcome)
     run = null
     queue.resume()
-    updateBusy()
     const waiters = finishedWaiters
     finishedWaiters = []
+    tellProgress(last)
+    updateBusy()
     for (const done of waiters) done()
   }
 
@@ -329,7 +352,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     const status = active.phase === 'compute' ? 'preview' : 'applied'
     db.transaction((tx) => {
       setBatchStatus(tx, active.batchId, status)
-      setBatchPaused(tx, active.batchId, false)
+      setBatchPause(tx, active.batchId, null)
     })
     logger.info(`Batch ${active.batchId}: the ${active.phase} phase ended as ${status}`)
     leave(active, status)
@@ -339,7 +362,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     if (!run || run.pauseReason !== null) return
     run.pauseReason = reason
     queue.pause()
-    setBatchPaused(db, run.batchId, true)
+    setBatchPause(db, run.batchId, reason)
     logger.info(`Batch ${run.batchId} paused (${reason})`)
     report()
     updateBusy()
@@ -357,7 +380,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         // The drive went away: that is not the track's fault. The run waits for the
         // drive instead of failing every track that is left.
         pauseBecause('offline')
-        queue.addFirst(job)
+        // Unless what listens to the pause has cancelled the run.
+        if (run === active && job.status === 'queued') queue.addFirst(job)
         return
       }
       if (!track || track.fileMissing) {
@@ -370,6 +394,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       markJobRunning(db, job.id)
       setStatus(active, job, 'running')
       report()
+      // What listens to the report may have cancelled the run: the stage must not start.
+      if (!stillOurs()) return
 
       const startedAt = now()
       const stopped = new Promise<never>((_resolve, reject) => {
@@ -412,7 +438,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       durations.push(now() - startedAt)
       if (durations.length > DURATION_SAMPLES) durations.shift()
       active.durations.set(job.stage.name, durations)
-      for (const dependent of dependentsOf(active, job)) resolve(active, dependent)
+      releaseDependents(active, job)
     } catch (error) {
       // The database refused something, or a stage returned what cannot be stored.
       logger.error(`Job ${job.id} (${job.stage.name}) could not be recorded`, error)
@@ -427,8 +453,13 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       }
     } finally {
       if (run === active) {
-        // Ending the phase comes first and does not depend on the reports.
-        endPhaseIfDone()
+        try {
+          // Ending the phase comes first and does not depend on the reports.
+          endPhaseIfDone()
+        } catch (error) {
+          // The queue would swallow this, and the run would stand still without a word.
+          logger.error(`Batch ${active.batchId}: the end of the phase could not be stored`, error)
+        }
         report()
         updateBusy()
       }
@@ -436,7 +467,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   /** Builds the state of a batch from its jobs and lines up what can run. */
-  function begin(batch: Batch, phase: JobPhase, options: { paused: boolean }): void {
+  function begin(batch: Batch, phase: JobPhase, pauseReason: Run['pauseReason']): void {
     const active: Run = {
       batchId: batch.id,
       phase,
@@ -445,7 +476,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       counts: new Map(),
       durations: new Map(),
       controllers: new Map(),
-      pauseReason: options.paused ? 'user' : null,
+      pauseReason,
       startedAt: now(),
       running: 0,
       unfinished: 0
@@ -475,7 +506,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     skipJobs(db, withoutStage)
 
     run = active
-    if (options.paused) queue.pause()
+    if (pauseReason !== null) queue.pause()
 
     if (phase === 'apply') {
       // Only what the user approved is written, and never a track that a stage failed
@@ -544,7 +575,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       logger.info(
         `Batch ${batchId} started: ${tracks.length} tracks, stages ${selected.map((stage) => stage.name).join(', ')}`
       )
-      begin(batch, 'compute', { paused: false })
+      begin(batch, 'compute', null)
       return { ok: true, value: { batchId } }
     },
 
@@ -555,7 +586,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
       setBatchStatus(db, batchId, 'applying')
       logger.info(`Batch ${batchId}: the apply phase started`)
-      begin({ ...batch, status: 'applying' }, 'apply', { paused: false })
+      begin({ ...batch, status: 'applying' }, 'apply', null)
       return { ok: true, value: { batchId } }
     },
 
@@ -580,7 +611,11 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         })
       }
       logger.info(`Batch ${batch.id}: going on with the ${phase} phase after a restart`)
-      begin(batch, phase, { paused: batch.paused })
+      // A pause by the user stays. One for a missing drive is taken off: if the drive
+      // is still away, the first job that needs it pauses the run again.
+      const pauseReason = batch.pauseReason === 'user' ? 'user' : null
+      if (batch.pauseReason !== pauseReason) setBatchPause(db, batch.id, pauseReason)
+      begin(batch, phase, pauseReason)
     },
 
     pause: () => pauseBecause('user'),
@@ -588,7 +623,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     resume() {
       if (!run || run.pauseReason === null) return
       run.pauseReason = null
-      setBatchPaused(db, run.batchId, false)
+      setBatchPause(db, run.batchId, null)
       logger.info(`Batch ${run.batchId} resumed`)
       queue.resume()
       report()
@@ -598,28 +633,30 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     cancel() {
       const active = run
       if (!active) return
-      queue.clear()
       // Every job that is not over, of this phase and of the one after it. The
       // running ones too: what they still return is not recorded.
       const open = [...active.byTrack.values()].flatMap((ofTrack) =>
         [...ofTrack.values()].filter((job) => !isOver(job.status))
       )
       // Stored at once and together, so that a cancelled batch can never be taken
-      // up again, whatever happens to the app next.
+      // up again, whatever happens to the app next. Nothing in memory changes before
+      // this has worked: if it fails, the run goes on and can be cancelled again.
       db.transaction((tx) => {
         setBatchStatus(tx, active.batchId, 'cancelled')
-        setBatchPaused(tx, active.batchId, false)
+        setBatchPause(tx, active.batchId, null)
         skipJobs(
           tx,
           open.map((job) => job.id)
         )
       })
+      queue.clear()
       for (const job of open) setStatus(active, job, 'skipped')
       active.pauseReason = null
-      for (const controller of active.controllers.values()) controller.abort()
+      const controllers = [...active.controllers.values()]
       active.controllers.clear()
       logger.info(`Batch ${active.batchId} cancelled`)
       leave(active, 'cancelled')
+      for (const controller of controllers) controller.abort()
     },
 
     shutdown() {

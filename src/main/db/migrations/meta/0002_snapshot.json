@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c2efc422-2d56-419b-9967-e4a63bcae176",
+  "id": "b43c2fd5-5c4c-4d5e-afe2-964bac670e1a",
   "prevId": "b71ca1a1-7188-42ad-ae13-938c7075d0e0",
   "tables": {
     "analyses": {
@@ -289,13 +289,12 @@
           "autoincrement": false,
           "default": "'computing'"
         },
-        "paused": {
-          "name": "paused",
-          "type": "integer",
+        "pause_reason": {
+          "name": "pause_reason",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
+          "notNull": false,
+          "autoincrement": false
         },
         "created_at": {
           "name": "created_at",

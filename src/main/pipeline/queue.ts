@@ -18,10 +18,11 @@ export interface JobQueue<T> {
   /** No new job starts; the running ones finish. */
   pause: () => void
   resume: () => void
-  isPaused: () => boolean
   /** Takes every waiting job out and returns them. Running jobs are not touched. */
   clear: () => T[]
+  /** How many jobs run now, of one resource or of all. */
   runningCount: (resource?: Resource) => number
+  /** How many jobs wait for room. */
   waitingCount: () => number
 }
 
@@ -77,7 +78,6 @@ export function createJobQueue<T>(options: JobQueueOptions<T>): JobQueue<T> {
       paused = false
       startWhatFits()
     },
-    isPaused: () => paused,
     clear() {
       const cleared = RESOURCES.flatMap((resource) => waiting[resource].splice(0))
       return cleared

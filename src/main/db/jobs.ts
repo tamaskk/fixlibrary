@@ -3,7 +3,7 @@ import type { AppDatabase } from './connection'
 import { jobs, type JOB_PHASES, type JOB_STATUSES } from './schema'
 import type { TrackError } from '@shared/errors'
 
-export type JobPhase = (typeof JOB_PHASES)[number]
+type JobPhase = (typeof JOB_PHASES)[number]
 export type JobStatus = (typeof JOB_STATUSES)[number]
 export type Job = typeof jobs.$inferSelect
 
@@ -46,7 +46,7 @@ export function markJobRunning(db: AppDatabase, id: number): void {
 export function finishJob(
   db: AppDatabase,
   id: number,
-  outcome: { status: 'done' } | { status: 'failed'; error: TrackError } | { status: 'skipped' }
+  outcome: { status: 'done' } | { status: 'failed'; error: TrackError }
 ): void {
   db.update(jobs)
     .set({

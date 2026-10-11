@@ -7,7 +7,7 @@ import {
   listBatchItemStates,
   mergeBatchItemProposal,
   setBatchItemError,
-  setBatchPaused,
+  setBatchPause,
   setBatchStatus
 } from './batches'
 import { createTestDatabase, type TestDatabase } from './database.test-util'
@@ -66,7 +66,7 @@ describe('createBatch', () => {
       type: 'run',
       mode: 'clean_library',
       status: 'computing',
-      paused: false,
+      pauseReason: null,
       appliedAt: null
     })
     expect(testDatabase.db.select().from(batchItems).all()).toMatchObject(
@@ -135,16 +135,21 @@ describe('batch status', () => {
     expect(getBatch(testDatabase.db, id)?.appliedAt).toBeInstanceOf(Date)
   })
 
-  it('keeps a pause across a restart', () => {
+  it('keeps a pause and its reason across a restart, and can take it off', () => {
     // Arrange
-    const id = newBatch()
-    setBatchPaused(testDatabase.db, id, true)
+    const byUser = newBatch()
+    const offline = newBatch()
+    setBatchPause(testDatabase.db, byUser, 'user')
+    setBatchPause(testDatabase.db, offline, 'offline')
 
     // Act
     const db = testDatabase.reopen()
+    const stored = [getBatch(db, byUser)?.pauseReason, getBatch(db, offline)?.pauseReason]
+    setBatchPause(db, byUser, null)
 
     // Assert
-    expect(getBatch(db, id)?.paused).toBe(true)
+    expect(stored).toEqual(['user', 'offline'])
+    expect(getBatch(db, byUser)?.pauseReason).toBeNull()
   })
 
   it('cancels the batches that wait for approval, and only those', () => {

@@ -32,6 +32,7 @@ export const BATCH_STATUSES = [
   'cancelled'
 ] as const
 
+export const PAUSE_REASONS = ['user', 'offline'] as const
 export const JOB_PHASES = ['compute', 'apply'] as const
 export const JOB_STATUSES = ['queued', 'running', 'done', 'failed', 'skipped'] as const
 
@@ -152,8 +153,10 @@ export const batches = sqliteTable(
     type: text('type').notNull(),
     mode: text('mode', { enum: BATCH_MODES }).notNull(),
     status: text('status', { enum: BATCH_STATUSES }).notNull().default('computing'),
-    // A run the user paused stays paused when the app is started again.
-    paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
+    // Null while the batch is not paused. A run the user paused stays paused when the
+    // app is started again; one that paused itself because the drive was gone goes on.
+    // No CHECK: adding one to this table would rebuild it, and the backups hang on it.
+    pauseReason: text('pause_reason', { enum: PAUSE_REASONS }),
     createdAt,
     appliedAt: integer('applied_at', { mode: 'timestamp_ms' })
   },

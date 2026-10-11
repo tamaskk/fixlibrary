@@ -196,7 +196,7 @@ describe('a run', () => {
     expect(getBatch(testDatabase.db, batchId)).toMatchObject({
       status: 'preview',
       mode: 'clean_library',
-      paused: false
+      pauseReason: null
     })
     const [item] = testDatabase.db.select().from(batchItems).all()
     expect(item).toMatchObject({
@@ -327,15 +327,18 @@ describe('pause and resume', () => {
       finished: finished.length,
       state: run.progress()?.state,
       reason: run.progress()?.pauseReason,
-      stored: getBatch(testDatabase.db, batchId)?.paused
+      stored: getBatch(testDatabase.db, batchId)?.pauseReason
     }
     run.resume()
     await vi.runAllTimersAsync()
 
     // Assert
-    expect(whilePaused).toEqual({ finished: 3, state: 'paused', reason: 'user', stored: true })
+    expect(whilePaused).toEqual({ finished: 3, state: 'paused', reason: 'user', stored: 'user' })
     expect(finished).toHaveLength(12)
-    expect(getBatch(testDatabase.db, batchId)).toMatchObject({ status: 'preview', paused: false })
+    expect(getBatch(testDatabase.db, batchId)).toMatchObject({
+      status: 'preview',
+      pauseReason: null
+    })
   })
 
   it('lets the Mac sleep while a paused run has nothing running, and keeps it awake otherwise', async () => {
@@ -449,7 +452,10 @@ describe('cancel', () => {
     run.cancel()
 
     // Assert
-    expect(getBatch(testDatabase.db, batchId)).toMatchObject({ status: 'cancelled', paused: false })
+    expect(getBatch(testDatabase.db, batchId)).toMatchObject({
+      status: 'cancelled',
+      pauseReason: null
+    })
   })
 
   it('lets a new run start after a cancelled one', async () => {
@@ -587,7 +593,7 @@ describe('closing the app and starting it again', () => {
     expect(listJobs(testDatabase.db, batchId)).toMatchObject([{ status: 'done', attempts: 1 }])
   })
 
-  it('never takes a cancelled batch up again, also when the app is closed right after the cancel', async () => {
+  it('never takes a cancelled batch up again, also when the app crashes right after the cancel', async () => {
     // Arrange
     const trackIds = addTracks(4)
     limits.cpu = 2
@@ -598,8 +604,8 @@ describe('closing the app and starting it again', () => {
 
     // Act
     first.cancel()
-    first.shutdown()
-    await vi.advanceTimersByTimeAsync(10_000)
+    // The app is gone before the stopped jobs have unwound.
+    vi.clearAllTimers()
     const second = orchestrator(stages(), testDatabase.reopen())
     second.recover()
     await vi.runAllTimersAsync()
@@ -609,6 +615,55 @@ describe('closing the app and starting it again', () => {
     expect(jobStatuses(batchId)).toEqual({ 'bpmKey:skipped': 4, 'energy:skipped': 4 })
     expect(second.progress()).toBeNull()
     expect(finished).toEqual([])
+  })
+
+  it('goes on by itself after a restart when it had paused for a drive that is back', async () => {
+    // Arrange
+    const trackIds = addTracks(4, '/Volumes/DJ SSD/Music')
+    limits.cpu = 1
+    const first = orchestrator(stages())
+    const result = first.start({ trackIds, stages: ['bpmKey'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.advanceTimersByTimeAsync(150)
+    mounted = new Set()
+    await vi.advanceTimersByTimeAsync(1000)
+    const storedReason = getBatch(testDatabase.db, batchId)?.pauseReason
+    first.shutdown()
+
+    // Act
+    mounted = new Set(['DJ SSD'])
+    const second = orchestrator(stages(), testDatabase.reopen())
+    second.recover()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(storedReason).toBe('offline')
+    expect(jobStatuses(batchId)).toEqual({ 'bpmKey:done': 4 })
+    expect(getBatch(testDatabase.db, batchId)).toMatchObject({
+      status: 'preview',
+      pauseReason: null
+    })
+  })
+
+  it('pauses again after a restart when the drive it had paused for is still away', async () => {
+    // Arrange
+    const trackIds = addTracks(4, '/Volumes/DJ SSD/Music')
+    limits.cpu = 1
+    const first = orchestrator(stages())
+    const result = first.start({ trackIds, stages: ['bpmKey'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.advanceTimersByTimeAsync(150)
+    first.shutdown()
+    mounted = new Set()
+
+    // Act
+    const second = orchestrator(stages(), testDatabase.reopen())
+    second.recover()
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    // Assert
+    expect(second.progress()).toMatchObject({ state: 'paused', pauseReason: 'offline' })
+    expect(getBatch(testDatabase.db, batchId)?.pauseReason).toBe('offline')
   })
 
   it('goes on with the apply phase after a restart, still only for the approved tracks', async () => {
@@ -716,6 +771,90 @@ describe('what listens to a run', () => {
     expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
     expect(jobStatuses(batchId)).toEqual({ 'bpmKey:done': 3 })
     expect(run.progress()).toBeNull()
+  })
+})
+
+describe('a listener that acts on the run from inside a report', () => {
+  function withListener(stages: Stage[], onProgress: (report: RunProgress) => void): Orchestrator {
+    validateStages(stages)
+    const run: Orchestrator = createOrchestrator({
+      db: testDatabase.db,
+      stages,
+      limits: () => limits,
+      listMountedVolumes: () => mounted,
+      mode: () => 'clean_library',
+      onProgress: (report) => {
+        progress.push(report)
+        onProgress(report)
+      }
+    })
+    return run
+  }
+
+  it('frees the place of a job that was cancelled as it started', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    let cancelOnStart = true
+    const run: Orchestrator = withListener(
+      [fakeStage('demucs', { resource: 'gpu', ms: 100, timeoutMs: 600_000, stubborn: true })],
+      (report) => {
+        if (cancelOnStart && report.counts.running === 1) {
+          cancelOnStart = false
+          run.cancel()
+        }
+      }
+    )
+    run.start({ trackIds, stages: ['demucs'] })
+    started = []
+
+    // Act
+    const again = run.start({ trackIds, stages: ['demucs'] })
+    await vi.advanceTimersByTimeAsync(5000)
+
+    // Assert: the one gpu place is free for the new run long before the old timeout.
+    expect(again.ok).toBe(true)
+    expect(finished).toHaveLength(2)
+    expect(run.progress()).toBeNull()
+  })
+
+  it('finds no run to cancel once the last report of a run is out', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    const run: Orchestrator = withListener([fakeStage('bpmKey')], (report) => {
+      if (report.state === 'finished') run.cancel()
+    })
+
+    // Act
+    const result = run.start({ trackIds, stages: ['bpmKey'] })
+    await vi.runAllTimersAsync()
+
+    // Assert
+    const batchId = result.ok ? result.value.batchId : -1
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
+    expect(progress.filter((report) => report.state === 'finished')).toMatchObject([
+      { outcome: 'preview' }
+    ])
+  })
+
+  it('does not put a job back in line when the pause for a missing drive is answered with a cancel', async () => {
+    // Arrange
+    const trackIds = addTracks(3, '/Volumes/DJ SSD/Music')
+    const run: Orchestrator = withListener([fakeStage('bpmKey')], (report) => {
+      if (report.pauseReason === 'offline') run.cancel()
+    })
+    limits.cpu = 1
+    const result = run.start({ trackIds, stages: ['bpmKey'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.advanceTimersByTimeAsync(150)
+
+    // Act
+    mounted = new Set()
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('cancelled')
+    expect(run.progress()).toBeNull()
+    expect(jobStatuses(batchId)).toEqual({ 'bpmKey:done': 2, 'bpmKey:skipped': 1 })
   })
 })
 
@@ -920,6 +1059,27 @@ describe('the apply phase', () => {
     expect(getBatch(testDatabase.db, batchId)?.status).toBe('cancelled')
     expect(jobStatuses(batchId)).toEqual({ 'naming:done': 1, 'rename:skipped': 1 })
     expect(testDatabase.db.select().from(batchItems).all()[0]?.after).toEqual({})
+  })
+
+  it('ends at once as applied when no track of the batch was approved', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    const run = orchestrator(stages())
+    const result = run.start({ trackIds, stages: ['writeTags'] })
+    const batchId = result.ok ? result.value.batchId : -1
+    await vi.runAllTimersAsync()
+    progress = []
+    busy = []
+
+    // Act
+    const applying = run.applyBatch(batchId)
+
+    // Assert
+    expect(applying).toEqual({ ok: true, value: { batchId } })
+    expect(run.progress()).toBeNull()
+    expect(progress).toMatchObject([{ state: 'finished', outcome: 'applied', phase: 'apply' }])
+    expect(busy).toEqual([])
+    expect(jobStatuses(batchId)).toMatchObject({ 'rename:skipped': 2, 'writeTags:skipped': 2 })
   })
 
   it('refuses to apply a batch that does not wait for approval', async () => {

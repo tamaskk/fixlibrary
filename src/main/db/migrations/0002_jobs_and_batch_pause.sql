@@ -20,4 +20,4 @@ CREATE TABLE `jobs` (
 CREATE UNIQUE INDEX `jobs_batch_track_stage_idx` ON `jobs` (`batch_id`,`track_id`,`stage`);--> statement-breakpoint
 CREATE INDEX `jobs_batch_status_idx` ON `jobs` (`batch_id`,`status`);--> statement-breakpoint
 CREATE INDEX `jobs_track_id_idx` ON `jobs` (`track_id`);--> statement-breakpoint
-ALTER TABLE `batches` ADD `paused` integer DEFAULT false NOT NULL;
+ALTER TABLE `batches` ADD `pause_reason` text;
