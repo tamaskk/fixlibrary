@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -51,6 +52,12 @@ def rpc(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def register(function: Callable[..., Any]) -> Callable[..., Any]:
         if name in _methods:
             raise ValueError(f"RPC method already registered: {name}")
+        # Every parameter must be nameable from the wire and nothing else may be.
+        for parameter in inspect.signature(function).parameters.values():
+            if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
+                raise ValueError(f"RPC method {name} must not take *args or **kwargs")
+            if parameter.name.startswith("_"):
+                raise ValueError(f"RPC method {name} has a private parameter: {parameter.name}")
         _methods[name] = function
         return function
 
@@ -75,7 +82,7 @@ class ProtocolWriter:
         self._lock = threading.Lock()
 
     def send(self, message: dict[str, Any]) -> None:
-        line = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        line = _encode(message)
         with self._lock:
             self._stream.write(line + "\n")
             self._stream.flush()
@@ -114,6 +121,8 @@ def report_progress(job_id: str, percent: float) -> None:
     """Send a progress notification for a running job. Call it from the server process."""
     if _writer is None:
         raise RuntimeError("report_progress() needs a running server")
+    if not math.isfinite(percent) or not 0 <= percent <= 100:
+        raise ValueError(f"percent must be between 0 and 100, got {percent}")
     _writer.send(
         {"jsonrpc": "2.0", "method": "progress", "params": {"jobId": job_id, "percent": percent}}
     )
@@ -135,6 +144,11 @@ def shutdown() -> None:
     return None
 
 
+def _encode(message: dict[str, Any]) -> str:
+    # ASCII only and no NaN or Infinity, so every line is JSON that the bridge can parse.
+    return json.dumps(message, allow_nan=False, separators=(",", ":"))
+
+
 def _error_response(request_id: int | str | None, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
@@ -147,7 +161,7 @@ def parse_request(line: str) -> Request | dict[str, Any]:
     """Turn one input line into a Request, or into the error response to send back."""
     try:
         payload = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         return _error_response(None, PARSE_ERROR, "Parse error")
 
     if not isinstance(payload, dict):
@@ -183,6 +197,10 @@ def _run_method(request: Request) -> dict[str, Any]:
         )
 
     arguments = {_snake_case(key): value for key, value in request.params.items()}
+    if len(arguments) != len(request.params):
+        return _error_response(
+            request.request_id, INVALID_PARAMS, "Invalid params: two keys name one parameter"
+        )
     try:
         inspect.signature(function).bind(**arguments)
     except TypeError as error:
@@ -191,7 +209,7 @@ def _run_method(request: Request) -> dict[str, Any]:
     try:
         result = function(**arguments)
         # Serialise here so a result that is not JSON becomes this request's error.
-        json.dumps(result)
+        json.dumps(result, allow_nan=False)
     except Exception as error:
         logger.exception("RPC method %s failed", request.method)
         return _error_response(
@@ -204,13 +222,15 @@ def dispatch(line: str) -> str | None:
     """Handle one input line. Return the response line, or None when nothing is sent."""
     parsed = parse_request(line)
     response = execute(parsed) if isinstance(parsed, Request) else parsed
-    if response is None:
-        return None
-    return json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+    return None if response is None else _encode(response)
 
 
 def serve(lines: Iterable[str], writer: ProtocolWriter) -> None:
-    """Answer requests until `shutdown` arrives or the input ends."""
+    """Answer requests until `shutdown` arrives or the input ends.
+
+    Requests still running when the server stops get no response; the bridge
+    rejects them on its side.
+    """
     global _writer
     _writer = writer
 
@@ -230,7 +250,12 @@ def serve(lines: Iterable[str], writer: ProtocolWriter) -> None:
                 continue
             parsed = parse_request(line)
             if not isinstance(parsed, Request):
-                writer.send(parsed)
+                try:
+                    writer.send(parsed)
+                except OSError:
+                    # The app closed its end of the pipe: nobody is left to answer.
+                    logger.warning("protocol stream closed, stopping")
+                    break
                 continue
             if parsed.method == "shutdown":
                 answer(parsed)
@@ -255,21 +280,43 @@ def claim_stdout() -> TextIO:
     return os.fdopen(protocol_fd, "w", encoding="utf-8", newline="\n")
 
 
+def claim_stdin() -> TextIO:
+    """Reserve the real stdin for the protocol and give everything else an empty one.
+
+    Child processes inherit fd 0. A tool such as ffmpeg reads its stdin, and would
+    otherwise swallow requests meant for the server.
+    """
+    protocol_fd = os.dup(0)
+    null_fd = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null_fd, 0)
+    os.close(null_fd)
+    return os.fdopen(protocol_fd, "r", encoding="utf-8", newline="\n")
+
+
 def main() -> None:
-    protocol_stream = claim_stdout()
+    protocol_output = claim_stdout()
+    protocol_input = claim_stdin()
     configure_logging()
     # Ctrl-C in a development terminal reaches the whole process group. The app
     # stops the sidecar itself, by `shutdown` or by closing stdin.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     logger.info("sidecar started, pid %d", os.getpid())
+    exit_code = 0
     try:
-        serve(sys.stdin, ProtocolWriter(protocol_stream))
+        serve(protocol_input, ProtocolWriter(protocol_output))
+    except Exception:
+        logger.exception("sidecar stopped on an error")
+        exit_code = 1
     finally:
         logger.info("sidecar stopped")
-    # Do not wait for dispatch threads that are still inside a long method.
-    logging.shutdown()
-    os._exit(0)
+        logging.shutdown()
+        # Do not wait for dispatch threads that are still inside a long method.
+        os._exit(exit_code)
 
 
 if __name__ == "__main__":
-    main()
+    # `python -m fixlib_py.server` runs this file as `__main__`, a second copy of the
+    # module. Start the importable one, so `@rpc` in other modules fills its registry.
+    from fixlib_py.server import main as run_server
+
+    run_server()

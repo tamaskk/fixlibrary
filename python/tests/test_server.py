@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 from importlib.metadata import version
+from pathlib import Path
 
 import pytest
 
@@ -117,6 +119,81 @@ def test_a_result_that_is_not_json_gets_an_internal_error(
     assert response["error"]["code"] == server.INTERNAL_ERROR
 
 
+def test_a_nan_result_gets_an_internal_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(server._methods, "test.nan", lambda: {"strength": float("nan")})
+    request = '{"jsonrpc":"2.0","id":5,"method":"test.nan"}'
+
+    response = call(request)
+
+    assert response["id"] == 5
+    assert response["error"]["code"] == server.INTERNAL_ERROR
+
+
+def test_responses_are_ascii_so_any_reader_can_split_them() -> None:
+    request = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "echo", "params": {"value": "tűz \ud800"}}
+    )
+
+    response_line = server.dispatch(request)
+
+    assert response_line is not None
+    assert response_line.isascii()
+    assert json.loads(response_line)["result"] == {"value": "tűz \ud800"}
+
+
+def test_two_keys_that_name_one_parameter_get_invalid_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(server._methods, "test.job", lambda job_id: job_id)
+    request = '{"jsonrpc":"2.0","id":1,"method":"test.job","params":{"jobId":"a","job_id":"b"}}'
+
+    response = call(request)
+
+    assert response["error"]["code"] == server.INVALID_PARAMS
+
+
+def test_a_deeply_nested_request_gets_a_parse_error() -> None:
+    request = "[" * 100_000
+
+    response = call(request)
+
+    assert response["error"]["code"] == server.PARSE_ERROR
+
+
+@pytest.mark.parametrize(
+    "function",
+    [lambda **options: None, lambda *values: None, lambda _internal=None: None],
+)
+def test_a_method_that_takes_more_than_named_public_params_is_rejected(function) -> None:
+    with pytest.raises(ValueError, match="test.loose"):
+        server.rpc("test.loose")(function)
+
+    assert "test.loose" not in server._methods
+
+
+@pytest.mark.parametrize("percent", [-1, 100.5, float("nan")])
+def test_progress_outside_0_to_100_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, percent: float
+) -> None:
+    output = io.StringIO()
+    monkeypatch.setattr(server, "_writer", server.ProtocolWriter(output))
+
+    with pytest.raises(ValueError, match="percent"):
+        server.report_progress("job-1", percent)
+
+    assert output.getvalue() == ""
+
+
+def test_the_python_methods_match_the_typescript_contract() -> None:
+    contract = Path(__file__).parents[2] / "src/shared/rpc.ts"
+    schemas = contract.read_text(encoding="utf-8").split("export const RPC_SCHEMAS = {")[1]
+    schemas = schemas.split("} as const")[0]
+
+    typescript_methods = set(re.findall(r"^  ['\"]?([\w.]+)['\"]?: \{$", schemas, re.MULTILINE))
+
+    assert typescript_methods == set(server._methods)
+
+
 def test_a_notification_gets_no_response() -> None:
     request = '{"jsonrpc":"2.0","method":"ping"}'
 
@@ -181,6 +258,8 @@ def test_the_cpu_pool_leaves_one_core_free(monkeypatch: pytest.MonkeyPatch) -> N
 
 PRINTING_SERVER = """
 import os
+import subprocess
+import sys
 from fixlib_py import server
 
 @server.rpc("test.print")
@@ -188,6 +267,14 @@ def noisy():
     print("stray print from a method")
     os.write(1, b"stray write to fd 1\\n")
     return "ok"
+
+@server.rpc("test.child")
+def child_reads_stdin():
+    child = subprocess.run(
+        [sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"],
+        capture_output=True, text=True, timeout=10,
+    )
+    return child.stdout.strip()
 
 server.main()
 """
@@ -217,6 +304,49 @@ def test_a_print_inside_a_method_does_not_reach_the_protocol_stream() -> None:
     assert json.loads(remaining_output) == {"jsonrpc": "2.0", "id": 2, "result": None}
     assert "stray print from a method" in error_output
     assert "stray write to fd 1" in error_output
+
+
+def test_a_child_process_cannot_read_the_protocol_input() -> None:
+    requests = (
+        '{"jsonrpc":"2.0","id":1,"method":"test.child"}\n'
+        '{"jsonrpc":"2.0","id":2,"method":"echo","params":{"value":"still here"}}\n'
+    )
+    sidecar = subprocess.Popen(
+        [sys.executable, "-c", PRINTING_SERVER],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert sidecar.stdin is not None and sidecar.stdout is not None
+
+    try:
+        sidecar.stdin.write(requests)
+        sidecar.stdin.flush()
+        responses = [json.loads(sidecar.stdout.readline()) for _ in range(2)]
+    finally:
+        sidecar.kill()
+        sidecar.communicate()
+
+    assert sorted(responses, key=lambda response: response["id"]) == [
+        {"jsonrpc": "2.0", "id": 1, "result": "0"},
+        {"jsonrpc": "2.0", "id": 2, "result": {"value": "still here"}},
+    ]
+
+
+def test_running_the_module_starts_the_importable_server() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "fixlib_py.server"],
+        input='{"jsonrpc":"2.0","id":1,"method":"shutdown"}\n',
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {"jsonrpc": "2.0", "id": 1, "result": None}
+    assert "fixlib_py.server: sidecar started" in completed.stderr
+    assert "__main__" not in completed.stderr
 
 
 def test_the_server_exits_when_stdin_closes() -> None:

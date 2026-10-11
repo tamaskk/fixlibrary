@@ -26,7 +26,7 @@ def configure_logging() -> None:
     log_dir = os.environ.get(LOG_DIR_ENV)
     if log_dir:
         folder = Path(log_dir)
-        folder.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         handlers.append(
             RotatingFileHandler(
                 folder / LOG_FILE_NAME,
