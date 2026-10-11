@@ -1,9 +1,10 @@
-import { and, desc, eq, gt, inArray, isNull, notExists } from 'drizzle-orm'
+import { and, desc, eq, exists, gt, inArray, isNull, ne, notExists, or } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import {
   backups,
   batches,
+  batchFiles,
   batchItems,
   jobs,
   type BATCH_MODES,
@@ -90,7 +91,8 @@ export function cancelPreviewBatches(db: AppDatabase): void {
 
 /**
  * Deletes the batches that were given up before anything was written: cancelled,
- * never applied, without a backup, and with no apply job that was ever started.
+ * never applied, without a backup or a file it created, and with no apply job that
+ * was ever started.
  * Their items and jobs go with them. Returns how many batches were deleted.
  *
  * A batch that got as far as writing a file is never deleted here, cancelled or
@@ -105,6 +107,12 @@ export function deleteDiscardedBatches(db: AppDatabase): number {
         isNull(batches.appliedAt),
         notExists(
           db.select({ id: backups.id }).from(backups).where(eq(backups.batchId, batches.id))
+        ),
+        notExists(
+          db
+            .select({ id: batchFiles.id })
+            .from(batchFiles)
+            .where(eq(batchFiles.batchId, batches.id))
         ),
         notExists(
           db
@@ -170,4 +178,48 @@ export function listBatchItemStates(db: AppDatabase, batchId: number): BatchItem
     .where(eq(batchItems.batchId, batchId))
     .all()
     .map(({ error, ...item }) => ({ ...item, failed: error !== null }))
+}
+
+/**
+ * The newest batch that changed files and has not been undone, whatever became of
+ * it: applied, cancelled halfway, or still marked as applying after a crash. Only
+ * this one can be undone; the backups of older ones are gone.
+ */
+export function findLastWrittenBatch(db: AppDatabase): Batch | undefined {
+  return db
+    .select()
+    .from(batches)
+    .where(
+      and(
+        ne(batches.status, 'undone'),
+        or(
+          exists(
+            db.select({ id: backups.id }).from(backups).where(eq(backups.batchId, batches.id))
+          ),
+          exists(
+            db
+              .select({ id: batchFiles.id })
+              .from(batchFiles)
+              .where(eq(batchFiles.batchId, batches.id))
+          )
+        )
+      )
+    )
+    .orderBy(desc(batches.id))
+    .get()
+}
+
+export interface BatchItemBefore {
+  trackId: number
+  /** The track as it was before the batch. Validated by whoever restores from it. */
+  before: unknown
+}
+
+/** What every track of the batch looked like before it. */
+export function listBatchItemsBefore(db: AppDatabase, batchId: number): BatchItemBefore[] {
+  return db
+    .select({ trackId: batchItems.trackId, before: batchItems.before })
+    .from(batchItems)
+    .where(eq(batchItems.batchId, batchId))
+    .all()
 }

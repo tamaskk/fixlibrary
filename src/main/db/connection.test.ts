@@ -11,6 +11,7 @@ import { getTrackById, insertTracks } from './tracks'
 const EXPECTED_TABLES = [
   'analyses',
   'backups',
+  'batch_files',
   'batch_items',
   'batches',
   'cues',

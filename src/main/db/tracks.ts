@@ -1,7 +1,7 @@
 import { asc, count, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
-import { tracks } from './schema'
+import { AUDIO_FORMATS, COVER_STATUSES, tracks } from './schema'
 import { normalizeTrackPath, volumeNameOfPath } from './track-paths'
 import { logger } from '../services/logger'
 
@@ -63,6 +63,8 @@ function toInsert(row: NewTrack): TrackInsert {
 export interface TrackFileState {
   id: number
   path: string
+  /** Where the file was first found. In clean library mode the original stays there. */
+  originalPath: string
   fileSizeBytes: number | null
   fileMtimeMs: number | null
   fileMissing: boolean
@@ -160,6 +162,7 @@ export function listTrackFileStates(db: AppDatabase): TrackFileState[] {
     .select({
       id: tracks.id,
       path: tracks.path,
+      originalPath: tracks.originalPath,
       fileSizeBytes: tracks.fileSizeBytes,
       fileMtimeMs: tracks.fileMtimeMs,
       fileMissing: tracks.fileMissing,
@@ -218,4 +221,49 @@ export function listTrackAvailability(
       offline: volumeName !== null && !mountedVolumes.has(volumeName),
       fileMissing
     }))
+}
+
+// What undo puts back: everything a batch may have changed about a track. Not the id,
+// not where the file was first found, and not when the row was created.
+const restorableTrackSchema = z.object({
+  path: z.string().min(1),
+  format: z.enum(AUDIO_FORMATS),
+  durationMs: z.number().int().nullable(),
+  bitrateKbps: z.number().int().nullable(),
+  sampleRateHz: z.number().int().nullable(),
+  fileSizeBytes: z.number().int().nullable(),
+  fileMtimeMs: z.number().int().nullable(),
+  fileMissing: z.boolean(),
+  artist: z.string().nullable(),
+  title: z.string().nullable(),
+  mix: z.string().nullable(),
+  album: z.string().nullable(),
+  label: z.string().nullable(),
+  year: z.number().int().nullable(),
+  bpm: z.number().nullable(),
+  camelotKey: z.string().nullable(),
+  musicalKey: z.string().nullable(),
+  energy: z.number().int().nullable(),
+  primaryStyleId: z.number().int().nullable(),
+  secondaryStyleId: z.number().int().nullable(),
+  coverStatus: z.enum(COVER_STATUSES),
+  lufs: z.number().nullable(),
+  truePeakDbtp: z.number().nullable(),
+  acoustId: z.string().nullable(),
+  musicbrainzRecordingId: z.string().nullable(),
+  stageStatus: stageStatusSchema
+})
+
+/** The path a `before` snapshot of a batch item holds, or null if it holds none. */
+export function pathOfSnapshot(before: unknown): string | null {
+  const parsed = z.object({ path: z.string().min(1) }).safeParse(before)
+  return parsed.success ? parsed.data.path : null
+}
+
+/**
+ * Puts a track back to what a batch item recorded before the batch. Throws if the
+ * snapshot is not a whole track: half a restore would be worse than none.
+ */
+export function restoreTrack(db: AppDatabase, id: number, before: unknown): boolean {
+  return updateTrack(db, id, restorableTrackSchema.parse(before))
 }

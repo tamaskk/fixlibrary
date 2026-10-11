@@ -243,6 +243,26 @@ export const backups = sqliteTable(
   ]
 )
 
+// The files a batch created: copies in the clean library, and files under a new name.
+// A row is written before its file is, so that undo knows what to remove even if the
+// app stopped between the two. Kept from disappearing like the backups are.
+export const batchFiles = sqliteTable(
+  'batch_files',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    batchId: integer('batch_id')
+      .notNull()
+      .references(() => batches.id, { onDelete: 'restrict' }),
+    trackId: integer('track_id').references(() => tracks.id, { onDelete: 'set null' }),
+    path: text('path').notNull(),
+    createdAt
+  },
+  (table) => [
+    uniqueIndex('batch_files_batch_path_idx').on(table.batchId, table.path),
+    index('batch_files_track_id_idx').on(table.trackId)
+  ]
+)
+
 export const cues = sqliteTable(
   'cues',
   {
