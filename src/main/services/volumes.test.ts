@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { listMountedVolumes } from './volumes'
+import { createMountedVolumesCache, listMountedVolumes } from './volumes'
 
 describe('listMountedVolumes', () => {
   let root: string
@@ -96,5 +96,33 @@ describe('listMountedVolumes', () => {
     // Assert
     expect(volumes.size).toBe(0)
     expect(logged).toHaveBeenCalledOnce()
+  })
+})
+
+describe('createMountedVolumesCache', () => {
+  it('asks again only after the answer is older than the limit', () => {
+    // Arrange
+    let time = 0
+    let asked = 0
+    const mounted = createMountedVolumesCache(
+      1000,
+      () => {
+        asked += 1
+        return new Set([`drive-${asked}`])
+      },
+      () => time
+    )
+
+    // Act
+    const first = mounted()
+    time = 999
+    const second = mounted()
+    time = 1000
+    const third = mounted()
+
+    // Assert
+    expect(asked).toBe(2)
+    expect(second).toBe(first)
+    expect([...third]).toEqual(['drive-2'])
   })
 })

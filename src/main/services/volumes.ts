@@ -37,3 +37,21 @@ export function listMountedVolumes(
   }
   return mounted
 }
+
+/**
+ * The mounted volumes, looked up at most once per `maxAgeMs`. One load of the Library
+ * table asks several times in a row; this gives all of them the same answer and keeps
+ * a slow mount from being asked each time.
+ */
+export function createMountedVolumesCache(
+  maxAgeMs: number,
+  list: () => ReadonlySet<string> = listMountedVolumes,
+  now: () => number = Date.now
+): () => ReadonlySet<string> {
+  let cached: { volumes: ReadonlySet<string>; at: number } | null = null
+  return () => {
+    const time = now()
+    if (cached === null || time - cached.at >= maxAgeMs) cached = { volumes: list(), at: time }
+    return cached.volumes
+  }
+}

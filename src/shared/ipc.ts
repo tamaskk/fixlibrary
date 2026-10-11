@@ -1,7 +1,15 @@
 // Single source of truth for the renderer <-> main contract.
 // Every channel is listed here; preload and main both derive their types from it.
 import type { Result } from './errors'
-import type { LibraryStatus, ScanProgress, ScanSummary } from './library'
+import type {
+  LibraryPage,
+  LibraryPageRequest,
+  LibraryStatus,
+  RunRequest,
+  RunTargets,
+  ScanProgress,
+  ScanSummary
+} from './library'
 import type {
   FolderKind,
   KeyService,
@@ -31,7 +39,9 @@ export const IPC_CHANNELS = {
   systemOpenLogFolder: 'system:openLogFolder',
   libraryStatus: 'library:status',
   libraryScan: 'library:scan',
-  libraryFollowScan: 'library:followScan'
+  libraryFollowScan: 'library:followScan',
+  libraryList: 'library:list',
+  libraryRun: 'library:run'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -83,6 +93,13 @@ export interface FixLibraryApi {
      * when none is. Unlike `scan`, it never starts one.
      */
     followScan: () => Promise<Result<ScanSummary> | null>
+    /** One page of the library, in path order. */
+    list: (page: LibraryPageRequest) => Promise<Result<LibraryPage>>
+    /**
+     * Names the tracks to run on, by id only. Resolves with the tracks the main
+     * process accepted; a track that cannot be processed right now is left out.
+     */
+    run: (request: RunRequest) => Promise<Result<RunTargets>>
     /** Calls the listener while a scan runs. Returns the function that stops it. */
     onScanProgress: (listener: (progress: ScanProgress) => void) => () => void
   }

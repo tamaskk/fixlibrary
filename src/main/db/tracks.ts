@@ -177,3 +177,27 @@ export function setTracksMissing(db: AppDatabase, ids: readonly number[], missin
 export function countTracks(db: AppDatabase): number {
   return db.select({ total: count() }).from(tracks).get()?.total ?? 0
 }
+
+/** Whether a track can be worked on right now. */
+export interface TrackAvailability {
+  id: number
+  offline: boolean
+  fileMissing: boolean
+}
+
+/** Every track in library order (by path), with what keeps it from being processed. */
+export function listTrackAvailability(
+  db: AppDatabase,
+  mountedVolumes: ReadonlySet<string>
+): TrackAvailability[] {
+  return db
+    .select({ id: tracks.id, volumeName: tracks.volumeName, fileMissing: tracks.fileMissing })
+    .from(tracks)
+    .orderBy(asc(tracks.path))
+    .all()
+    .map(({ id, volumeName, fileMissing }) => ({
+      id,
+      offline: volumeName !== null && !mountedVolumes.has(volumeName),
+      fileMissing
+    }))
+}

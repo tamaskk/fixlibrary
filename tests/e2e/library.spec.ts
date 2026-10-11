@@ -71,7 +71,7 @@ test('the library is scanned, rescanned for changes, and scanned again at the ne
     await page.getByRole('button', { name: 'Könyvtár beolvasása' }).click()
 
     // Three audio files; the AppleDouble file and the trash folder are left out.
-    await expect(page.getByText('3 track a könyvtárban.')).toBeVisible()
+    await expect(page.getByText('3 track', { exact: true })).toBeVisible()
     await expect(page.getByText('Beolvasás kész: 3 új, 0 módosult, 0 változatlan.')).toBeVisible()
 
     copyFileSync(join(FIXTURES, 'sine.mp3'), join(libraryFolder, 'House', 'd.mp3'))
@@ -80,7 +80,7 @@ test('the library is scanned, rescanned for changes, and scanned again at the ne
 
     await expect(page.getByText('Beolvasás kész: 1 új, 0 módosult, 2 változatlan.')).toBeVisible()
     await expect(page.getByText('1 track fájlja nincs a mappában.')).toBeVisible()
-    await expect(page.getByText('4 track a könyvtárban.')).toBeVisible()
+    await expect(page.getByText('4 track', { exact: true })).toBeVisible()
   } finally {
     await first.app.close()
   }
@@ -90,7 +90,7 @@ test('the library is scanned, rescanned for changes, and scanned again at the ne
   // The app scans by itself when it starts; the page shows that scan's result.
   const second = await openApp()
   try {
-    await expect(second.page.getByText('5 track a könyvtárban.')).toBeVisible()
+    await expect(second.page.getByText('5 track', { exact: true })).toBeVisible()
   } finally {
     await second.app.close()
   }
@@ -109,13 +109,13 @@ test('a library folder that is gone is reported, and the tracks stay', async () 
     await expect(settings.getByTitle(libraryFolder, { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Könyvtár', exact: true }).click()
     await page.getByRole('button', { name: 'Könyvtár beolvasása' }).click()
-    await expect(page.getByText('3 track a könyvtárban.')).toBeVisible()
+    await expect(page.getByText('3 track', { exact: true })).toBeVisible()
 
     rmSync(libraryFolder, { recursive: true })
     await page.getByRole('button', { name: 'Újraolvasás' }).click()
 
     await expect(page.getByRole('alert')).toContainText('A könyvtár mappája nem érhető el.')
-    await expect(page.getByText('3 track a könyvtárban.')).toBeVisible()
+    await expect(page.getByText('3 track', { exact: true })).toBeVisible()
   } finally {
     await first.app.close()
   }
