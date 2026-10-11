@@ -1,6 +1,8 @@
-import { app, ipcMain } from 'electron'
+import { app } from 'electron'
+import { z } from 'zod'
 import { IPC_CHANNELS } from '@shared/ipc'
+import { handleIpc } from './handle'
 
 export function registerAppIpc(): void {
-  ipcMain.handle(IPC_CHANNELS.appGetVersion, () => app.getVersion())
+  handleIpc(IPC_CHANNELS.appGetVersion, z.tuple([]), () => app.getVersion())
 }

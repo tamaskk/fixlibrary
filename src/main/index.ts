@@ -1,9 +1,19 @@
 import { app, dialog, shell, BrowserWindow } from 'electron'
 import { existsSync } from 'fs'
+import { cpus, homedir } from 'os'
 import { join } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
-import { closeDatabase, initDatabase } from './db/connection'
+import { closeDatabase, getDatabase, initDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
+import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
+import { registerSettingsIpc } from './ipc/settings'
+import { registerSystemIpc } from './ipc/system'
+import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
+import { ensureDefaultStyles } from './pipeline/settings'
+import { createToolChecker } from './pipeline/system'
+import { resolveToolLocations } from './services/binaries'
+import { readEnvFile } from './services/env-file'
+import { keychainCipher } from './services/keychain'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 
 let pythonBridge: PythonBridge | null = null
@@ -28,6 +38,47 @@ function openAppDatabase(): boolean {
     )
     return false
   }
+}
+
+/** The API keys of `.env.local`, as a fallback while developing. Never read when packaged. */
+function readDevelopmentSecrets(): Record<string, string> {
+  if (app.isPackaged) return {}
+  try {
+    // Only the three key names are kept; nothing else of the file stays in memory.
+    return pickSecretEnv(readEnvFile(join(app.getAppPath(), '.env.local')))
+  } catch (error) {
+    console.error('The development env file could not be read', error)
+    return {}
+  }
+}
+
+function registerSettingsAndSystemIpc(): void {
+  const db = getDatabase()
+  ensureDefaultStyles(db)
+
+  const secrets = createSecretStore({
+    db,
+    cipher: keychainCipher,
+    devEnv: readDevelopmentSecrets(),
+    keyCheck: {
+      userAgent: `FixLibrary/${app.getVersion()} (+https://github.com/tamaskk/fixlibrary)`
+    }
+  })
+  registerSettingsIpc({
+    db,
+    secrets,
+    environment: { homeDir: homedir(), cpuCount: cpus().length }
+  })
+  registerSystemIpc({
+    toolChecker: createToolChecker(
+      resolveToolLocations({
+        isPackaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath
+      })
+    ),
+    logFolder: app.getPath('logs')
+  })
 }
 
 function startPythonSidecar(): void {
@@ -74,12 +125,30 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  const devServerUrl = is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
+  const rendererFile = join(__dirname, '../renderer/index.html')
+  setRendererEntry(devServerUrl ? { url: devServerUrl } : { filePath: rendererFile })
+
+  if (devServerUrl) {
+    mainWindow.loadURL(devServerUrl)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(rendererFile)
   }
 }
+
+// The window shows the app's own page and nothing else. Without this, a file dropped
+// on the window or a changed `location` would load another document, and the preload
+// would hand that document the whole `window.api`.
+app.on('web-contents-created', (_event, contents) => {
+  const stayOnApp = (event: Electron.Event, url: string): void => {
+    const appPage = getRendererEntryUrl()
+    // A reload of the app's own page is the one navigation that is allowed.
+    if (appPage === null || !isRendererUrl(url, appPage)) event.preventDefault()
+  }
+  contents.on('will-navigate', stayOnApp)
+  contents.on('will-redirect', stayOnApp)
+  contents.on('will-attach-webview', (event) => event.preventDefault())
+})
 
 // Two instances would share one database and could process the same library twice.
 const isOnlyInstance = app.requestSingleInstanceLock()
@@ -104,6 +173,7 @@ app.whenReady().then(() => {
     return
   }
   registerAppIpc()
+  registerSettingsAndSystemIpc()
   startPythonSidecar()
   createWindow()
 
