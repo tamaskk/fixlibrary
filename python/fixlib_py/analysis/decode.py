@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from typing import TYPE_CHECKING
+import threading
+import time
+from typing import TYPE_CHECKING, BinaryIO
 
 from fixlib_py.files import open_regular_file
 
@@ -26,8 +28,8 @@ DECODE_TIMEOUT_S = 60
 # The most ffmpeg may ask for in one allocation. Decoding needs a fraction of this;
 # a header that claims an absurd sample rate makes the resampler ask for gigabytes.
 MAX_FFMPEG_ALLOC = 128 * 1024 * 1024
-# What ffmpeg can return for MAX_SECONDS, with room for the header.
-_MAX_OUTPUT = MAX_SECONDS * SAMPLE_RATE * 2 + 4096
+# What a WAV stream may hold beside its samples.
+_HEADER_ROOM = 4096
 # Set by the app (services/python-bridge.ts) to the ffmpeg it ships.
 FFMPEG_ENV = "FIXLIB_FFMPEG"
 
@@ -42,12 +44,69 @@ class DecodeError(Exception):
     """The file could not be turned into samples."""
 
 
-def ffmpeg_path() -> str:
-    """The ffmpeg of the app. Nothing falls back to a tool on the PATH."""
-    path = os.environ.get(FFMPEG_ENV, "")
+class ToolStopped(Exception):
+    """A tool was ended because the job it worked for was told to stop."""
+
+
+# How often a running tool is looked at: whether its job was stopped, or its time is up.
+_POLL_S = 0.2
+
+
+def run_tool(
+    command: list[str],
+    *,
+    stdin: BinaryIO | None = None,
+    data: bytes | None = None,
+    timeout: float,
+    stop: threading.Event | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a tool of the app to its end and return what it wrote.
+
+    The tool gets an empty environment and reads either `stdin` or `data`. It is
+    killed when its time is up (DecodeError) or when `stop` is set (ToolStopped): a
+    job that was told to stop must not leave a process working for it.
+    """
+    process = subprocess.Popen(
+        command,
+        stdin=stdin if data is None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={},
+        cwd="/",
+    )
+    deadline = time.monotonic() + timeout
+    pending = data
+    while True:
+        try:
+            output, errors = process.communicate(input=pending, timeout=_POLL_S)
+        except subprocess.TimeoutExpired:
+            # The input is on its way already; it is handed over only once.
+            pending = None
+            stopped = stop is not None and stop.is_set()
+            if not stopped and time.monotonic() < deadline:
+                continue
+            process.kill()
+            process.communicate()
+            if stopped:
+                raise ToolStopped() from None
+            raise DecodeError(f"{os.path.basename(command[0])} did not finish in time") from None
+        return subprocess.CompletedProcess(command, process.returncode, output, errors)
+
+
+def tool_path(variable: str) -> str:
+    """A tool the app ships, named by the app in the environment.
+
+    Nothing falls back to a tool on the PATH.
+    """
+    path = os.environ.get(variable, "")
     if not os.path.isabs(path) or not os.path.isfile(path) or not os.access(path, os.X_OK):
-        raise DecodeError(f"{FFMPEG_ENV} does not name the app's ffmpeg")
+        raise DecodeError(f"{variable} does not name a tool of the app")
     return path
+
+
+def ffmpeg_path() -> str:
+    """The ffmpeg of the app."""
+    return tool_path(FFMPEG_ENV)
 
 
 def _samples_of_wav(data: bytes) -> memoryview:
@@ -66,10 +125,16 @@ def _samples_of_wav(data: bytes) -> memoryview:
     raise DecodeError("ffmpeg returned no audio")
 
 
-def decode_mono(path: str) -> numpy.ndarray:
-    """At most the first MAX_SECONDS of a file as mono float32 samples at SAMPLE_RATE."""
-    import numpy
+def decode_wav(
+    path: str, channels: int, seconds: int, stop: threading.Event | None = None
+) -> bytes:
+    """At most the first `seconds` of a file as a 16 bit WAV stream at SAMPLE_RATE.
 
+    The stream is what ffmpeg writes to a pipe: its header cannot hold its sizes.
+    ffmpeg is ended when `stop` is set (ToolStopped).
+    """
+    if channels not in (1, 2) or not 1 <= seconds <= MAX_SECONDS:
+        raise ValueError("unsupported decoding request")
     demuxer = _DEMUXERS.get(os.path.splitext(path)[1].lower())
     if demuxer is None:
         raise DecodeError("not one of the app's audio formats")
@@ -92,11 +157,11 @@ def decode_mono(path: str) -> numpy.ndarray:
         "0:a:0",
         "-vn",
         "-ac",
-        "1",
+        str(channels),
         "-ar",
         str(SAMPLE_RATE),
         "-t",
-        str(MAX_SECONDS),
+        str(seconds),
         "-map_metadata",
         "-1",
         "-bitexact",
@@ -111,25 +176,21 @@ def decode_mono(path: str) -> numpy.ndarray:
     if file is None:
         raise DecodeError("not a regular file")
     with file:
-        try:
-            done = subprocess.run(
-                command,
-                stdin=file,
-                capture_output=True,
-                env={},
-                cwd="/",
-                timeout=DECODE_TIMEOUT_S,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            raise DecodeError("ffmpeg did not finish in time") from None
+        done = run_tool(command, stdin=file, timeout=DECODE_TIMEOUT_S, stop=stop)
     if done.returncode != 0:
         # What ffmpeg says can quote the file; it goes to the log as one clean line.
         said = _CONTROL_CHARACTERS.sub(" ", done.stderr.decode("utf-8", "replace")).strip()
         raise DecodeError(f"ffmpeg failed ({done.returncode}): {said[:_MAX_LOGGED_ERROR]}")
-    if len(done.stdout) > _MAX_OUTPUT:
+    if len(done.stdout) > seconds * SAMPLE_RATE * 2 * channels + _HEADER_ROOM:
         raise DecodeError("ffmpeg returned more audio than was asked for")
-    samples = _samples_of_wav(done.stdout)
+    return done.stdout
+
+
+def decode_mono(path: str) -> numpy.ndarray:
+    """At most the first MAX_SECONDS of a file as mono float32 samples at SAMPLE_RATE."""
+    import numpy
+
+    samples = _samples_of_wav(decode_wav(path, 1, MAX_SECONDS))
     # One copy, as floats, scaled where it is: a long track must not be held three times.
     audio = numpy.frombuffer(samples, dtype="<i2", count=len(samples) // 2).astype(numpy.float32)
     audio /= 32768.0

@@ -12,6 +12,7 @@ describe('STAGE_TIMEOUTS_MS', () => {
     // Assert
     expect(STAGE_TIMEOUTS_MS).toEqual({
       lookup: 30_000,
+      fingerprint: 120_000,
       bpmKey: 120_000,
       energy: 120_000,
       demucs: 900_000,

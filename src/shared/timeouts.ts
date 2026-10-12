@@ -7,6 +7,7 @@ const MINUTE = 60 * SECOND
 /** How long one pipeline stage may work on one track. */
 export const STAGE_TIMEOUTS_MS = {
   lookup: 30 * SECOND,
+  fingerprint: 120 * SECOND,
   bpmKey: 120 * SECOND,
   energy: 120 * SECOND,
   demucs: 15 * MINUTE,

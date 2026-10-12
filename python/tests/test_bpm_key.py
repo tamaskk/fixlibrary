@@ -292,7 +292,7 @@ def test_refuses_an_ffmpeg_that_the_app_did_not_name(monkeypatch: pytest.MonkeyP
     for value in ("", "ffmpeg", "/nonexistent/ffmpeg"):
         monkeypatch.setenv(decode.FFMPEG_ENV, value)
 
-        with pytest.raises(decode.DecodeError, match="FIXLIB_FFMPEG"):
+        with pytest.raises(decode.DecodeError, match="FIXLIB_FFMPEG does not name"):
             decode.ffmpeg_path()
 
 
