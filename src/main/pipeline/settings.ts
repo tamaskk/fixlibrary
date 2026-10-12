@@ -48,7 +48,8 @@ export function readSettings(db: AppDatabase): Settings {
     rekordbox: readGroup(db, 'rekordbox', shape.rekordbox, DEFAULT_SETTINGS.rekordbox),
     loudness: readGroup(db, 'loudness', shape.loudness, DEFAULT_SETTINGS.loudness),
     hotCues: readGroup(db, 'hotCues', shape.hotCues, DEFAULT_SETTINGS.hotCues),
-    performance: readGroup(db, 'performance', shape.performance, DEFAULT_SETTINGS.performance)
+    performance: readGroup(db, 'performance', shape.performance, DEFAULT_SETTINGS.performance),
+    analysis: readGroup(db, 'analysis', shape.analysis, DEFAULT_SETTINGS.analysis)
   }
 }
 
@@ -109,7 +110,7 @@ export function updateSettings(
   if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
 
   const current = readSettings(db)
-  const { library, loudness, hotCues, performance } = parsed.data
+  const { library, loudness, hotCues, performance, analysis } = parsed.data
   // The whole result is checked again before anything is written: a stored group
   // that does not fit its schema would silently fall back to the defaults on the next read.
   const next = settingsSchema.safeParse({
@@ -117,7 +118,8 @@ export function updateSettings(
     library: { ...current.library, ...withoutUndefined(library ?? {}) },
     loudness: { ...current.loudness, ...withoutUndefined(loudness ?? {}) },
     hotCues: hotCues ?? current.hotCues,
-    performance: performance ?? current.performance
+    performance: performance ?? current.performance,
+    analysis: analysis ?? current.analysis
   })
   if (!next.success) return { ok: false, code: 'INVALID_INPUT' }
 
@@ -126,6 +128,7 @@ export function updateSettings(
     if (loudness) setSetting(tx, 'loudness', next.data.loudness)
     if (hotCues) setSetting(tx, 'hotCues', next.data.hotCues)
     if (performance) setSetting(tx, 'performance', next.data.performance)
+    if (analysis) setSetting(tx, 'analysis', next.data.analysis)
   })
   return { ok: true, value: getSettingsSnapshot(db, environment) }
 }

@@ -44,6 +44,7 @@ import {
   type Proposal,
   type UndoOutcome
 } from '@shared/preview'
+import { keyOfCamelot } from '@shared/keys'
 import { toOneLine } from '@shared/text'
 import type { BatchFiles } from './batch-files'
 import type { Orchestrator } from './orchestrator'
@@ -68,6 +69,8 @@ const beforeSchema = z.object({
   artist: shownText,
   title: shownText,
   mix: shownText,
+  bpm: z.number().nullable().catch(null),
+  camelotKey: z.string().nullable().catch(null),
   primaryStyleId: z.number().nullable().catch(null),
   energy: z.number().nullable().catch(null)
 })
@@ -82,6 +85,9 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     artist: track.artist,
     title: track.title,
     mix: track.mix,
+    bpm: track.bpm,
+    // Shown only as one of the 24 codes; whatever else a row may hold is no key.
+    key: track.camelotKey === null ? null : (keyOfCamelot(track.camelotKey)?.camelot ?? null),
     styleId: track.primaryStyleId,
     energy: track.energy
   }
@@ -133,22 +139,32 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
 }
 
 /**
- * Once a track of a batch is written: what the user typed for it in the preview
- * becomes the track's own, and those fields are locked, so that no later automatic
- * run or rescan puts anything else in their place. Only for a track that was
- * approved. Doing it again changes nothing.
+ * Once a track of a batch is written: what the batch holds for the track's row alone
+ * becomes the track's own. That is the tempo and the key, which are measured from the
+ * audio and need no file to be written, and what the user typed in the preview. The
+ * typed fields are locked, so that no later automatic run or rescan puts anything
+ * else in their place. Only for a track that was approved. Doing it again changes nothing.
  */
-export function commitManualEdits(db: AppDatabase, batchId: number, trackId: number): void {
+export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: number): void {
   db.transaction((tx) => {
     const item = getBatchItem(tx, batchId, trackId)
     if (!item || !item.approved) return
     const fields = readProposal(item.after).fields ?? {}
     const manual = EDITABLE_PREVIEW_FIELDS.filter((field) => fields[field]?.source === 'manual')
-    if (manual.length === 0) return
+    if (manual.length === 0 && !fields.bpm && !fields.key) return
     const track = getTrackById(tx, trackId, new Set())
     if (!track) return
     const committed = new Set<string>(manual)
     const changes: TrackChanges = {}
+    // A field that was locked after the stage proposed for it keeps its value.
+    const free = (field: PreviewField): boolean =>
+      fields[field]?.source === 'manual' || !track.lockedFields.includes(field)
+    if (fields.bpm && free('bpm')) changes.bpm = fields.bpm.value
+    if (fields.key && free('key')) {
+      const key = fields.key.value === null ? null : keyOfCamelot(fields.key.value)
+      changes.camelotKey = key?.camelot ?? null
+      changes.musicalKey = key?.musical ?? null
+    }
     if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
     if (fields.title?.source === 'manual') changes.title = fields.title.value
     if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
@@ -161,7 +177,9 @@ export function commitManualEdits(db: AppDatabase, batchId: number, trackId: num
       if (known) changes.primaryStyleId = styleId
       else committed.delete('styleId')
     }
-    changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
+    if (committed.size > 0) {
+      changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
+    }
     updateTrack(tx, trackId, changes)
   })
 }

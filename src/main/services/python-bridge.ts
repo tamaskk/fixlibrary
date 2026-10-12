@@ -38,6 +38,8 @@ export interface PythonBridgeOptions {
   args?: readonly string[]
   cwd?: string
   logDir: string
+  /** The ffmpeg the sidecar decodes audio with. Without it, analysis fails per track. */
+  ffmpegPath?: string
   onProgress?: (progress: RpcProgress) => void
   /** What the bridge itself has to say: crashes, restarts, rejected lines. */
   log?: (message: string) => void
@@ -126,6 +128,7 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
       // UTF-8 for the protocol and for file names, whatever locale the app was started in.
       PYTHONUTF8: '1'
     }
+    if (options.ffmpegPath !== undefined) env['FIXLIB_FFMPEG'] = options.ffmpegPath
     for (const name of INHERITED_ENV) {
       const value = process.env[name]
       if (value !== undefined) env[name] = value

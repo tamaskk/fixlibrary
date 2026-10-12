@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from 'fs'
 import { cpus, homedir, tmpdir, userInfo } from 'os'
 import { join, sep } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
-import { closeDatabase, getDatabase, initDatabase } from './db/connection'
+import { closeDatabase, getDatabase, initDatabase, type AppDatabase } from './db/connection'
 import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
@@ -14,15 +14,15 @@ import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
 import { createClaude, type Claude } from './pipeline/claude'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
-import { commitManualEdits, createPreview } from './pipeline/preview'
+import { commitApprovedValues, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
 import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
 import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
-import { selectableStages, STAGES, validateStages } from './pipeline/stages'
+import { createStages, selectableStages, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
 import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
-import { resolveToolLocations } from './services/binaries'
+import { resolveToolCommand, resolveToolLocations } from './services/binaries'
 import { createClaudeCli } from './services/claude-cli'
 import { readEnvFile } from './services/env-file'
 import { describeError } from './services/error-text'
@@ -174,7 +174,18 @@ function startPythonSidecar(): void {
     return
   }
 
-  pythonBridge = createPythonBridge({ pythonPath, cwd: pythonDir, logDir: app.getPath('logs') })
+  const locations = resolveToolLocations({
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath
+  })
+  pythonBridge = createPythonBridge({
+    pythonPath,
+    cwd: pythonDir,
+    logDir: app.getPath('logs'),
+    // The sidecar decodes audio with the app's own ffmpeg and with nothing else.
+    ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command
+  })
   pythonBridge.start()
   pythonBridge
     .call('ping', {})
@@ -199,16 +210,23 @@ function isGeneratedFile(path: string): boolean {
 }
 
 /**
- * The stages a run can use. In development, `FIXLIB_DEMO_STAGES=1` adds two stages
- * that propose made-up values and one that renames the file to the proposed name once
- * the batch is approved, so a run can be tried and tested end to end while no real stage
- * exists. The packaged app never has them.
+ * The stages a run can use. In development, `FIXLIB_DEMO_STAGES=1` puts stand-ins in
+ * the place of the real stages: two that propose made-up values and one that renames
+ * the file to the proposed name once the batch is approved. They read no audio, so
+ * the run, the preview and the apply phase can be tried and tested end to end in
+ * seconds, on files that are no music. The packaged app never has them.
  */
-function availableStages(): Stage[] {
-  if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') return [...STAGES]
+function availableStages(db: AppDatabase): Stage[] {
+  if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') {
+    return createStages({
+      db,
+      python: () => pythonBridge,
+      bpmRange: () => readSettings(db).analysis
+    })
+  }
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])
   const usable = Number.isInteger(ms) && ms >= 1 && ms <= MAX_DEMO_STAGE_MS
-  return [...STAGES, ...createDemoStages(usable ? ms : undefined, { mayRename: isGeneratedFile })]
+  return createDemoStages(usable ? ms : undefined, { mayRename: isGeneratedFile })
 }
 
 function registerLibraryAndPipeline(): void {
@@ -259,7 +277,7 @@ function registerLibraryAndPipeline(): void {
   })
 
   let startupDone = false
-  const stages = availableStages()
+  const stages = availableStages(db)
   // A mistake in the stages is a bug of this build: better to stop here than to run them.
   validateStages(stages)
   const runs = createOrchestrator({
@@ -279,7 +297,7 @@ function registerLibraryAndPipeline(): void {
     batchFiles,
     // Until the startup work below is over, and during every scan.
     libraryBusy: () => !startupDone || scanner.isRunning(),
-    onTrackApplied: (batchId, trackId) => commitManualEdits(db, batchId, trackId),
+    onTrackApplied: (batchId, trackId) => commitApprovedValues(db, batchId, trackId),
     onProgress: sendRunProgress,
     onBusyChange: createSleepBlocker(powerSaveBlocker)
   })

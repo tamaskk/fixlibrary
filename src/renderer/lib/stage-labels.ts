@@ -1,5 +1,6 @@
 /** The Hungarian name of a stage. A stage without one is shown by its own name. */
 const STAGE_LABELS: Readonly<Record<string, string>> = {
+  bpmKey: 'BPM és key elemzés',
   demoAnalyze: 'Demo elemzés',
   demoLookup: 'Demo lookup',
   demoRename: 'Demo átnevezés'

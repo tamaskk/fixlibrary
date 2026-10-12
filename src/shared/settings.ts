@@ -62,6 +62,25 @@ const hotCueSchema = z.object({
   color: hexColorSchema
 })
 
+/**
+ * The bounds of the tempo range. The same numbers are in fixlib_py/analysis/bpm_key.py.
+ */
+export const BPM_MIN_LIMITS = { min: 40, max: 150 } as const
+export const BPM_MAX_LIMITS = { min: 80, max: 300 } as const
+
+const analysisSchema = z
+  .object({
+    /** A measured tempo below this is doubled until it is inside the range. */
+    bpmMin: z.number().int().min(BPM_MIN_LIMITS.min).max(BPM_MIN_LIMITS.max),
+    /** A measured tempo above this is halved until it is inside the range. */
+    bpmMax: z.number().int().min(BPM_MAX_LIMITS.min).max(BPM_MAX_LIMITS.max)
+  })
+  // The range must hold a whole octave: in a narrower one a tempo could be doubled
+  // out of its top and halved out of its bottom, and would have no place.
+  .refine((range) => range.bpmMax >= 2 * range.bpmMin, {
+    message: 'The tempo range must hold a whole octave'
+  })
+
 export const settingsSchema = z.object({
   library: z.object({
     rootFolder: folderSchema,
@@ -83,7 +102,8 @@ export const settingsSchema = z.object({
   performance: z.object({
     /** null: one less than the number of CPU cores. */
     workerCount: z.number().int().min(1).max(64).nullable()
-  })
+  }),
+  analysis: analysisSchema
 })
 
 export type Settings = z.output<typeof settingsSchema>
@@ -93,7 +113,9 @@ export const settingsPatchSchema = z.strictObject({
   library: z.strictObject({ mode: z.enum(LIBRARY_MODES) }).optional(),
   loudness: settingsSchema.shape.loudness.partial().strict().optional(),
   hotCues: settingsSchema.shape.hotCues.optional(),
-  performance: settingsSchema.shape.performance.strict().optional()
+  performance: settingsSchema.shape.performance.strict().optional(),
+  // Both ends at once: one end alone could not be checked against the other.
+  analysis: z.strictObject({ bpmMin: z.number(), bpmMax: z.number() }).optional()
 })
 
 export type SettingsPatch = z.input<typeof settingsPatchSchema>
@@ -119,7 +141,9 @@ export const DEFAULT_SETTINGS: Settings = {
     { name: 'Outro', color: '#eab308' },
     { name: 'Drop 3', color: '#ec4899' }
   ],
-  performance: { workerCount: null }
+  performance: { workerCount: null },
+  // House at half its tempo is doubled into the range; 174 drum and bass stays.
+  analysis: { bpmMin: 85, bpmMax: 175 }
 }
 
 /** The values in use where a setting is left at its default. */

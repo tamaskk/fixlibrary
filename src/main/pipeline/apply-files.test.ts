@@ -26,7 +26,7 @@ import { createFileOps, type FileOps } from '../services/file-ops'
 import { logger } from '../services/logger'
 import { createBatchFiles, type BatchFiles } from './batch-files'
 import { createOrchestrator, type Orchestrator } from './orchestrator'
-import { commitManualEdits, createPreview, type Preview } from './preview'
+import { commitApprovedValues, createPreview, type Preview } from './preview'
 import { createDemoStages } from './stages/demo'
 import type { Stage, StageContext } from './stages/stage'
 
@@ -517,7 +517,7 @@ describe('a batch that goes through its preview', () => {
       listMountedVolumes: () => NO_VOLUMES,
       mode: () => mode,
       batchFiles,
-      onTrackApplied: (batchId, trackId) => commitManualEdits(testDatabase.db, batchId, trackId)
+      onTrackApplied: (batchId, trackId) => commitApprovedValues(testDatabase.db, batchId, trackId)
     })
     const preview = createPreview({
       db: testDatabase.db,
@@ -626,7 +626,7 @@ describe('what the user typed for a track whose file was not written', () => {
       listMountedVolumes: () => NO_VOLUMES,
       mode: () => mode,
       batchFiles,
-      onTrackApplied: (batchId, trackId) => commitManualEdits(testDatabase.db, batchId, trackId)
+      onTrackApplied: (batchId, trackId) => commitApprovedValues(testDatabase.db, batchId, trackId)
     })
     const preview = createPreview({
       db: testDatabase.db,

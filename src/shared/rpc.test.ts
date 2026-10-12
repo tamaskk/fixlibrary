@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { encodeRpcRequest, fileTagsSchema, parseRpcLine, RPC_SCHEMAS, TAG_BATCH_SIZE } from './rpc'
+import {
+  BPM_KEY_ANALYZER_VERSION,
+  bpmKeyResultSchema,
+  encodeRpcRequest,
+  fileTagsSchema,
+  parseRpcLine,
+  RPC_SCHEMAS,
+  TAG_BATCH_SIZE
+} from './rpc'
 
 describe('encodeRpcRequest', () => {
   it('writes one JSON-RPC 2.0 request per line', () => {
@@ -175,5 +183,59 @@ describe('RPC_SCHEMAS', () => {
     // Assert
     expect(tooMany.success).toBe(false)
     expect(oneBatch.success).toBe(true)
+  })
+})
+
+describe('bpmKeyResultSchema', () => {
+  const result = {
+    bpm: 123.65,
+    rawBpm: 61.83,
+    bpmConfidence: 3.2,
+    keyName: 'C#',
+    scale: 'minor',
+    keyStrength: 0.81,
+    camelot: '12A',
+    musical: 'Dbm',
+    analyzerVersion: BPM_KEY_ANALYZER_VERSION
+  }
+
+  it('accepts a result whose key the app maps the same way', () => {
+    // Act
+    const parsed = bpmKeyResultSchema.safeParse(result)
+
+    // Assert
+    expect(parsed.success).toBe(true)
+  })
+
+  it.each([
+    ['a Camelot code that is not the code of the key', { camelot: '8A' }],
+    ['a musical name that is not the name of the key', { musical: 'C#m' }],
+    ['a tonic that is no note', { keyName: 'H' }],
+    ['a scale the app does not know', { scale: 'dorian' }],
+    ['a tempo of zero', { bpm: 0 }],
+    ['a tempo that is not a number', { bpm: null }],
+    ['the result of another analyzer version', { analyzerVersion: 'essentia-other' }]
+  ])('refuses %s', (_name, change) => {
+    // Act
+    const parsed = bpmKeyResultSchema.safeParse({ ...result, ...change })
+
+    // Assert
+    expect(parsed.success).toBe(false)
+  })
+
+  it('names the same analyzer version as the sidecar', async () => {
+    // Arrange
+    const { readFileSync } = await import('fs')
+    const { join } = await import('path')
+    const sidecar = readFileSync(
+      join(__dirname, '../../python/fixlib_py/analysis/bpm_key.py'),
+      'utf8'
+    )
+
+    // Act
+    const version = /^ANALYZER_VERSION = "([^"]+)"$/m.exec(sidecar)?.[1]
+
+    // Assert
+    expect(version).toBe(BPM_KEY_ANALYZER_VERSION)
   })
 })

@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { KEYS } from '@shared/keys'
 import type { PreviewValue } from '@shared/preview'
 import type { Style } from '@shared/settings'
 import type { PreviewEditor } from './preview-columns'
@@ -76,6 +77,33 @@ export function CellEditor({
           {styles.map((style) => (
             <option key={style.id} value={style.id}>
               {style.name}
+            </option>
+          ))}
+        </Select>
+      </div>
+    )
+  }
+
+  if (editor === 'key') {
+    return (
+      <div className="w-full">
+        <Select
+          label={label}
+          labelHidden
+          autoFocus
+          className="h-7 px-1"
+          value={value === null ? '' : String(value)}
+          onKeyDown={handleKeyDown}
+          onBlur={() => settle(() => onCancel(false))}
+          onChange={(event) => {
+            const chosen = event.target.value
+            settle(() => onCommit(chosen === '' ? null : chosen, true))
+          }}
+        >
+          <option value="">Nincs key</option>
+          {KEYS.map((key) => (
+            <option key={key.camelot} value={key.camelot}>
+              {key.camelot} {key.musical}
             </option>
           ))}
         </Select>

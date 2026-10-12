@@ -13,6 +13,7 @@ import {
   getSettingsSnapshot,
   isUnsuitableLibraryRoot,
   libraryFoldersOverlap,
+  readSettings,
   resolveEffectiveSettings,
   saveStyles,
   setFolder,
@@ -159,6 +160,34 @@ describe('updateSettings', () => {
     // Assert
     expect(result.ok && result.value.settings.performance.workerCount).toBe(64)
     expect(result.ok && result.value.effective.workerCount).toBe(8)
+  })
+
+  it('stores a tempo range and returns it after a restart', () => {
+    // Act
+    const result = updateSettings(
+      testDatabase.db,
+      { analysis: { bpmMin: 70, bpmMax: 150 } },
+      environment
+    )
+
+    // Assert
+    expect(result.ok && result.value.settings.analysis).toEqual({ bpmMin: 70, bpmMax: 150 })
+    expect(readSettings(testDatabase.db).analysis).toEqual({ bpmMin: 70, bpmMax: 150 })
+  })
+
+  it.each([
+    ['a range narrower than an octave', { bpmMin: 100, bpmMax: 199 }],
+    ['a lower end below the bound', { bpmMin: 39, bpmMax: 175 }],
+    ['an upper end above the bound', { bpmMin: 85, bpmMax: 301 }],
+    ['a tempo that is not whole', { bpmMin: 85.5, bpmMax: 175 }],
+    ['one end alone', { bpmMin: 90 }]
+  ])('refuses %s as the tempo range', (_name, analysis) => {
+    // Act
+    const result = updateSettings(testDatabase.db, { analysis }, environment)
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(readSettings(testDatabase.db).analysis).toEqual(DEFAULT_SETTINGS.analysis)
   })
 
   it('ignores a field that is present but undefined, keeping the stored value', () => {
