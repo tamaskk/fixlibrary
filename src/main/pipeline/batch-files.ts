@@ -1,7 +1,7 @@
 // The rules for changing the files of a batch: what is saved before the first change,
 // where the work happens in each mode, and how a batch is undone. The changes
 // themselves are made by `services/file-ops.ts`.
-import { basename, dirname, extname, join, sep } from 'path'
+import { basename, dirname, extname, join } from 'path'
 import {
   deleteBackup,
   deleteCreatedFile,
@@ -26,8 +26,10 @@ import {
   type BatchMode
 } from '../db/batches'
 import type { AppDatabase } from '../db/connection'
+import { normalizeTrackPath } from '../db/track-paths'
 import {
   findTrackIdByPath,
+  findTrackIdsWithName,
   getTrackById,
   parseTrackSnapshot,
   pathOfSnapshot,
@@ -38,6 +40,7 @@ import {
 } from '../db/tracks'
 import { describeError } from '../services/error-text'
 import { unusableNameReason, type FileOps } from '../services/file-ops'
+import { UNSAFE_TEXT } from '@shared/file-names'
 import { logger } from '../services/logger'
 import { AppError, type Result } from '@shared/errors'
 import type { SpaceCheck } from '@shared/file-ops'
@@ -76,6 +79,23 @@ export interface TrackFiles {
   replaceContent: (write: (tempPath: string, signal: AbortSignal) => Promise<void>) => Promise<void>
   /** Where the file that is worked on is now. Makes the backup or the copy first. */
   workingPath: () => Promise<string>
+  /**
+   * In the clean library: makes the copy the work happens on, if the track has none
+   * there yet. The clean library holds every track a batch was approved for, also
+   * one the batch has nothing to change about. In place: does nothing. `collided`
+   * says that the copy was made just now and had to take ` (2)`, ` (3)`, …
+   */
+  ensureCleanCopy: () => Promise<{ collided: boolean }>
+  /**
+   * Whether giving the file this name, in the folder it is in, would change anything
+   * on disk. Asked before `workingPath`: it makes no backup and no copy, so a track
+   * that needs nothing costs nothing, and its batch does not count as one that wrote.
+   * False when the file has the name already, also when it only has it with the
+   * ` (2)` a collision gave it and the plain name is still taken. True in the clean
+   * library for a track that has no copy there yet: the copy is a change. Throws
+   * what `move` would throw for this name, and when the file is not there.
+   */
+  wouldMove: (fileName: string) => Promise<boolean>
 }
 
 export interface UndoSummary {
@@ -207,7 +227,13 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     return readTrack(track.id)
   }
 
-  /** Saves the file as it is, before this batch changes it for the first time. */
+  /**
+   * Saves the file as it is, before this batch changes it for the first time. A
+   * backup that was made stays until the batch is undone or a later batch is applied,
+   * also when the change it was made for fails: nothing here decides that a file is
+   * "still as it was" and takes its backup away. A backup too many costs an undo of
+   * the batch before; a backup too few cannot be made good.
+   */
   async function backUp(batchId: number, track: Track, signal: AbortSignal): Promise<void> {
     const recorded = getBackup(db, batchId, track.id)
     if (recorded) {
@@ -234,7 +260,8 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   async function copyToCleanLibrary(
     batchId: number,
     track: Track,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onCollision: () => void
   ): Promise<string> {
     const { libraryRoot } = folders()
     const cleanFolder = needFolder(folders().cleanLibraryFolder, 'clean library')
@@ -259,7 +286,11 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     }
 
     return withNames(async () => {
-      const { path } = await fileOps.freeName(wanted)
+      // Named as a track's path is stored: the folders of the library may be spelled
+      // decomposed on disk, and undo finds the copy by comparing the two.
+      const free = await fileOps.freeName(wanted)
+      const path = normalizeTrackPath(free.path)
+      if (free.collided) onCollision()
       recordCreatedFile(db, { batchId, trackId: track.id, path })
       try {
         await fileOps.copy(track.path, path, signal)
@@ -282,17 +313,23 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   async function prepare(
     batch: { id: number; mode: BatchMode },
     trackId: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onCopyCollision: () => void
   ): Promise<string> {
     const track = await reconcile(batch.id, readTrack(trackId))
     if (batch.mode === 'clean_library' && !(await isCleanCopy(track.path))) {
-      return copyToCleanLibrary(batch.id, track, signal)
+      return copyToCleanLibrary(batch.id, track, signal, onCopyCollision)
     }
     // A file this batch created itself needs no backup: undo deletes it. Unless the
     // batch backed the track up before it renamed it, which is then checked again.
     const createdHere = listCreatedFilesOfTrack(db, batch.id, trackId).length > 0
     if (!createdHere || getBackup(db, batch.id, trackId)) await backUp(batch.id, track, signal)
     return track.path
+  }
+
+  /** True when another track has this name, in any letter case or Unicode form. */
+  function ownedByAnother(path: string, trackId: number): boolean {
+    return findTrackIdsWithName(db, path).some((owner) => owner !== trackId)
   }
 
   async function workingRoot(path: string): Promise<string> {
@@ -303,17 +340,43 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     throw new AppError('INVALID_INPUT', 'the file is in no folder of the library')
   }
 
-  /** Throws unless every new part of the path is a name a library file may have. */
-  async function assertUsableTarget(root: string, to: string): Promise<void> {
-    const inRoot = await fileOps.relativeTo(root, to)
-    if (inRoot === null) {
+  /**
+   * Throws unless moving the file at `from` to `to` stays inside the library and
+   * every part of the path the move brings in is a name it may have.
+   *
+   * - The file name, and a folder that does not exist yet, are new names: the rule
+   *   for new names applies to them as they were asked for.
+   * - A folder the file is in already keeps the name it has, whatever that rule says
+   *   of it (`R.E.M.`, a name stored decomposed). A file in it can be renamed.
+   * - Another folder that exists may be named as it is, but not be hidden or hold an
+   *   invisible character: a file moved into `.Trashes` would be gone from every scan.
+   *
+   * A file that already has the wanted name under another spelling is a name that is
+   * taken, not a name that is wrong: that is for `freeName` to deal with.
+   */
+  async function assertUsableTarget(root: string, to: string, from: string): Promise<void> {
+    if ((await fileOps.relativeTo(root, to)) === null) {
       throw new AppError('INVALID_INPUT', 'a file may only be moved inside its library')
     }
-    const parts = inRoot.split(sep)
-    parts.forEach((part, index) => {
-      const reason = unusableNameReason(part, index === parts.length - 1 ? 'file' : 'folder')
-      if (reason !== null) throw new AppError('INVALID_INPUT', `a name is not usable: ${reason}`)
-    })
+    const refuse = (reason: string): never => {
+      throw new AppError('INVALID_INPUT', `a name is not usable: ${reason}`)
+    }
+    const fileReason = unusableNameReason(basename(to), 'file')
+    if (fileReason !== null) refuse(fileReason)
+    for (let folder = dirname(to); ; folder = dirname(folder)) {
+      // Up to the root of the library, whose name is not the app's to judge.
+      if (dirname(folder) === folder || (await fileOps.relativeTo(root, folder)) === null) break
+      const name = basename(folder)
+      if (!(await fileOps.exists(folder))) {
+        const folderReason = unusableNameReason(name, 'folder')
+        if (folderReason !== null) refuse(folderReason)
+        continue
+      }
+      // The file is in this folder, and so in every folder above it.
+      if (await fileOps.isInside(from, folder)) break
+      if (name.startsWith('.')) refuse('it would put the file into a hidden folder')
+      if (UNSAFE_TEXT.test(name)) refuse('a folder on the way holds an invisible character')
+    }
   }
 
   /**
@@ -470,44 +533,86 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   return {
     forTrack(batch, trackId, signal) {
       let prepared: Promise<string> | null = null
-      const working = (): Promise<string> => (prepared ??= prepare(batch, trackId, signal))
+      // True when the copy in the clean library could not get the name of its original.
+      let copyCollided = false
+      const working = (): Promise<string> =>
+        (prepared ??= prepare(batch, trackId, signal, () => {
+          copyCollided = true
+        }))
 
       return {
         workingPath: () => withTrack(trackId, working),
 
+        ensureCleanCopy: () =>
+          withTrack(trackId, async () => {
+            if (batch.mode !== 'clean_library') return { collided: false }
+            const track = await reconcile(batch.id, readTrack(trackId))
+            if (!(await isCleanCopy(track.path))) await working()
+            return { collided: copyCollided }
+          }),
+
+        wouldMove: (fileName) =>
+          withTrack(trackId, async () => {
+            // A name, never a path: the file stays in the folder it is in. Checked
+            // first of all, so that no answer is ever given about another place.
+            if (unusableNameReason(fileName, 'file') !== null) {
+              throw new AppError('INVALID_INPUT', 'the name cannot be given to a file')
+            }
+            // The file as it is now, without the backup or the copy `working` makes.
+            const track = await reconcile(batch.id, readTrack(trackId))
+            if (!(await fileOps.exists(track.path))) {
+              throw new AppError('FILE_UNREADABLE', 'the file of the track is not where it was')
+            }
+            // The clean library holds every track a batch was approved for: one
+            // that has no copy there yet gets it, whatever its name.
+            if (batch.mode === 'clean_library' && !(await isCleanCopy(track.path))) return true
+            const to = join(dirname(track.path), fileName)
+            await assertUsableTarget(await workingRoot(track.path), to, track.path)
+            const free = await fileOps.freeName(to, track.path)
+            if (free.path === track.path) return false
+            if (ownedByAnother(free.path, trackId)) {
+              throw new AppError('WRITE_FAILED', 'the new name belongs to another track')
+            }
+            return true
+          }),
+
         move: (to) =>
           withTrack(trackId, async () => {
             const from = await working()
-            const root = await workingRoot(from)
-            await assertUsableTarget(root, to)
-            return withNames(async () => {
-              const free = await fileOps.freeName(to, from)
-              if (free.path === from) return { path: from, collided: false }
-              // A track whose file is missing still has its path: taking the name
-              // would leave this file under a name the database cannot give it.
-              const owner = findTrackIdByPath(db, free.path)
-              if (owner !== undefined && owner !== trackId) {
-                throw new AppError('WRITE_FAILED', 'the new name belongs to another track')
-              }
-              // A stage that was told to stop renames nothing any more.
-              if (signal.aborted) throw new AppError('WRITE_FAILED', 'the move was stopped')
-              // Written down first: if the app stops right after the rename, undo and
-              // the next run still know about the new name.
-              recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path })
-              try {
-                await fileOps.move(from, free.path)
-              } catch (error) {
-                deleteCreatedFile(db, batch.id, free.path)
-                throw error
-              }
-              updateTrack(db, trackId, { path: free.path })
-              prepared = Promise.resolve(free.path)
-              return free
-            })
+            await assertUsableTarget(await workingRoot(from), to, from)
+            return moveTo(from, to)
           }),
 
         replaceContent: (write) =>
           withTrack(trackId, async () => fileOps.replace(await working(), write, signal))
+      }
+
+      function moveTo(from: string, to: string): Promise<{ path: string; collided: boolean }> {
+        return withNames(async () => {
+          const free = await fileOps.freeName(to, from)
+          // The file keeps the name it has. With ` (2)` if that is what it has
+          // because the plain name is taken, which the caller is told.
+          if (free.path === from) return { path: from, collided: free.collided }
+          // A track whose file is missing still has its path: taking the name
+          // would leave this file under a name the database cannot give it.
+          if (ownedByAnother(free.path, trackId)) {
+            throw new AppError('WRITE_FAILED', 'the new name belongs to another track')
+          }
+          // A stage that was told to stop renames nothing any more.
+          if (signal.aborted) throw new AppError('WRITE_FAILED', 'the move was stopped')
+          // Written down first: if the app stops right after the rename, undo and
+          // the next run still know about the new name.
+          recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path })
+          try {
+            await fileOps.move(from, free.path)
+          } catch (error) {
+            deleteCreatedFile(db, batch.id, free.path)
+            throw error
+          }
+          updateTrack(db, trackId, { path: free.path })
+          prepared = Promise.resolve(free.path)
+          return free
+        })
       }
     },
 

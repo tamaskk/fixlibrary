@@ -6,6 +6,7 @@ import {
   MAX_TRACK_PAGE_SIZE,
   countTracks,
   deleteTrack,
+  findTrackIdsWithName,
   getTrackById,
   getTracksByIds,
   insertTracks,
@@ -444,5 +445,86 @@ describe('getTracksByIds', () => {
     // Assert
     expect(found.map((track) => track.id).sort((a, b) => a - b)).toEqual(ids)
     expect(found.every((track) => track.offline)).toBe(true)
+  })
+})
+
+describe('findTrackIdsWithName', () => {
+  function ids(paths: string[]): number[] {
+    return insertTracks(
+      testDatabase.db,
+      paths.map((path) => newTrack(path))
+    )
+  }
+
+  it('finds the track that has the name in another letter case or Unicode form', () => {
+    // Arrange
+    const [upper, decomposed] = ids(['/Music/Inbox/ARTIST - Dal.mp3', '/Music/Inbox/Ákos.mp3'])
+
+    // Act
+    const byCase = findTrackIdsWithName(testDatabase.db, '/Music/Inbox/artist - dal.mp3')
+    const byForm = findTrackIdsWithName(testDatabase.db, '/Music/Inbox/A\u0301kos.mp3')
+
+    // Assert
+    expect(byCase).toEqual([upper])
+    expect(byForm).toEqual([decomposed])
+  })
+
+  it.each([
+    ['Straße.mp3', 'STRASSE.mp3'],
+    ['ΟΔΟΣ.mp3', 'οδος.mp3'],
+    ['ΟΔΟΣ.mp3', 'οδοσ.mp3'],
+    ['\ufb01sh.mp3', 'Fish.mp3'],
+    ['\u017fong.mp3', 'Song.mp3'],
+    ['\u00b5.mp3', '\u03bc.mp3']
+  ])('takes %s and %s for one name, as a disk that ignores letter case does', (stored, asked) => {
+    // Arrange
+    const [id] = ids([`/Music/Inbox/${stored}`])
+
+    // Act
+    const found = findTrackIdsWithName(testDatabase.db, `/Music/Inbox/${asked}`)
+
+    // Assert
+    expect(found).toEqual([id])
+  })
+
+  it('looks in the one folder only, whatever its name holds', () => {
+    // Arrange
+    const [wanted] = ids([
+      '/Music/100%_x0/Song.mp3',
+      '/Music/100%_x0/Sub/Song.mp3',
+      '/Music/100%_x0 2/Song.mp3',
+      '/Music/100X_x0/Song.mp3',
+      '/Music/100%_x00/Song.mp3',
+      '/Music/100%_x/Song.mp3',
+      '/Music/Song.mp3'
+    ])
+
+    // Act
+    const found = findTrackIdsWithName(testDatabase.db, '/Music/100%_x0/SONG.mp3')
+
+    // Assert
+    expect(found).toEqual([wanted])
+  })
+
+  it('finds a track in the root folder', () => {
+    // Arrange
+    const [id] = ids(['/Song.mp3', '/Music/Song.mp3'])
+
+    // Act
+    const found = findTrackIdsWithName(testDatabase.db, '/SONG.mp3')
+
+    // Assert
+    expect(found).toEqual([id])
+  })
+
+  it('finds nothing for a name no track has', () => {
+    // Arrange
+    ids(['/Music/Inbox/One.mp3'])
+
+    // Act
+    const found = findTrackIdsWithName(testDatabase.db, '/Music/Inbox/Two.mp3')
+
+    // Assert
+    expect(found).toEqual([])
   })
 })

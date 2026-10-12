@@ -101,7 +101,8 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
     await expect(run.getByLabel('Funkció').getByRole('option')).toHaveText([
       'Minden funkció',
       'Online lookup',
-      'BPM és key elemzés'
+      'BPM és key elemzés',
+      'Fájlnév és névtisztítás'
     ])
     await expect(run.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeEnabled()
     await expect(run.getByRole('button', { name: 'Futtatás a teljes könyvtáron' })).toBeEnabled()

@@ -1,6 +1,8 @@
 import { createBpmKeyStage, type BpmKeyStageDependencies } from './bpm-key'
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
+import { createNamingStage } from './naming'
+import { createRenameStage } from './rename'
 import type { Stage } from './stage'
 
 export type StageDependencies = BpmKeyStageDependencies &
@@ -12,7 +14,9 @@ export function createStages(dependencies: StageDependencies): Stage[] {
   return [
     createFingerprintStage(dependencies),
     createLookupStage(dependencies),
-    createBpmKeyStage(dependencies)
+    createBpmKeyStage(dependencies),
+    createNamingStage(),
+    createRenameStage()
   ]
 }
 

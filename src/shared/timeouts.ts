@@ -8,6 +8,9 @@ const MINUTE = 60 * SECOND
 export const STAGE_TIMEOUTS_MS = {
   lookup: 30 * SECOND,
   fingerprint: 120 * SECOND,
+  naming: 10 * SECOND,
+  // In the clean library the copy of the whole file is made by this step.
+  rename: 5 * MINUTE,
   bpmKey: 120 * SECOND,
   energy: 120 * SECOND,
   demucs: 15 * MINUTE,
