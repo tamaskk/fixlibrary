@@ -1,6 +1,7 @@
 // The main <-> Python sidecar contract: JSON-RPC 2.0, one JSON document per line.
 // python/fixlib_py mirrors these methods by hand; change both sides in the same commit.
 import { z } from 'zod'
+import { CAMELOT_KEYS, KEY_SCALES, keyOf } from './keys'
 
 /** How many files one `tags.read` call may name. The same limit is in fixlib_py/tags.py. */
 export const TAG_BATCH_SIZE = 50
@@ -35,6 +36,38 @@ export const fileTagsSchema = z.object({
 
 export type FileTags = z.output<typeof fileTagsSchema>
 
+/**
+ * Names the algorithm behind `analysis.bpm_key`. It is stored with every result, and
+ * a track is analysed again only when it changes. The same text is ANALYZER_VERSION
+ * in fixlib_py/analysis/bpm_key.py.
+ */
+export const BPM_KEY_ANALYZER_VERSION = 'essentia-2.1b6-multifeature-edma-1'
+
+export const bpmKeyResultSchema = z
+  .object({
+    /** The tempo inside the range that was asked for, moved there by octaves. */
+    bpm: z.number().positive().max(1000),
+    /** The tempo as it was measured. */
+    rawBpm: z.number().positive().max(10_000),
+    /** Essentia's own scale: below 1.5 is a weak guess, above 3.5 a sure one. */
+    bpmConfidence: z.number().min(0).max(10),
+    keyName: z.string().min(1).max(2),
+    scale: z.enum(KEY_SCALES),
+    keyStrength: z.number().min(-1).max(1),
+    camelot: z.enum(CAMELOT_KEYS),
+    musical: z.string().min(1).max(3),
+    // A sidecar that runs another algorithm than this build expects is a bug of the
+    // build; its results must not be stored under this build's version.
+    analyzerVersion: z.literal(BPM_KEY_ANALYZER_VERSION)
+  })
+  // Both sides hold the table of keys; an answer they disagree on is not taken.
+  .refine((result) => {
+    const key = keyOf(result.keyName, result.scale)
+    return key !== null && key.camelot === result.camelot && key.musical === result.musical
+  })
+
+export type BpmKeyResult = z.output<typeof bpmKeyResultSchema>
+
 export const RPC_SCHEMAS = {
   ping: {
     params: z.object({}),
@@ -58,6 +91,16 @@ export const RPC_SCHEMAS = {
     // One entry per path, in input order. Each entry is checked on its own with
     // `fileTagsSchema` by the caller, so one bad entry cannot reject the others.
     result: z.object({ files: z.array(z.unknown()).max(TAG_BATCH_SIZE) })
+  },
+  /** Measures tempo and key from the audio of one file. Reads the file only. */
+  'analysis.bpm_key': {
+    params: z.object({
+      path: z.string().min(1),
+      jobId: z.string().min(1).max(64),
+      bpmMin: z.number(),
+      bpmMax: z.number()
+    }),
+    result: bpmKeyResultSchema
   }
 } as const
 

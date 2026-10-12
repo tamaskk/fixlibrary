@@ -11,6 +11,8 @@ import inspect
 import json
 import logging
 import math
+import multiprocessing
+import multiprocessing.connection
 import os
 import re
 import signal
@@ -104,13 +106,49 @@ class ProtocolWriter:
             self._stream.flush()
 
 
+def _exit_with_parent() -> None:
+    """Runs in a pool worker as it starts: the worker ends when the sidecar does.
+
+    A worker is not told when its parent is gone, however that ended, and would go on
+    analysing a file after the app has quit.
+    """
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def watch() -> None:
+        multiprocessing.connection.wait([parent.sentinel])
+        os._exit(0)
+
+    threading.Thread(target=watch, name="parent-watch", daemon=True).start()
+
+
+def new_worker_pool(max_workers: int) -> ProcessPoolExecutor:
+    """A process pool whose workers do not outlive the sidecar."""
+    return ProcessPoolExecutor(max_workers=max_workers, initializer=_exit_with_parent)
+
+
 def cpu_pool() -> ProcessPoolExecutor:
     """The process pool for CPU analysis. Created on first use so startup stays fast."""
     global _cpu_pool
     with _executor_lock:
         if _cpu_pool is None:
-            _cpu_pool = ProcessPoolExecutor(max_workers=max(1, (os.cpu_count() or 2) - 1))
+            _cpu_pool = new_worker_pool(max(1, (os.cpu_count() or 2) - 1))
         return _cpu_pool
+
+
+def discard_cpu_pool(pool: ProcessPoolExecutor) -> None:
+    """Drop a pool whose worker died, so the next job gets a new one.
+
+    A process pool that lost a worker fails every job it holds and takes no more.
+    Names the pool it means: several jobs notice the same broken pool, and only the
+    first of them may replace it.
+    """
+    global _cpu_pool
+    with _executor_lock:
+        if _cpu_pool is pool:
+            _cpu_pool = None
+    pool.shutdown(wait=False, cancel_futures=True)
 
 
 def demucs_executor() -> ThreadPoolExecutor:
@@ -375,6 +413,7 @@ def claim_stdin() -> TextIO:
 def main() -> None:
     # The modules whose `@rpc` methods the sidecar serves; importing registers them.
     from fixlib_py import tags  # noqa: F401
+    from fixlib_py.analysis import bpm_key  # noqa: F401
 
     protocol_output = claim_stdout()
     protocol_input = claim_stdin()

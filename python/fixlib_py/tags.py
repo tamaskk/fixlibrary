@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import stat
 from collections import Counter
 from typing import Any, BinaryIO
 
@@ -17,6 +16,7 @@ from mutagen.aiff import AIFF
 from mutagen.mp3 import MP3
 from mutagen.wave import WAVE
 
+from fixlib_py.files import open_regular_file
 from fixlib_py.server import rpc
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,6 @@ _PARSERS: dict[str, type[MP3] | type[WAVE] | type[AIFF]] = {
     ".aif": AIFF,
     ".aiff": AIFF,
 }
-# Opens nothing that is reached through a link, in any part of the path. The app
-# only sends paths under a library root that has its links resolved already.
-# The two flags cannot be combined; the wider one is used where the system has it.
-_NO_LINKS = getattr(os, "O_NOFOLLOW_ANY", os.O_NOFOLLOW)
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 # Invisible characters that change the reading direction, so text cannot be made to
 # look like something else. Joiners stay: emoji and some scripts need them.
@@ -128,13 +124,12 @@ def _parse(path: str) -> dict[str, Any]:
     if parser is None:
         return _unreadable(path)
     # Opened here, not by mutagen: a link is never followed, and something that is
-    # not a regular file (a pipe would block forever) is never read.
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | _NO_LINKS)
-    with os.fdopen(descriptor, "rb") as file:
-        state = os.fstat(file.fileno())
-        if not stat.S_ISREG(state.st_mode):
-            return _unreadable(path)
-        audio = parser(_BoundedReader(file, state.st_size))
+    # not a regular file is never read.
+    file = open_regular_file(path)
+    if file is None:
+        return _unreadable(path)
+    with file:
+        audio = parser(_BoundedReader(file, os.fstat(file.fileno()).st_size))
 
         result = _unreadable(path)
         result["readable"] = True
