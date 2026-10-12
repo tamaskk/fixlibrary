@@ -1,6 +1,7 @@
 import { and, eq, lt } from 'drizzle-orm'
 import type { AppDatabase } from './connection'
 import { backups, batchFiles } from './schema'
+import { normalizeTrackPath } from './track-paths'
 
 export type Backup = typeof backups.$inferSelect
 export type CreatedFile = typeof batchFiles.$inferSelect
@@ -49,7 +50,9 @@ export function recordCreatedFile(
   file: { batchId: number; trackId: number; path: string }
 ): void {
   db.insert(batchFiles)
-    .values(file)
+    // In the one spelling a track's path is stored in: undo knows a file of the
+    // batch by comparing the two, and a folder may be spelled otherwise on disk.
+    .values({ ...file, path: normalizeTrackPath(file.path) })
     // The name may have been another track's earlier in the batch: it is this one's now.
     .onConflictDoUpdate({
       target: [batchFiles.batchId, batchFiles.path],
@@ -70,7 +73,7 @@ export function deleteCreatedFiles(db: AppDatabase, batchId: number): void {
 /** Takes back the note about one file: it was not created after all. */
 export function deleteCreatedFile(db: AppDatabase, batchId: number, path: string): void {
   db.delete(batchFiles)
-    .where(and(eq(batchFiles.batchId, batchId), eq(batchFiles.path, path)))
+    .where(and(eq(batchFiles.batchId, batchId), eq(batchFiles.path, normalizeTrackPath(path))))
     .run()
 }
 

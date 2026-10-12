@@ -8,6 +8,12 @@ export function stubBatchFiles(overrides: Partial<BatchFiles> = {}): BatchFiles 
       workingPath: async () => {
         throw new Error('this test has no files')
       },
+      ensureCleanCopy: async () => {
+        throw new Error('this test has no files')
+      },
+      wouldMove: async () => {
+        throw new Error('this test has no files')
+      },
       move: async () => {
         throw new Error('this test has no files')
       },

@@ -1,4 +1,5 @@
-import { asc, count, eq, inArray } from 'drizzle-orm'
+import { basename, dirname } from 'path'
+import { and, asc, count, eq, gte, inArray, lt } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import { AUDIO_FORMATS, COVER_STATUSES, styles, tracks } from './schema'
@@ -296,6 +297,33 @@ export function findTrackIdByPath(db: AppDatabase, path: string): number | undef
     .from(tracks)
     .where(eq(tracks.path, normalizeTrackPath(path)))
     .get()?.id
+}
+
+/**
+ * The tracks whose path is this one in any letter case and any Unicode form: on the
+ * disks a library is on, those are all names of one file. For asking whether a name
+ * is another track's before a file is given it.
+ */
+export function findTrackIdsWithName(db: AppDatabase, path: string): number[] {
+  const wanted = normalizeTrackPath(path)
+  const folder = dirname(wanted)
+  // As a disk that ignores letter case compares names, as near as can be told from
+  // here: compatibility forms and both directions of case, so that `ß` and `ss`,
+  // a ligature and its letters, and the two small sigmas are one.
+  const fold = (name: string): string => name.normalize('NFKC').toUpperCase().toLowerCase()
+  // Everything below the folder: `0` is the character after `/`.
+  const from = folder.endsWith('/') ? folder : `${folder}/`
+  const to = `${from.slice(0, -1)}0`
+  return db
+    .select({ id: tracks.id, path: tracks.path })
+    .from(tracks)
+    .where(and(gte(tracks.path, from), lt(tracks.path, to)))
+    .all()
+    .filter(
+      (track) =>
+        dirname(track.path) === folder && fold(basename(track.path)) === fold(basename(wanted))
+    )
+    .map((track) => track.id)
 }
 
 /**

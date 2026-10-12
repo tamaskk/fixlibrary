@@ -15,7 +15,7 @@ import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { listBackups, listCreatedFiles, recordCreatedFile } from '../db/backups'
+import { deleteCreatedFile, listBackups, listCreatedFiles, recordCreatedFile } from '../db/backups'
 import { createBatch, getBatch, setBatchStatus, type BatchMode } from '../db/batches'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { backups as backupsTable, batchItems } from '../db/schema'
@@ -1040,5 +1040,29 @@ describe('work on a file that nobody waits for any more', () => {
     expect(whileWriting).toBe(true)
     expect(settledEarly).toBe(false)
     expect(files.busy()).toBe(false)
+  })
+})
+
+describe('the note about a file a batch created', () => {
+  it('is kept in the composed spelling, however the path was spelled when it was noted', () => {
+    // Arrange
+    const [id] = insertTracks(testDatabase.db, [
+      { path: '/Music/a.mp3', originalPath: '/Music/a.mp3', format: 'mp3' as const }
+    ]) as [number]
+    const batchId = createBatch(testDatabase.db, {
+      type: 'run',
+      mode: 'clean_library',
+      items: [{ trackId: id, before: {} }]
+    })
+    const decomposed = '/Clean/Válogatás/Ákos.mp3'
+
+    // Act
+    recordCreatedFile(testDatabase.db, { batchId, trackId: id, path: decomposed })
+    const noted = listCreatedFiles(testDatabase.db, batchId).map((file) => file.path)
+    deleteCreatedFile(testDatabase.db, batchId, decomposed)
+
+    // Assert
+    expect(noted).toEqual([decomposed.normalize('NFC')])
+    expect(listCreatedFiles(testDatabase.db, batchId)).toEqual([])
   })
 })
