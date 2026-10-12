@@ -48,9 +48,12 @@ import {
 } from '@shared/preview'
 import { keyOfCamelot } from '@shared/keys'
 import { toOneLine } from '@shared/text'
+import { keepDuplicateSchema, type DuplicateGroup } from '@shared/duplicates'
+import { keepDuplicate, listDuplicateGroups } from './batch-duplicates'
 import type { BatchFiles } from './batch-files'
 import type { Orchestrator } from './orchestrator'
 import { runStage } from './run-stage'
+import { DUPLICATES_STAGE } from './stages/duplicates'
 import { identifiersSchema } from './stages/lookup'
 import type { Stage } from './stages/stage'
 
@@ -238,6 +241,13 @@ export interface Preview {
    * one track, and returns the row as it is afterwards. What the user set by hand stays.
    */
   refresh: (request: unknown) => Promise<Result<PreviewRow>>
+  /** The groups of duplicates in the batch that waits for approval. */
+  duplicates: (batchId: number) => Result<DuplicateGroup[]>
+  /**
+   * Makes one copy the one its group keeps, and returns the groups as they are
+   * afterwards. The copy that was kept before is then one that is set aside.
+   */
+  keepDuplicate: (request: unknown) => Result<DuplicateGroup[]>
   /** Takes rows out of the batch, or back in. */
   setExcluded: (request: unknown) => Result<PreviewState>
   /**
@@ -288,7 +298,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
             type: batch.type,
             mode: batch.mode,
             ...countBatchItems(db, batch.id),
-            canRefresh: refreshableStages(batch.id).length > 0
+            canRefresh: refreshableStages(batch.id).length > 0,
+            findsDuplicates: listJobStageNames(db, batch.id).includes(DUPLICATES_STAGE)
           }
         : null,
       canUndo: batchFiles.lastUndoable() !== null
@@ -318,6 +329,25 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       }
     }
     return proposal
+  }
+
+  /**
+   * Lets the stages that look at the tracks of the batch together look again: a
+   * name that changed may have made a copy of a track, or made it one no more.
+   */
+  function regroup(batchId: number): void {
+    const ran = new Set(listJobStageNames(db, batchId))
+    for (const stage of stages) {
+      if (!stage.regroup || !ran.has(stage.name)) continue
+      try {
+        stage.regroup(batchId)
+      } catch (error) {
+        // The change itself is kept; the groups stay as they were before it.
+        logRecompute(
+          `Stage ${stage.name} could not look at batch ${batchId} again: ${describeError(error)}`
+        )
+      }
+    }
   }
 
   return {
@@ -362,6 +392,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
         fields: { ...current.fields, [field]: { value: value.data, source: 'manual' } }
       }
       setBatchItemProposal(db, batchId, trackId, recomputed(batchId, track, item.before, edited))
+      // Only a name can make a track a copy of another; the batch may hold thousands.
+      if (field === 'artist' || field === 'title' || field === 'mix') regroup(batchId)
       const stored = getBatchItem(db, batchId, trackId)
       if (!stored) return { ok: false, code: 'INVALID_INPUT' }
       return { ok: true, value: buildPreviewRow(stored) }
@@ -385,6 +417,7 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
 
       refreshing = true
       lastRefreshAt = now()
+      let regrouped = false
       try {
         for (const stage of again) {
           const current = getBatchItem(db, batchId, trackId)
@@ -420,12 +453,32 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
           trackId,
           recomputed(batchId, track, stored.before, readProposal(stored.after))
         )
+        regroup(batchId)
+        regrouped = true
         const shown = getBatchItem(db, batchId, trackId)
         if (!shown) return { ok: false, code: 'INVALID_INPUT' }
         return { ok: true, value: buildPreviewRow(shown) }
       } finally {
+        // Also when a later step failed: what an earlier one stored is in the rows.
+        if (!regrouped) regroup(batchId)
         refreshing = false
       }
+    },
+
+    duplicates(batchId) {
+      const batch = findPreviewBatch(db)
+      if (!batch || batch.id !== batchId) return { ok: false, code: 'INVALID_INPUT' }
+      return { ok: true, value: listDuplicateGroups(db, batchId) }
+    },
+
+    keepDuplicate(request) {
+      const parsed = keepDuplicateSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
+      const { batchId, trackId } = parsed.data
+      const batch = waitingBatch(batchId)
+      if (!batch.ok) return batch
+      if (!keepDuplicate(db, batchId, trackId)) return { ok: false, code: 'INVALID_INPUT' }
+      return { ok: true, value: listDuplicateGroups(db, batchId) }
     },
 
     setExcluded(request) {

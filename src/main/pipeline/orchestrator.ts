@@ -30,6 +30,7 @@ import {
 import { getTrackById, getTracksByIds, type Track } from '../db/tracks'
 import { describeError } from '../services/error-text'
 import { logger } from '../services/logger'
+import { isSetAsidePath } from '@shared/duplicates'
 import { AppError, TRACK_ERROR_MESSAGES, type Result, type TrackError } from '@shared/errors'
 import {
   runStartSchema,
@@ -318,7 +319,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     if (!ofTrack) return []
     return [...ofTrack.values()].filter(
       (other) =>
-        other.stage.phase === active.phase && other.stage.dependsOn.includes(job.stage.name)
+        other.stage.phase === active.phase &&
+        (other.stage.dependsOn.includes(job.stage.name) ||
+          (other.stage.after ?? []).includes(job.stage.name))
     )
   }
 
@@ -343,7 +346,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     if (job.status !== 'queued') return
     const ofTrack = active.byTrack.get(job.trackId)
     // A dependency that is not part of this batch was not asked for: nothing to wait for.
-    const waitsFor = job.stage.dependsOn
+    const waitsFor = [...job.stage.dependsOn, ...(job.stage.after ?? [])]
       .map((name) => ofTrack?.get(name))
       .filter((dependency): dependency is RunJob => dependency !== undefined)
     if (
@@ -454,11 +457,36 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   // The deleting of older backups that is going on, or null.
   let pruning: Promise<void> | null = null
 
+  /**
+   * Lets the stages that look at the tracks of a batch together do so, now that
+   * every track is computed. Before the batch is shown: the preview opens with the
+   * groups in it. Done again after a restart that came in between, and before the
+   * batch is applied, which both change nothing when all is as it should be. Says whether
+   * anything changed, or that a stage could not do it.
+   */
+  function regroup(batchId: number, stageNames: Iterable<string>): 'same' | 'changed' | 'failed' {
+    let outcome: 'same' | 'changed' | 'failed' = 'same'
+    for (const name of new Set(stageNames)) {
+      try {
+        const changed = stagesByName.get(name)?.regroup?.(batchId) ?? false
+        if (changed && outcome === 'same') outcome = 'changed'
+      } catch (error) {
+        outcome = 'failed'
+        logger.error(
+          `Batch ${batchId}: stage ${name} could not look at its tracks together: ${describeError(error)}`
+        )
+      }
+    }
+    return outcome
+  }
+
   function endPhaseIfDone(): void {
     const active = run
     if (!active || active.unfinished > 0) return
     // The proposals wait for the user's approval; nothing is written before that.
     const status = active.phase === 'compute' ? 'preview' : 'applied'
+    // A stage that cannot do it leaves the batch shown without what it would add.
+    if (active.phase === 'compute') regroup(active.batchId, active.counts.keys())
     db.transaction((tx) => {
       setBatchStatus(tx, active.batchId, status)
       setBatchPause(tx, active.batchId, null)
@@ -714,7 +742,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       const tracks: Track[] = []
       for (const id of wanted) {
         const track = found.get(id)
-        if (track && !track.offline && !track.fileMissing) tracks.push(track)
+        // A copy that was set aside is no part of the library any more.
+        const runnable = track && !track.offline && !track.fileMissing
+        if (runnable && !isSetAsidePath(track.path)) tracks.push(track)
       }
       if (tracks.length === 0) return { ok: false, code: 'INVALID_INPUT' }
 
@@ -761,6 +791,18 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       if (isActive() || libraryBusy()) return { ok: false, code: 'RUN_ACTIVE' }
       const batch = getBatch(db, batchId)
       if (!batch || batch.status !== 'preview') return { ok: false, code: 'INVALID_INPUT' }
+
+      // What a stage keeps about the tracks together must fit the rows as they are
+      // now, whatever went wrong after an edit: a copy is set aside by it.
+      const ran = listJobs(db, batchId).map((job) => job.stage)
+      const regrouped = regroup(batchId, ran)
+      if (regrouped === 'failed') return { ok: false, code: 'UNEXPECTED' }
+      // The user confirmed what the preview showed. If that was not what the batch
+      // holds now, the preview is shown again, and nothing is written this time.
+      if (regrouped === 'changed') {
+        logger.warn(`Batch ${batchId} not applied: its groups were out of date`)
+        return { ok: false, code: 'PREVIEW_CHANGED' }
+      }
 
       busyWithFiles = true
       try {

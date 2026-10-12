@@ -333,6 +333,43 @@ export function listBatchItems(
     .all()
 }
 
+/** Every item of a batch, in the order they were added: for what looks at all of them at once. */
+export function listAllBatchItems(db: AppDatabase, batchId: number): BatchItem[] {
+  return db
+    .select()
+    .from(batchItems)
+    .where(eq(batchItems.batchId, batchId))
+    .orderBy(asc(batchItems.id))
+    .all()
+}
+
+/**
+ * Sets one entry a stage keeps for itself in the `after` of an item, next to the
+ * fields and warnings the preview shows. `undefined` takes the entry away. Returns
+ * false when the batch has no such item.
+ */
+export function setBatchItemEntry(
+  db: AppDatabase,
+  batchId: number,
+  trackId: number,
+  key: string,
+  value: unknown
+): boolean {
+  // Those two are the proposal, and are stored only as far as they are valid.
+  if (key === 'fields' || key === 'warnings') throw new Error(`"${key}" is not a stage's own entry`)
+  return db.transaction((tx) => {
+    const where = and(eq(batchItems.batchId, batchId), eq(batchItems.trackId, trackId))
+    const item = tx.select({ after: batchItems.after }).from(batchItems).where(where).get()
+    if (!item) return false
+    const stored = recordSchema.safeParse(item.after)
+    const after: Record<string, unknown> = { ...(stored.success ? stored.data : {}) }
+    if (value === undefined) delete after[key]
+    else after[key] = value
+    tx.update(batchItems).set({ after }).where(where).run()
+    return true
+  })
+}
+
 export interface BatchItemCounts {
   total: number
   excluded: number

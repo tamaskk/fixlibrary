@@ -48,6 +48,13 @@ export interface Stage {
   resource: Resource
   /** Stages that must be done for the same track first. */
   dependsOn: readonly string[]
+  /**
+   * Stages of the same phase that must be done for the same track first when they
+   * are part of the batch, and are not brought into it otherwise. For two stages
+   * that change one file: their steps must not be mixed, whichever was asked for.
+   * If such a stage fails for a track, this one does not run for it.
+   */
+  after?: readonly string[]
   /** True for a stage the user can ask for by itself in the function chooser. */
   selectable: boolean
   timeoutMs: number
@@ -59,6 +66,14 @@ export interface Stage {
    * file, no network, no database.
    */
   recompute?: (track: Track, values: Record<PreviewField, PreviewValue>) => Proposal | void
+  /**
+   * For a compute stage that looks at the tracks of a batch together, such as the
+   * search for duplicates: called once every track of the batch is computed, and
+   * again whenever the user changed a row in the preview. It reads and writes the
+   * items of the batch only, and must give the same result when it is called twice.
+   * Returns true when it changed anything about the batch.
+   */
+  regroup?: (batchId: number) => boolean
   /**
    * True for a stage whose result the user can ask for again from the preview, for
    * one track: it is then run once more with `context.refresh` set.

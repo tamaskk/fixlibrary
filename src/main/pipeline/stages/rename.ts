@@ -4,6 +4,7 @@ import { extensionOf } from '@shared/file-names'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { isBuiltFileName } from '../naming'
 import { NAMING_STAGE } from './naming'
+import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage } from './stage'
 
 export const RENAME_STAGE = 'rename'
@@ -20,6 +21,10 @@ export function createRenameStage(): Stage {
     phase: 'apply',
     resource: 'io',
     dependsOn: [NAMING_STAGE],
+    // Both move the file, and their steps must not be mixed. Set aside first: a
+    // copy that is not kept then gets its name in `_Duplicates`, and does not take
+    // the name in the folder that the copy that is kept is about to get.
+    after: [SET_ASIDE_STAGE],
     selectable: false,
     timeoutMs: STAGE_TIMEOUTS_MS.rename,
     run: async ({ files, proposal }, track) => {

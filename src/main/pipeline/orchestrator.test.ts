@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getBatch, setBatchStatus } from '../db/batches'
+import { approveBatchItems, getBatch, setBatchStatus } from '../db/batches'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { listJobs } from '../db/jobs'
 import { batchItems, batches } from '../db/schema'
@@ -238,6 +238,144 @@ describe('a run', () => {
     expect(hashes()).toEqual(before)
     expect(testDatabase.db.select().from(batchItems).all()[0]?.after).toEqual({ bytes: 10_468 })
     rmSync(folder, { recursive: true, force: true })
+  })
+})
+
+describe('a stage that looks at the tracks of a batch together', () => {
+  it('is asked once, when every track is computed and before the batch waits for approval', async () => {
+    // Arrange
+    const trackIds = addTracks(5)
+    const asked: { batchId: number; finished: number; status: string | undefined }[] = []
+    const together: Stage = {
+      ...fakeStage('duplicates', { ms: 20 }),
+      regroup: (batchId) => {
+        asked.push({
+          batchId,
+          finished: finished.length,
+          status: getBatch(testDatabase.db, batchId)?.status
+        })
+        return true
+      }
+    }
+    // A stage that was not part of the run is not asked about its batch.
+    const never = { batchId: -1, finished: -1, status: 'never' }
+    const absent: Stage = { ...fakeStage('other'), regroup: () => asked.push(never) > 0 }
+    const run = orchestrator([fakeStage('lookup', { ms: 10 }), together, absent])
+
+    // Act
+    const result = run.start({ trackIds, stages: ['lookup', 'duplicates'] })
+    await vi.runAllTimersAsync()
+
+    // Assert
+    const batchId = result.ok ? result.value.batchId : -1
+    expect(asked).toEqual([{ batchId, finished: 10, status: 'computing' }])
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
+  })
+
+  it('is asked once more before the batch is applied, which is refused when it cannot answer or anything changed', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    let asked = 0
+    let broken = false
+    let stale = false
+    const run = orchestrator([
+      {
+        ...fakeStage('duplicates', { ms: 10 }),
+        regroup: () => {
+          asked += 1
+          if (broken) throw new Error('the items cannot be read')
+          return stale
+        }
+      },
+      fakeStage('setAside', { phase: 'apply', resource: 'io', dependsOn: ['duplicates'], ms: 10 })
+    ])
+    const result = run.start({ trackIds, stages: ['duplicates', 'setAside'] })
+    await vi.runAllTimersAsync()
+    const batchId = result.ok ? result.value.batchId : -1
+    approveBatchItems(testDatabase.db, batchId)
+
+    // Act
+    broken = true
+    const refused = await run.applyBatch(batchId)
+    const statusThen = getBatch(testDatabase.db, batchId)?.status
+    broken = false
+    // What it holds turned out to be other than what the preview showed.
+    stale = true
+    const changed = await run.applyBatch(batchId)
+    stale = false
+    const applying = run.applyBatch(batchId)
+    await vi.runAllTimersAsync()
+
+    // Assert: what is set aside is never decided by groups that may be out of date.
+    expect(refused).toEqual({ ok: false, code: 'UNEXPECTED' })
+    expect(changed).toEqual({ ok: false, code: 'PREVIEW_CHANGED' })
+    expect(statusThen).toBe('preview')
+    expect(startedCount(`setAside:${trackIds[0]}`)).toBe(1)
+    expect((await applying).ok).toBe(true)
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('applied')
+    expect(asked).toBe(4)
+  })
+
+  it('makes a stage wait for another of its phase only when that one is in the batch', async () => {
+    // Arrange
+    const trackIds = addTracks(3)
+    const stages = (): Stage[] => [
+      fakeStage('naming', { ms: 5 }),
+      fakeStage('duplicates', { ms: 5 }),
+      fakeStage('setAside', { phase: 'apply', resource: 'io', dependsOn: ['duplicates'], ms: 30 }),
+      {
+        ...fakeStage('rename', { phase: 'apply', resource: 'io', dependsOn: ['naming'], ms: 5 }),
+        after: ['setAside']
+      }
+    ]
+    const both = orchestrator(stages())
+    const first = both.start({ trackIds, stages: ['naming', 'duplicates', 'rename', 'setAside'] })
+    await vi.runAllTimersAsync()
+    approveBatchItems(testDatabase.db, first.ok ? first.value.batchId : -1)
+
+    // Act
+    void both.applyBatch(first.ok ? first.value.batchId : -1)
+    await vi.runAllTimersAsync()
+    const together = [...finished]
+    finished = []
+    const alone = both.start({ trackIds, stages: ['naming', 'rename'] })
+    await vi.runAllTimersAsync()
+    approveBatchItems(testDatabase.db, alone.ok ? alone.value.batchId : -1)
+    void both.applyBatch(alone.ok ? alone.value.batchId : -1)
+    await vi.runAllTimersAsync()
+
+    // Assert: for every track the slower step ended before the other began.
+    for (const id of trackIds) {
+      expect(together.indexOf(`setAside:${id}`)).toBeLessThan(together.indexOf(`rename:${id}`))
+      expect(started.indexOf(`rename:${id}`)).toBeGreaterThan(-1)
+    }
+    expect(finished.filter((each) => each.startsWith('rename:'))).toHaveLength(3)
+    expect(finished.some((each) => each.startsWith('setAside:'))).toBe(false)
+  })
+
+  it('still shows the batch when the stage cannot do it', async () => {
+    // Arrange
+    const trackIds = addTracks(2)
+    const errors = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const run = orchestrator([
+      {
+        ...fakeStage('duplicates', { ms: 10 }),
+        regroup: () => {
+          throw new Error('the items cannot be read')
+        }
+      }
+    ])
+
+    // Act
+    const result = run.start({ trackIds, stages: ['duplicates'] })
+    await vi.runAllTimersAsync()
+
+    // Assert
+    const batchId = result.ok ? result.value.batchId : -1
+    expect(getBatch(testDatabase.db, batchId)?.status).toBe('preview')
+    expect(run.progress()).toBeNull()
+    expect(errors).toHaveBeenCalledTimes(1)
   })
 })
 
