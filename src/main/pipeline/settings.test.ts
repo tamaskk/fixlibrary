@@ -506,6 +506,23 @@ describe('unsuitable library roots', () => {
     expect([dataVolume, usersThere]).toEqual([true, true])
   })
 
+  it('refuses a library, and a clean library, that is or is inside a _Duplicates folder', () => {
+    // Arrange
+    const named = makeFolder('_Duplicates')
+    const inside = makeFolder('_duplicates/Music')
+    const alike = makeFolder('_Duplicates of mine')
+
+    // Act
+    const roots = [named, inside, alike].map((folder) =>
+      isUnsuitableLibraryRoot(folder, environment)
+    )
+    const clean = setFolder(testDatabase.db, 'cleanLibrary', inside, environment)
+
+    // Assert: every track in such a folder would count as set aside.
+    expect(roots).toEqual([true, true, false])
+    expect(clean).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+
   it('reports folders that came to overlap after they were chosen', () => {
     // Arrange
     const library = makeFolder('Music')

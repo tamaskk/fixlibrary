@@ -372,6 +372,9 @@ describe('the rename stage', () => {
         moves.push(to)
         return { path: to, collided: false }
       },
+      setAside: async () => {
+        throw new Error('a rename sets nothing aside')
+      },
       replaceContent: async () => {
         throw new Error('a rename writes no content')
       }

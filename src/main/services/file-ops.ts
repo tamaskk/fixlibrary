@@ -3,8 +3,8 @@
 // when, is decided by `pipeline/batch-files.ts`. This module makes sure that a
 // change either happens completely or not at all, never outside its folders, and
 // never over a file that is already there unless it was asked to replace exactly that.
-import { randomBytes } from 'crypto'
-import { constants } from 'fs'
+import { createHash, randomBytes } from 'crypto'
+import { constants, createReadStream } from 'fs'
 import {
   copyFile,
   link,
@@ -35,8 +35,8 @@ const TEMP_SUFFIX = '.fixlib-tmp'
 const MAX_TEMP_STEM_LENGTH = 200
 // After this many taken names something else is wrong than a name that is in use.
 const MAX_NAME_ATTEMPTS = 1000
-// The file systems of a Mac's drives never hold more in one name.
-const NAME_LIMIT = 255
+/** The file systems of a Mac's drives never hold more in one name. */
+export const NAME_LIMIT = 255
 export interface FileOpsOptions {
   /**
    * The folders this module may change anything in: the library, the clean library
@@ -87,8 +87,15 @@ export interface FileOps {
   exists: (path: string) => Promise<boolean>
   /** True for a regular file: not a folder, not a link, not anything else. */
   isRegularFile: (path: string) => Promise<boolean>
+  /** True for a folder itself: not a link to one, and not a path that is not there. */
+  isFolder: (path: string) => Promise<boolean>
   /** True when both paths name one file on disk, however they are spelled. */
   sameFile: (first: string, second: string) => Promise<boolean>
+  /**
+   * True when both are regular files that hold the same bytes. Reads both: for the
+   * few files of which it must be known that writing one over the other loses nothing.
+   */
+  sameContent: (first: string, second: string) => Promise<boolean>
   /** True when `path` is `folder` or lies inside it, by what they are on disk. */
   isInside: (path: string, folder: string) => Promise<boolean>
   /**
@@ -149,8 +156,19 @@ function codeOf(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | null)?.code
 }
 
+/** The sha256 of a file, read as a stream: a track may be hundreds of megabytes. */
+function digestOf(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    createReadStream(path)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('error', reject)
+      .on('end', () => resolve(hash.digest('hex')))
+  })
+}
+
 /** True for a name that only differs in letter case or Unicode form from another. */
-function isRespelling(first: string, second: string): boolean {
+export function isRespelling(first: string, second: string): boolean {
   const fold = (path: string): string => basename(path).normalize('NFC').toLowerCase()
   return dirname(first) === dirname(second) && fold(first) === fold(second)
 }
@@ -375,9 +393,33 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       }
     },
 
+    async isFolder(path) {
+      try {
+        return (await lstat(path)).isDirectory()
+      } catch {
+        return false
+      }
+    },
+
     async sameFile(first, second) {
       const identity = await identityOf(first)
       return identity !== null && identity === (await identityOf(second))
+    },
+
+    async sameContent(first, second) {
+      const sizes: number[] = []
+      for (const path of [first, second]) {
+        try {
+          const found = await lstat(path)
+          if (!found.isFile()) return false
+          sizes.push(found.size)
+        } catch {
+          return false
+        }
+      }
+      if (sizes[0] !== sizes[1]) return false
+      const [one, other] = await Promise.all([digestOf(first), digestOf(second)])
+      return one === other
     },
 
     async isInside(path, folder) {

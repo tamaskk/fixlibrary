@@ -17,11 +17,15 @@ export function stubBatchFiles(overrides: Partial<BatchFiles> = {}): BatchFiles 
       move: async () => {
         throw new Error('this test has no files')
       },
+      setAside: async () => {
+        throw new Error('this test has no files')
+      },
       replaceContent: async () => {
         throw new Error('this test has no files')
       }
     }),
     checkSpace: async () => ({ enough: true, neededBytes: 0, freeBytes: 0 }),
+    restoredOriginals: async () => new Set<string>(),
     lastUndoable: () => null,
     undoLast: async () => ({ ok: false, code: 'NOTHING_TO_UNDO' }),
     pruneOlderBackups: async () => {},

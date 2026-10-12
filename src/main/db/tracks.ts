@@ -1,10 +1,11 @@
 import { basename, dirname } from 'path'
-import { and, asc, count, eq, gte, inArray, lt } from 'drizzle-orm'
+import { and, asc, count, eq, gte, inArray, lt, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import type { AppDatabase } from './connection'
 import { AUDIO_FORMATS, COVER_STATUSES, styles, tracks } from './schema'
 import { normalizeTrackPath, volumeNameOfPath } from './track-paths'
 import { logger } from '../services/logger'
+import { DUPLICATES_FOLDER } from '@shared/duplicates'
 
 export const STAGE_STATUSES = ['pending', 'done', 'failed', 'skipped'] as const
 export const MAX_TRACK_PAGE_SIZE = 500
@@ -121,6 +122,11 @@ export function getTracksByIds(
   return found
 }
 
+// A copy that was set aside as a duplicate keeps its row, for undo and for the file
+// that is still on the disk, but is no part of the library: what lists the library
+// leaves it out. The same rule as `isSetAsidePath`, which the scan goes by.
+const inLibrary = sql`instr(lower(${tracks.path}), ${`/${DUPLICATES_FOLDER.toLowerCase()}/`}) = 0`
+
 /** One page of tracks ordered by path. The page size is capped at MAX_TRACK_PAGE_SIZE. */
 export function listTracks(
   db: AppDatabase,
@@ -133,6 +139,7 @@ export function listTracks(
   return db
     .select()
     .from(tracks)
+    .where(inLibrary)
     .orderBy(asc(tracks.path))
     .limit(limit)
     .offset(offset)
@@ -209,8 +216,9 @@ export function setTracksMissing(db: AppDatabase, ids: readonly number[], missin
   })
 }
 
+/** How many tracks the library has. A copy that was set aside is not one of them. */
 export function countTracks(db: AppDatabase): number {
-  return db.select({ total: count() }).from(tracks).get()?.total ?? 0
+  return db.select({ total: count() }).from(tracks).where(inLibrary).get()?.total ?? 0
 }
 
 /** Whether a track can be worked on right now. */
@@ -228,6 +236,7 @@ export function listTrackAvailability(
   return db
     .select({ id: tracks.id, volumeName: tracks.volumeName, fileMissing: tracks.fileMissing })
     .from(tracks)
+    .where(inLibrary)
     .orderBy(asc(tracks.path))
     .all()
     .map(({ id, volumeName, fileMissing }) => ({
