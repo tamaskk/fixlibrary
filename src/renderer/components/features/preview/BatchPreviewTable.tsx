@@ -21,6 +21,16 @@ const ROW_INSET = 18
 // DESIGN_SYSTEM §06: the least needed column joins from this width on.
 const WIDE_FROM_WIDTH = 896
 
+/** The width below which a table of these columns scrolls sideways. */
+function leastWidthOf(columns: readonly PreviewColumn[]): number {
+  return (
+    LEADING_WIDTH +
+    columns.reduce((sum, column) => sum + column.minWidth, 0) +
+    (columns.length + 1) * COLUMN_GAP +
+    ROW_INSET
+  )
+}
+
 type BatchPreviewTableProps = {
   /** Names the table for assistive technology. */
   label: string
@@ -84,14 +94,13 @@ export function BatchPreviewTable({
     [styles, tableWidth]
   )
 
-  const columns = allColumns.filter((column) => tableWidth >= WIDE_FROM_WIDTH || !column.wideOnly)
+  // A wide-only column is the first to give way: it is shown only where the table
+  // has room for every column, so that it never makes the table scroll sideways.
+  const showWideOnly = tableWidth >= Math.max(WIDE_FROM_WIDTH, leastWidthOf(allColumns))
+  const columns = allColumns.filter((column) => showWideOnly || !column.wideOnly)
   const editable = columns.filter((column) => column.edit !== undefined)
   const template = `${LEADING_COLUMNS} ${columns.map((column) => column.track).join(' ')}`
-  const minWidth =
-    LEADING_WIDTH +
-    columns.reduce((sum, column) => sum + column.minWidth, 0) +
-    (columns.length + 1) * COLUMN_GAP +
-    ROW_INSET
+  const minWidth = leastWidthOf(columns)
 
   // The virtualizer's functions change with every scroll and are meant to be called
   // during render; nothing here memoizes them.

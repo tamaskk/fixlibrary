@@ -15,7 +15,16 @@ function row(trackId: number, overrides: Partial<PreviewRow> = {}): PreviewRow {
   return {
     trackId,
     currentFileName: `${trackId}.mp3`,
-    cells: { fileName: CELL, artist: CELL, title: CELL, mix: CELL, styleId: CELL, energy: CELL },
+    cells: {
+      fileName: CELL,
+      artist: CELL,
+      title: CELL,
+      mix: CELL,
+      bpm: CELL,
+      key: CELL,
+      styleId: CELL,
+      energy: CELL
+    },
     warnings: [],
     excluded: false,
     error: null,

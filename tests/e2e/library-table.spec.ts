@@ -95,11 +95,15 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
     await expect(row(page, 20)).toHaveAttribute('aria-selected', 'true')
     await expect(row(page, 21)).toHaveAttribute('aria-selected', 'false')
 
-    // This build has no function to run yet, so a run cannot be started; a run on a
-    // selection is covered by pipeline.spec.ts.
-    await expect(run.getByLabel('Funkció')).toBeDisabled()
-    await expect(run.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeDisabled()
-    await expect(run.getByRole('button', { name: 'Futtatás a teljes könyvtáron' })).toBeDisabled()
+    // With a selection a run can be started on it; the run itself is covered by
+    // pipeline.spec.ts and bpm-key.spec.ts.
+    await expect(run.getByLabel('Funkció')).toBeEnabled()
+    await expect(run.getByLabel('Funkció').getByRole('option')).toHaveText([
+      'Minden funkció',
+      'BPM és key elemzés'
+    ])
+    await expect(run.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeEnabled()
+    await expect(run.getByRole('button', { name: 'Futtatás a teljes könyvtáron' })).toBeEnabled()
 
     // Cmd+A selects every row of the table, also the ones that are not in the page.
     await grid.focus()

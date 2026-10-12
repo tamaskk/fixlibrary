@@ -4,9 +4,19 @@ import { z } from 'zod'
 import type { TrackError } from './errors'
 import { unusableNameReason, UNSAFE_TEXT } from './file-names'
 import { FILE_WARNINGS } from './file-ops'
+import { CAMELOT_KEYS } from './keys'
 
 /** The fields a preview shows. The column sets of the batch types choose from these. */
-export const PREVIEW_FIELDS = ['fileName', 'artist', 'title', 'mix', 'styleId', 'energy'] as const
+export const PREVIEW_FIELDS = [
+  'fileName',
+  'artist',
+  'title',
+  'mix',
+  'bpm',
+  'key',
+  'styleId',
+  'energy'
+] as const
 export type PreviewField = (typeof PREVIEW_FIELDS)[number]
 
 /** The fields the user may change in the preview. A file name follows from the others. */
@@ -14,6 +24,7 @@ export const EDITABLE_PREVIEW_FIELDS = [
   'artist',
   'title',
   'mix',
+  'key',
   'styleId',
   'energy'
 ] as const satisfies readonly PreviewField[]
@@ -60,6 +71,10 @@ export const previewValueSchemas = {
   artist: textValue,
   title: textValue,
   mix: textValue,
+  /** Whole beats per minute, as the track's row and its file name hold the tempo. */
+  bpm: z.number().int().min(20).max(400).nullable(),
+  /** The Camelot code; the musical name follows from it (`shared/keys.ts`). */
+  key: z.enum(CAMELOT_KEYS).nullable(),
   styleId: z.number().int().positive().nullable(),
   energy: z.number().int().min(1).max(10).nullable()
 } as const satisfies Record<PreviewField, z.ZodType>
@@ -79,6 +94,8 @@ const proposedFieldsSchema = z
     artist: z.object({ value: previewValueSchemas.artist, ...provenance }),
     title: z.object({ value: previewValueSchemas.title, ...provenance }),
     mix: z.object({ value: previewValueSchemas.mix, ...provenance }),
+    bpm: z.object({ value: previewValueSchemas.bpm, ...provenance }),
+    key: z.object({ value: previewValueSchemas.key, ...provenance }),
     styleId: z.object({ value: previewValueSchemas.styleId, ...provenance }),
     energy: z.object({ value: previewValueSchemas.energy, ...provenance })
   })
@@ -218,6 +235,7 @@ export const previewEditSchema = z.discriminatedUnion('field', [
   z.strictObject({ ...editTarget, field: z.literal('artist'), value: editText }),
   z.strictObject({ ...editTarget, field: z.literal('title'), value: editText }),
   z.strictObject({ ...editTarget, field: z.literal('mix'), value: editText }),
+  z.strictObject({ ...editTarget, field: z.literal('key'), value: z.string().max(3).nullable() }),
   z.strictObject({ ...editTarget, field: z.literal('styleId'), value: z.number().nullable() }),
   z.strictObject({ ...editTarget, field: z.literal('energy'), value: z.number().nullable() })
 ])

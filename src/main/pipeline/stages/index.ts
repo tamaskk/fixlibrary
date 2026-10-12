@@ -1,7 +1,12 @@
+import { createBpmKeyStage, type BpmKeyStageDependencies } from './bpm-key'
 import type { Stage } from './stage'
 
-/** Every stage the app has. The first ones arrive with T-013. */
-export const STAGES: readonly Stage[] = []
+export type StageDependencies = BpmKeyStageDependencies
+
+/** Every stage the app has, in the order the function chooser lists them. */
+export function createStages(dependencies: StageDependencies): Stage[] {
+  return [createBpmKeyStage(dependencies)]
+}
 
 /**
  * Checks that the stages can be ordered at all. Run once at startup: a mistake here

@@ -9,7 +9,7 @@ export interface PreviewColumnContext {
 }
 
 /** How a cell is edited in place. */
-export type PreviewEditor = 'text' | 'style' | 'energy'
+export type PreviewEditor = 'text' | 'style' | 'energy' | 'key'
 
 /**
  * One column of a batch preview. The table knows nothing about what a column shows:

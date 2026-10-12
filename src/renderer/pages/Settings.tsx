@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { AnalysisSection } from '@/components/features/settings/AnalysisSection'
 import { ApiKeysSection } from '@/components/features/settings/ApiKeysSection'
 import { HotCuesSection } from '@/components/features/settings/HotCuesSection'
 import { LibrarySection } from '@/components/features/settings/LibrarySection'
@@ -50,6 +51,7 @@ export function Settings(): React.JSX.Element {
             <LoudnessSection snapshot={data.snapshot} />
             <StylesSection styles={data.styles} />
             <HotCuesSection snapshot={data.snapshot} />
+            <AnalysisSection snapshot={data.snapshot} />
             <PerformanceSection snapshot={data.snapshot} />
             <SystemSection />
           </>

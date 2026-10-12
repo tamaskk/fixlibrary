@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createDemoStages } from './demo'
-import { selectableStages, STAGES, validateStages, withDependencies } from './index'
+import { createStages, selectableStages, validateStages, withDependencies } from './index'
 import type { Stage } from './stage'
+import type { AppDatabase } from '../../db/connection'
 
 function stage(name: string, dependsOn: string[] = [], phase: Stage['phase'] = 'compute'): Stage {
   return {
@@ -17,8 +18,15 @@ function stage(name: string, dependsOn: string[] = [], phase: Stage['phase'] = '
 
 describe('validateStages', () => {
   it('accepts the stages the app ships with', () => {
+    // Arrange
+    const stages = createStages({
+      db: {} as AppDatabase,
+      python: () => null,
+      bpmRange: () => ({ bpmMin: 85, bpmMax: 175 })
+    })
+
     // Act
-    const validate = (): void => validateStages(STAGES)
+    const validate = (): void => validateStages(stages)
 
     // Assert
     expect(validate).not.toThrow()
@@ -198,6 +206,8 @@ describe('the demo stages', () => {
       fileName: null,
       artist: 'AC/DC',
       title: 'Thunder',
+      bpm: null,
+      key: null,
       mix: 'Live',
       styleId: null,
       energy: null

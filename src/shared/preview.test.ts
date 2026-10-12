@@ -26,6 +26,8 @@ function row(overrides: Partial<PreviewRow> = {}): PreviewRow {
       artist: EMPTY_CELL,
       title: EMPTY_CELL,
       mix: EMPTY_CELL,
+      bpm: EMPTY_CELL,
+      key: EMPTY_CELL,
       styleId: EMPTY_CELL,
       energy: EMPTY_CELL
     },
@@ -218,5 +220,36 @@ describe('matchesPreviewFilter', () => {
 
     // Assert
     expect(answers).toEqual([true, false, false, false, false])
+  })
+})
+
+describe('the tempo and key of a proposal', () => {
+  it('are read as a whole number and a Camelot code', () => {
+    // Arrange
+    const stored = {
+      fields: {
+        bpm: { value: 124, source: 'analysis', confidence: 0.9 },
+        key: { value: '8A', source: 'analysis' }
+      }
+    }
+
+    // Act
+    const proposal = readProposal(stored)
+
+    // Assert
+    expect(proposal.fields).toEqual(stored.fields)
+  })
+
+  it.each([
+    ['a tempo that is not whole', { bpm: { value: 123.65, source: 'analysis' } }],
+    ['a tempo no music has', { bpm: { value: 4000, source: 'analysis' } }],
+    ['a key that is no Camelot code', { key: { value: 'Am', source: 'analysis' } }],
+    ['a code in lower case', { key: { value: '8a', source: 'analysis' } }]
+  ])('leave out %s', (_name, fields) => {
+    // Act
+    const proposal = readProposal({ fields })
+
+    // Assert
+    expect(proposal.fields).toBeUndefined()
   })
 })

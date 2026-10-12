@@ -1,12 +1,18 @@
 import { formatPercent } from '@/lib/format'
 import { SOURCE_LABELS } from '@/lib/preview-labels'
 import { PREVIEW_FIELDS, type PreviewRow, type PreviewValue } from '@shared/preview'
+import { formatKey } from '@shared/keys'
 import { DiffValue } from './cells'
 import { diffText } from './diff-text'
 import type { PreviewColumn, PreviewColumnContext } from './types'
 
 function styleName(context: PreviewColumnContext): (value: PreviewValue) => string | null {
   return (value) => (typeof value === 'number' ? (context.styleNames.get(value) ?? null) : null)
+}
+
+/** `8A Am`: a key in both notations, as the file name will hold it. */
+function keyName(value: PreviewValue): string | null {
+  return typeof value === 'string' ? formatKey(value) : null
 }
 
 /** Where the changes of a row come from, and how sure the least sure of them is. */
@@ -61,6 +67,26 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
     edit: { field: 'mix', editor: 'text' },
     render: (row) => <DiffValue cell={row.cells.mix} />,
     text: (row) => diffText(row.cells.mix)
+  },
+  {
+    id: 'bpm',
+    header: 'BPM',
+    track: '64px',
+    minWidth: 64,
+    numeric: true,
+    render: (row) => <DiffValue cell={row.cells.bpm} data />,
+    text: (row) => diffText(row.cells.bpm)
+  },
+  {
+    id: 'key',
+    header: 'Key',
+    // Room for a changed key in both notations: `8A Am` struck through, then `9A Em`.
+    track: '96px',
+    minWidth: 96,
+    indent: true,
+    edit: { field: 'key', editor: 'key' },
+    render: (row) => <DiffValue cell={row.cells.key} format={keyName} data />,
+    text: (row) => diffText(row.cells.key, keyName)
   },
   {
     id: 'style',

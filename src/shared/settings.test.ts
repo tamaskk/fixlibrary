@@ -43,6 +43,7 @@ describe('DEFAULT_SETTINGS', () => {
   it('leaves the worker count automatic and keeps originals untouched by default', () => {
     // Assert
     expect(DEFAULT_SETTINGS.performance.workerCount).toBeNull()
+    expect(DEFAULT_SETTINGS.analysis).toEqual({ bpmMin: 85, bpmMax: 175 })
     expect(DEFAULT_SETTINGS.library.mode).toBe('clean_library')
   })
 })

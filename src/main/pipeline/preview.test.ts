@@ -12,10 +12,10 @@ import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { insertJobs } from '../db/jobs'
 import { batchItems } from '../db/schema'
 import { listStyles, replaceStyles } from '../db/styles'
-import { getTrackById, insertTracks } from '../db/tracks'
+import { getTrackById, insertTracks, updateTrack } from '../db/tracks'
 import { logger } from '../services/logger'
 import type { PreviewRow } from '@shared/preview'
-import { buildPreviewRow, commitManualEdits, createPreview, type Preview } from './preview'
+import { buildPreviewRow, commitApprovedValues, createPreview, type Preview } from './preview'
 import type { Stage } from './stages/stage'
 
 const NO_VOLUMES: ReadonlySet<string> = new Set()
@@ -482,7 +482,7 @@ describe('what the user set by hand', () => {
     testDatabase.db.update(batchItems).set({ approved: true }).run()
 
     // Act
-    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
+    for (const trackId of trackIds) commitApprovedValues(testDatabase.db, batchId, trackId)
 
     // Assert
     expect(track(edited)).toMatchObject({
@@ -508,7 +508,7 @@ describe('what the user set by hand', () => {
       .run()
 
     // Act
-    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
+    for (const trackId of trackIds) commitApprovedValues(testDatabase.db, batchId, trackId)
 
     // Assert
     expect(track(id)).toMatchObject({ title: 'old one', lockedFields: [] })
@@ -520,7 +520,7 @@ describe('what the user set by hand', () => {
     const rows = preview()
     rows.edit({ batchId, trackId: id, field: 'title', value: 'By Hand' })
     testDatabase.db.update(batchItems).set({ approved: true }).run()
-    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
+    for (const trackId of trackIds) commitApprovedValues(testDatabase.db, batchId, trackId)
     setBatchStatus(testDatabase.db, batchId, 'applied')
     const next = createBatch(testDatabase.db, {
       type: 'run',
@@ -597,7 +597,7 @@ describe('what the second look at the preview found', () => {
     testDatabase.db.update(batchItems).set({ approved: true }).run()
 
     // Act
-    for (const trackId of trackIds) commitManualEdits(testDatabase.db, batchId, trackId)
+    for (const trackId of trackIds) commitApprovedValues(testDatabase.db, batchId, trackId)
 
     // Assert
     expect(track(id)).toMatchObject({ primaryStyleId: null, lockedFields: ['title'] })
@@ -668,5 +668,204 @@ describe('a list of tracks to take out', () => {
 
     // Assert
     expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+})
+
+describe('the tempo and key of a batch', () => {
+  const measured = {
+    fields: {
+      bpm: { value: 124, source: 'analysis', confidence: 0.9 },
+      key: { value: '8A', source: 'analysis' }
+    }
+  }
+
+  it('are shown next to what the track had before', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, measured)
+
+    // Act
+    const row = rowOf(id)
+
+    // Assert
+    expect(row.cells.bpm).toEqual({
+      before: null,
+      after: 124,
+      changed: true,
+      source: 'analysis',
+      confidence: 0.9
+    })
+    expect(row.cells.key).toMatchObject({ before: null, after: '8A', changed: true })
+    expect(row.warnings).toEqual([])
+  })
+
+  it('flag a tempo that is a weak guess', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, { fields: { bpm: { value: 124, source: 'analysis', confidence: 0.4 } } })
+
+    // Act
+    const row = rowOf(id)
+
+    // Assert
+    expect(row.warnings).toEqual(['LOW_CONFIDENCE'])
+  })
+
+  it("become the track's own when the batch is approved, without being locked", () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, measured)
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({
+      bpm: 124,
+      camelotKey: '8A',
+      musicalKey: 'Am',
+      lockedFields: []
+    })
+  })
+
+  it('are not written for a track that was not approved', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, measured)
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ bpm: null, camelotKey: null, musicalKey: null })
+  })
+
+  it('are not written for a row that was taken out', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, measured)
+    preview().setExcluded({ batchId, trackIds: [id], excluded: true })
+    testDatabase.db
+      .update(batchItems)
+      .set({ approved: true })
+      .where(eq(batchItems.excluded, false))
+      .run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ bpm: null, camelotKey: null })
+  })
+
+  it('take a key the user chose by hand, and lock it', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, measured)
+    const rows = preview()
+
+    // Act
+    const edited = rows.edit({ batchId, trackId: id, field: 'key', value: '11B' })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(edited.ok && edited.value.cells.key).toMatchObject({ after: '11B', source: 'manual' })
+    expect(track(id)).toMatchObject({
+      bpm: 124,
+      camelotKey: '11B',
+      musicalKey: 'A',
+      lockedFields: ['key']
+    })
+  })
+
+  it('leave a key that was set by hand alone in the next run', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    preview().edit({ batchId, trackId: id, field: 'key', value: '11B' })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    commitApprovedValues(testDatabase.db, batchId, id)
+    setBatchStatus(testDatabase.db, batchId, 'applied')
+    const next = createBatch(testDatabase.db, {
+      type: 'run',
+      mode: 'in_place',
+      items: [{ trackId: id, before: { ...track(id) } }]
+    })
+
+    // Act
+    mergeBatchItemProposal(testDatabase.db, next, id, measured, track(id).lockedFields)
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    commitApprovedValues(testDatabase.db, next, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ bpm: 124, camelotKey: '11B', musicalKey: 'A' })
+  })
+
+  it('keep a key that was locked after the stage had proposed another', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, measured)
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    updateTrack(testDatabase.db, id, { camelotKey: '11B', musicalKey: 'A', lockedFields: ['key'] })
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ bpm: 124, camelotKey: '11B', musicalKey: 'A' })
+  })
+
+  it('can be cleared by hand', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    updateTrack(testDatabase.db, id, { camelotKey: '8A', musicalKey: 'Am' })
+    const rows = preview()
+
+    // Act
+    rows.edit({ batchId, trackId: id, field: 'key', value: null })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ camelotKey: null, musicalKey: null, lockedFields: ['key'] })
+  })
+
+  it.each(['13A', '8C', 'Am', '8a', ''])('refuse %j as a key', (value) => {
+    // Arrange
+    const [id] = trackIds as [number]
+
+    // Act
+    const edited = preview().edit({ batchId, trackId: id, field: 'key', value })
+
+    // Assert
+    expect(edited).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+
+  it('cannot have the tempo set from the page', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+
+    // Act
+    const edited = preview().edit({ batchId, trackId: id, field: 'bpm', value: 128 })
+
+    // Assert
+    expect(edited).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+
+  it('show a stored key only when it is one of the 24 codes', () => {
+    // Arrange
+    const [known, odd] = trackIds as [number, number]
+    const item = getBatchItem(testDatabase.db, batchId, known)
+    if (!item) throw new Error('no such item')
+
+    // Act
+    const shown = buildPreviewRow({ ...item, before: { camelotKey: '8a', bpm: 123.5 } })
+    const hidden = buildPreviewRow({ ...item, trackId: odd, before: { camelotKey: 'Am' } })
+
+    // Assert
+    expect(shown.cells.key.before).toBe('8A')
+    expect(shown.cells.bpm.before).toBe(123.5)
+    expect(hidden.cells.key.before).toBeNull()
   })
 })
