@@ -28,12 +28,67 @@ const consoleLogger: Logger = {
 }
 
 let target: Logger = consoleLogger
+let secretsToMask: () => readonly string[] = () => []
+
+const MASK = '[secret]'
+// A shorter value would be found inside ordinary words.
+const SHORTEST_MASKED_SECRET = 6
+
+function maskText(text: string, secrets: readonly string[]): string {
+  let masked = text
+  for (const secret of secrets) {
+    if (secret.length < SHORTEST_MASKED_SECRET) continue
+    // As it is, and as it would stand in an address.
+    for (const form of new Set([secret, encodeURIComponent(secret)])) {
+      masked = masked.split(form).join(MASK)
+    }
+  }
+  return masked
+}
+
+function readSecretsToMask(): readonly string[] {
+  try {
+    return secretsToMask()
+  } catch {
+    // A key that cannot be read cannot be in a line either.
+    return []
+  }
+}
+
+function maskDetail(detail: unknown, secrets: readonly string[]): unknown {
+  if (typeof detail === 'string') return maskText(detail, secrets)
+  if (detail instanceof Error) {
+    // Only the stack of an error is written; a masked copy keeps its name and place.
+    const copy = new Error(maskText(detail.message, secrets))
+    copy.name = detail.name
+    copy.stack = detail.stack === undefined ? undefined : maskText(detail.stack, secrets)
+    return copy
+  }
+  return detail
+}
+
+function masked(write: Logger['info']): Logger['info'] {
+  return (message, ...details) => {
+    const secrets = readSecretsToMask()
+    if (secrets.length === 0) write(message, ...details)
+    else write(maskText(message, secrets), ...details.map((detail) => maskDetail(detail, secrets)))
+  }
+}
+
+/**
+ * From now on the values `read` returns are replaced in every line before it is
+ * written. A second line of defence: the rule stays that no key is ever passed to
+ * the logger. It does not cover a value inside an object that is passed as a detail.
+ */
+export function maskSecretsInLog(read: () => readonly string[]): void {
+  secretsToMask = read
+}
 
 /** The logger every module of the main process uses. */
 export const logger: Logger = {
-  info: (message, ...details) => target.info(message, ...details),
-  warn: (message, ...details) => target.warn(message, ...details),
-  error: (message, ...details) => target.error(message, ...details)
+  info: masked((message, ...details) => target.info(message, ...details)),
+  warn: masked((message, ...details) => target.warn(message, ...details)),
+  error: masked((message, ...details) => target.error(message, ...details))
 }
 
 /**
@@ -118,7 +173,12 @@ export function startFileLogging(folder: string, options: FileLoggingOptions = {
       showDialog: false,
       onError: ({ error, errorName }) => {
         const isRejection = errorName.includes('rejection')
-        fileLog.error(isRejection ? 'Unhandled rejection' : 'Uncaught exception', error)
+        // Written without the `logger` above, so masked here: an error from anywhere
+        // can quote what it was given.
+        fileLog.error(
+          isRejection ? 'Unhandled rejection' : 'Uncaught exception',
+          maskDetail(error, readSecretsToMask())
+        )
         if (!isRejection) onUncaughtException(error)
         // Logged above; electron-log need not log it a second time.
         return false
