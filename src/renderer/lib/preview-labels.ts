@@ -14,6 +14,8 @@ export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {
   musicbrainz: 'MusicBrainz',
   discogs: 'Discogs',
   id3: 'ID3',
+  fileName: 'Fájlnév',
+  naming: 'Névszabály',
   analysis: 'Elemzés',
   claude: 'Claude',
   manual: 'Kézi'

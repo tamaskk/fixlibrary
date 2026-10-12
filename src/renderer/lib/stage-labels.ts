@@ -3,6 +3,8 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
   fingerprint: 'Fingerprint',
   lookup: 'Online lookup',
   bpmKey: 'BPM és key elemzés',
+  naming: 'Fájlnév és névtisztítás',
+  rename: 'Átnevezés',
   demoAnalyze: 'Demo elemzés',
   demoLookup: 'Demo lookup',
   demoRename: 'Demo átnevezés'
