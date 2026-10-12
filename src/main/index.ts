@@ -18,6 +18,7 @@ import { commitApprovedValues, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
 import { createLookupCache } from './pipeline/lookup-cache'
 import { createSecretStore, pickSecretEnv, type SecretStore } from './pipeline/secrets'
+import { waitForFileWork, type FileWork } from './pipeline/shutdown'
 import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
 import { createStages, selectableStages, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
@@ -41,11 +42,19 @@ import { createMountedVolumesCache, listMountedVolumes } from './services/volume
 import { AppError } from '@shared/errors'
 import { FIXED_RESOURCE_LIMITS } from '@shared/pipeline'
 import { SECRET_NAMES, type SecretName } from '@shared/settings'
-import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
+import {
+  ENGINE_CHECK_TIMEOUT_MS,
+  QUIT_FILE_WORK_WAIT_MS,
+  TAG_BATCH_TIMEOUT_MS
+} from '@shared/timeouts'
 
 let pythonBridge: PythonBridge | null = null
-let stoppingSidecar = false
+// Quitting: the work that must end first, and whether it has.
+let stopping: Promise<void> | null = null
+let readyToQuit = false
 let orchestrator: Orchestrator | null = null
+// Asked when quitting whether a stage is still in the middle of a file.
+let fileWork: FileWork | null = null
 // Kept so that quitting can stop a call to Claude that is still running.
 let claudeService: Claude | null = null
 // The API keys of the lookup services; read by the stages that ask them.
@@ -121,7 +130,8 @@ function stopAfterUncaughtException(): void {
   orchestrator = null
   claudeService?.stop()
   closeDatabase()
-  if (relaunch) app.relaunch()
+  // Not when the user was quitting anyway: the app must not come back by itself.
+  if (relaunch && stopping === null && !readyToQuit) app.relaunch()
   // The sidecar ends by itself when its input closes.
   app.exit(1)
 }
@@ -274,12 +284,23 @@ function availableStages(db: AppDatabase): Stage[] {
 function registerLibraryAndPipeline(): void {
   const db = getDatabase()
   const environment = { homeDir: homedir(), cpuCount: cpus().length }
+  // Set once the file rules exist, a few lines below.
+  let reconcileBeforeScan: (() => Promise<number>) | null = null
   const scanner = createLibraryScanner({
     db,
     environment,
     listMountedVolumes,
     onProgress: sendScanProgress,
-    isChangingFiles: () => orchestrator?.changingFiles() ?? false,
+    // Also while quitting: a file step may still be ending after the wait for it ran out.
+    isChangingFiles: () => stopping !== null || (orchestrator?.changingFiles() ?? false),
+    // Before every scan, also one asked for from the page or after a drive came
+    // back: a file that an interrupted batch renamed would be taken for a new track.
+    beforeScan: async () => {
+      const found = (await reconcileBeforeScan?.()) ?? 0
+      if (found > 0) {
+        logger.info(`${found} tracks were told where an interrupted batch left their files`)
+      }
+    },
     readTags: async (paths) => {
       if (!pythonBridge) throw new AppError('PYTHON_CRASHED', 'the sidecar is not running')
       const { files } = await pythonBridge.call(
@@ -317,6 +338,8 @@ function registerLibraryAndPipeline(): void {
     folders,
     listMountedVolumes
   })
+  fileWork = batchFiles
+  reconcileBeforeScan = () => batchFiles.reconcileInterrupted()
 
   let startupDone = false
   const stages = availableStages(db)
@@ -369,8 +392,9 @@ function registerLibraryAndPipeline(): void {
   )
 
   // In this order, so that no two of them work on the drive at the same time: what
-  // interrupted writes left behind is removed, then the library is scanned for what
-  // changed since the last run, then a run that was interrupted goes on. Without a
+  // interrupted writes left behind is removed, the tracks of an interrupted batch are
+  // told where their files are, then the library is scanned for what changed since
+  // the last run, then a run that was interrupted goes on. Without a
   // chosen folder there is nothing to scan, and a drive that is not connected ends
   // the scan at once.
   void (async () => {
@@ -489,21 +513,65 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', (event) => {
-  // First, and while the database is still open: the running jobs are told to stop
-  // and put back in line, so the next start goes on with the run.
-  orchestrator?.shutdown()
+/**
+ * Tells everything that runs to stop. Each step on its own: one that fails must not
+ * keep the next from running.
+ */
+function tellWorkToStop(): void {
+  try {
+    // The running jobs are told to stop and put back in line, so the next start goes
+    // on with the run. The orchestrator stays known until the file work has ended:
+    // it is what keeps a scan from starting meanwhile.
+    orchestrator?.shutdown()
+  } catch (error) {
+    logger.error('The run could not be put aside', error)
+  }
+  try {
+    // No `claude` process outlives the app.
+    claudeService?.stop()
+  } catch (error) {
+    logger.error('The call to Claude could not be stopped', error)
+  }
+}
+
+/** Everything that must end while the database is still open. */
+async function stopBeforeQuit(): Promise<void> {
+  tellWorkToStop()
+  try {
+    // A stage that was told to stop still finishes the file step it is in, and
+    // writes down what it did: the database stays open until then.
+    const ended =
+      fileWork === null ||
+      (await waitForFileWork(fileWork, QUIT_FILE_WORK_WAIT_MS, () =>
+        logger.info('Quitting waits for the undo that is under way')
+      ))
+    if (!ended) logger.warn('Quitting while a stage is still working on a file')
+  } catch (error) {
+    logger.error('Waiting for the file work failed', error)
+  }
   orchestrator = null
-  // No `claude` process outlives the app.
-  claudeService?.stop()
-  if (!pythonBridge) return
-  // Hold the quit until the sidecar is gone, so no Python process outlives the app.
-  // A second quit request during the wait is held back too.
+  try {
+    // No Python process outlives the app.
+    await pythonBridge?.stop()
+  } catch (error) {
+    logger.error('The sidecar could not be stopped', error)
+  }
+  pythonBridge = null
+}
+
+app.on('before-quit', (event) => {
+  if (readyToQuit) return
+  // Nothing to wait for: the app quits as it always did, at once.
+  if (stopping === null && !pythonBridge && !fileWork?.busy()) {
+    tellWorkToStop()
+    orchestrator = null
+    readyToQuit = true
+    return
+  }
+  // Held until the work above has ended; a second request during the wait is held too.
   event.preventDefault()
-  if (stoppingSidecar) return
-  stoppingSidecar = true
-  void pythonBridge.stop().finally(() => {
-    pythonBridge = null
+  stopping ??= stopBeforeQuit().finally(() => {
+    readyToQuit = true
     app.quit()
   })
 })

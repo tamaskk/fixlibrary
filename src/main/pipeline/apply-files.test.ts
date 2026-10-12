@@ -486,6 +486,62 @@ describe('too little free space', () => {
 })
 
 describe('undo and runs', () => {
+  it('refuses a second undo and an approval at once while an undo is under way', async () => {
+    // Arrange: two batches that wrote, a third that waits for approval, and an undo
+    // that is held in the middle of putting a file back.
+    let release: () => void = () => {}
+    let arrive: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const reached = new Promise<void>((resolve) => {
+      arrive = resolve
+    })
+    const held = createBatchFiles({
+      db: testDatabase.db,
+      fileOps: {
+        ...fileOps,
+        restore: async (...given) => {
+          arrive()
+          await gate
+          return fileOps.restore(...given)
+        }
+      },
+      folders: () => ({ libraryRoot: library, cleanLibraryFolder: clean, backupFolder: backups }),
+      listMountedVolumes: () => NO_VOLUMES
+    })
+    const { ids, paths } = addTracks(2)
+    const originals = paths.map(sha256)
+    const run = orchestrator(writingStages(), held)
+    const first = await applied(run, ids)
+    const waiting = await computed(run, ids)
+
+    // Act
+    const undo = run.undoLast()
+    await reached
+    const answered: string[] = []
+    const second = run.undoLast().then((result) => {
+      answered.push('undo')
+      return result
+    })
+    const approval = run.applyBatch(waiting).then((result) => {
+      answered.push('apply')
+      return result
+    })
+    // Both must have their answer while the first undo still stands still.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const answeredWhileHeld = [...answered].sort()
+    release()
+    const undone = await undo
+
+    // Assert
+    expect(answeredWhileHeld).toEqual(['apply', 'undo'])
+    expect(await second).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(await approval).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(undone).toMatchObject({ ok: true, value: { batchId: first } })
+    expect(paths.map(sha256)).toEqual(originals)
+  })
+
   it('is refused while a batch is being worked on', async () => {
     // Arrange
     const { ids } = addTracks(4)

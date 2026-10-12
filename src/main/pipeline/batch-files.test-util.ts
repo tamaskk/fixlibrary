@@ -26,7 +26,9 @@ export function stubBatchFiles(overrides: Partial<BatchFiles> = {}): BatchFiles 
     undoLast: async () => ({ ok: false, code: 'NOTHING_TO_UNDO' }),
     pruneOlderBackups: async () => {},
     removeTempFiles: async () => 0,
+    reconcileInterrupted: async () => 0,
     busy: () => false,
+    undoing: () => false,
     settled: async () => {},
     ...overrides
   }
