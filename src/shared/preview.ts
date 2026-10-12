@@ -12,6 +12,9 @@ export const PREVIEW_FIELDS = [
   'artist',
   'title',
   'mix',
+  'album',
+  'label',
+  'year',
   'bpm',
   'key',
   'styleId',
@@ -30,8 +33,19 @@ export const EDITABLE_PREVIEW_FIELDS = [
 ] as const satisfies readonly PreviewField[]
 export type EditablePreviewField = (typeof EDITABLE_PREVIEW_FIELDS)[number]
 
-/** Where a proposed value comes from. `manual` is what the user typed in the preview. */
-export const FIELD_SOURCES = ['lookup', 'id3', 'analysis', 'claude', 'manual'] as const
+/**
+ * Where a proposed value comes from. `manual` is what the user typed in the preview;
+ * `musicbrainz` and `discogs` are the online services a lookup took it from.
+ */
+export const FIELD_SOURCES = [
+  'lookup',
+  'musicbrainz',
+  'discogs',
+  'id3',
+  'analysis',
+  'claude',
+  'manual'
+] as const
 export type FieldSource = (typeof FIELD_SOURCES)[number]
 
 export const PREVIEW_WARNINGS = [
@@ -71,6 +85,9 @@ export const previewValueSchemas = {
   artist: textValue,
   title: textValue,
   mix: textValue,
+  album: textValue,
+  label: textValue,
+  year: z.number().int().min(1000).max(9999).nullable(),
   /** Whole beats per minute, as the track's row and its file name hold the tempo. */
   bpm: z.number().int().min(20).max(400).nullable(),
   /** The Camelot code; the musical name follows from it (`shared/keys.ts`). */
@@ -94,6 +111,9 @@ const proposedFieldsSchema = z
     artist: z.object({ value: previewValueSchemas.artist, ...provenance }),
     title: z.object({ value: previewValueSchemas.title, ...provenance }),
     mix: z.object({ value: previewValueSchemas.mix, ...provenance }),
+    album: z.object({ value: previewValueSchemas.album, ...provenance }),
+    label: z.object({ value: previewValueSchemas.label, ...provenance }),
+    year: z.object({ value: previewValueSchemas.year, ...provenance }),
     bpm: z.object({ value: previewValueSchemas.bpm, ...provenance }),
     key: z.object({ value: previewValueSchemas.key, ...provenance }),
     styleId: z.object({ value: previewValueSchemas.styleId, ...provenance }),
@@ -241,6 +261,9 @@ export const previewEditSchema = z.discriminatedUnion('field', [
 ])
 export type PreviewEdit = z.input<typeof previewEditSchema>
 
+export const previewRefreshSchema = z.strictObject(editTarget)
+export type PreviewRefresh = z.input<typeof previewRefreshSchema>
+
 export const MAX_EXCLUDE_TRACKS = 20_000
 
 export const previewExcludeSchema = z.strictObject({
@@ -264,6 +287,8 @@ export interface PreviewBatch {
   total: number
   excluded: number
   failed: number
+  /** True when the batch ran a step whose result can be asked for again, row by row. */
+  canRefresh: boolean
 }
 
 export interface PreviewState {

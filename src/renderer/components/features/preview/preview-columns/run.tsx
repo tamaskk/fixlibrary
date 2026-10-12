@@ -3,7 +3,7 @@ import { SOURCE_LABELS } from '@/lib/preview-labels'
 import { PREVIEW_FIELDS, type PreviewRow, type PreviewValue } from '@shared/preview'
 import { formatKey } from '@shared/keys'
 import { DiffValue } from './cells'
-import { diffText } from './diff-text'
+import { diffText, EMPTY } from './diff-text'
 import type { PreviewColumn, PreviewColumnContext } from './types'
 
 function styleName(context: PreviewColumnContext): (value: PreviewValue) => string | null {
@@ -67,6 +67,30 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
     edit: { field: 'mix', editor: 'text' },
     render: (row) => <DiffValue cell={row.cells.mix} />,
     text: (row) => diffText(row.cells.mix)
+  },
+  {
+    id: 'label',
+    header: 'Label',
+    track: '96px',
+    minWidth: 96,
+    wideOnly: true,
+    render: (row) => <DiffValue cell={row.cells.label} />,
+    // The album has no column of its own: it is told with the label.
+    text: (row) => {
+      const label = diffText(row.cells.label)
+      const album = diffText(row.cells.album)
+      return album === null ? label : `${label ?? EMPTY} · Album: ${album}`
+    }
+  },
+  {
+    id: 'year',
+    header: 'Év',
+    track: '64px',
+    minWidth: 64,
+    numeric: true,
+    wideOnly: true,
+    render: (row) => <DiffValue cell={row.cells.year} data />,
+    text: (row) => diffText(row.cells.year)
   },
   {
     id: 'bpm',

@@ -36,6 +36,8 @@ export function BatchPreview(): React.JSX.Element {
   const setTab = usePreviewStore((state) => state.setTab)
   const setFilter = usePreviewStore((state) => state.setFilter)
   const edit = usePreviewStore((state) => state.edit)
+  const refreshing = usePreviewStore((state) => state.refreshing)
+  const refreshLookup = usePreviewStore((state) => state.refreshLookup)
   const setExcluded = usePreviewStore((state) => state.setExcluded)
   const approve = usePreviewStore((state) => state.approve)
   const discard = usePreviewStore((state) => state.discard)
@@ -44,8 +46,20 @@ export function BatchPreview(): React.JSX.Element {
   const runActive = usePipelineStore((state) => state.progress !== null)
   const loadPipeline = usePipelineStore((state) => state.load)
   const [confirmingUndo, setConfirmingUndo] = React.useState(false)
+  // The row the keys of the table act on; "Lookup frissítése" asks about that one.
+  const [cursorTrackId, setCursorTrackId] = React.useState<number | null>(null)
   const heading = React.useRef<HTMLHeadingElement>(null)
   const undoButton = React.useRef<HTMLButtonElement>(null)
+  const refreshButton = React.useRef<HTMLButtonElement>(null)
+  // The button is disabled while it asks, which takes the focus from it: it gets the
+  // focus back when the answer is in, unless the user has moved on meanwhile.
+  const wasRefreshing = React.useRef(false)
+  React.useEffect(() => {
+    if (wasRefreshing.current && refreshing === null && document.activeElement === document.body) {
+      refreshButton.current?.focus()
+    }
+    wasRefreshing.current = refreshing !== null
+  }, [refreshing])
 
   // Asked again on every visit: a run may have ended, or a batch been applied, since.
   React.useEffect(() => {
@@ -97,6 +111,20 @@ export function BatchPreview(): React.JSX.Element {
           </StatusLine>
         )}
         {editNote === 'refused' && <StatusLine tone="danger">Ez az érték nem menthető.</StatusLine>}
+        {refreshing !== null && <StatusLine tone="neutral">Online keresés folyamatban…</StatusLine>}
+        {editNote === 'lookupDone' && refreshing === null && (
+          <StatusLine tone="success">A sor frissítve.</StatusLine>
+        )}
+        {editNote === 'lookupBusy' && (
+          <StatusLine tone="neutral">
+            Most nem frissíthető. Próbáld újra pár másodperc múlva.
+          </StatusLine>
+        )}
+        {editNote === 'lookupFailed' && (
+          <StatusLine tone="danger">
+            Az online keresés nem sikerült. A sor nem változott.
+          </StatusLine>
+        )}
         {editNote === 'busy' && (
           <StatusLine tone="neutral">Jóváhagyás közben a batch nem változtatható.</StatusLine>
         )}
@@ -185,6 +213,35 @@ export function BatchPreview(): React.JSX.Element {
                         </Select>
                       </div>
                     )}
+                    {tab === 'changes' && batch.canRefresh && (
+                      <>
+                        <Button
+                          ref={refreshButton}
+                          variant="secondary"
+                          title="Újra megkérdezi az online forrásokat a választott sorról."
+                          disabled={
+                            cursorTrackId === null ||
+                            runActive ||
+                            busy !== null ||
+                            refreshing !== null
+                          }
+                          loading={refreshing !== null}
+                          onClick={() => {
+                            if (cursorTrackId !== null) void refreshLookup(cursorTrackId)
+                          }}
+                        >
+                          Lookup frissítése
+                        </Button>
+                        {/* In words next to it: a disabled button shows no tooltip. */}
+                        {(runActive || cursorTrackId === null) && (
+                          <p className="flex h-8 min-w-0 items-center truncate text-small text-text-muted">
+                            {runActive
+                              ? 'Futás közben nem frissíthető.'
+                              : 'Előbb válassz egy sort, amelyik nem maradt ki.'}
+                          </p>
+                        )}
+                      </>
+                    )}
                     <p className="ml-auto flex h-8 shrink-0 items-center gap-1 text-small whitespace-nowrap text-text-muted">
                       <span className="font-mono text-data text-text tabular-nums">
                         {shown.length === rows.length
@@ -221,6 +278,7 @@ export function BatchPreview(): React.JSX.Element {
                       styles={styles}
                       onEdit={edit}
                       onSetExcluded={(trackId, excluded) => void setExcluded([trackId], excluded)}
+                      onCursorRowChange={setCursorTrackId}
                     />
                   )}
                 </TabsContent>

@@ -16,7 +16,8 @@ import { createClaude, type Claude } from './pipeline/claude'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { commitApprovedValues, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
-import { createSecretStore, pickSecretEnv } from './pipeline/secrets'
+import { createLookupCache } from './pipeline/lookup-cache'
+import { createSecretStore, pickSecretEnv, type SecretStore } from './pipeline/secrets'
 import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
 import { createStages, selectableStages, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
@@ -28,13 +29,18 @@ import { readEnvFile } from './services/env-file'
 import { describeError } from './services/error-text'
 import { createFileOps } from './services/file-ops'
 import { keychainCipher } from './services/keychain'
-import { logger, startFileLogging } from './services/logger'
+import { logger, maskSecretsInLog, startFileLogging } from './services/logger'
+import { createAcoustIdClient } from './services/lookup/acoustid'
+import { createDiscogsClient } from './services/lookup/discogs'
+import { createLookupHttp } from './services/lookup/http'
+import { createMusicBrainzClient } from './services/lookup/musicbrainz'
 import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import { createMountedVolumesCache, listMountedVolumes } from './services/volumes'
 import { AppError } from '@shared/errors'
 import { FIXED_RESOURCE_LIMITS } from '@shared/pipeline'
+import { SECRET_NAMES, type SecretName } from '@shared/settings'
 import { ENGINE_CHECK_TIMEOUT_MS, TAG_BATCH_TIMEOUT_MS } from '@shared/timeouts'
 
 let pythonBridge: PythonBridge | null = null
@@ -42,6 +48,14 @@ let stoppingSidecar = false
 let orchestrator: Orchestrator | null = null
 // Kept so that quitting can stop a call to Claude that is still running.
 let claudeService: Claude | null = null
+// The API keys of the lookup services; read by the stages that ask them.
+let secretStore: SecretStore | null = null
+
+// As the lookup services ask a client to name itself.
+const userAgent = (): string =>
+  `FixLibrary/${app.getVersion()} (+https://github.com/tamaskk/fixlibrary)`
+// How old the key values may be that are masked in the log.
+const MASKED_SECRETS_MAX_AGE_MS = 5000
 
 // How old the limits of a run may be before the settings are read again.
 const LIMITS_MAX_AGE_MS = 1000
@@ -120,10 +134,16 @@ function registerSettingsAndSystemIpc(): void {
     db,
     cipher: keychainCipher,
     devEnv: readDevelopmentSecrets(),
-    keyCheck: {
-      userAgent: `FixLibrary/${app.getVersion()} (+https://github.com/tamaskk/fixlibrary)`
-    }
+    keyCheck: { userAgent: userAgent() }
   })
+  secretStore = secrets
+  // Decrypting asks the Keychain, so the values are read for a few seconds at a time.
+  maskSecretsInLog(
+    createTimedCache(
+      () => SECRET_NAMES.flatMap((name) => secrets.read(name) ?? []),
+      MASKED_SECRETS_MAX_AGE_MS
+    )
+  )
   registerSettingsIpc({
     db,
     secrets,
@@ -183,8 +203,9 @@ function startPythonSidecar(): void {
     pythonPath,
     cwd: pythonDir,
     logDir: app.getPath('logs'),
-    // The sidecar decodes audio with the app's own ffmpeg and with nothing else.
-    ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command
+    // The sidecar decodes and fingerprints with the app's own tools and with nothing else.
+    ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command,
+    fpcalcPath: resolveToolCommand('fpcalc', locations)?.command
   })
   pythonBridge.start()
   pythonBridge
@@ -218,10 +239,31 @@ function isGeneratedFile(path: string): boolean {
  */
 function availableStages(db: AppDatabase): Stage[] {
   if (app.isPackaged || process.env['FIXLIB_DEMO_STAGES'] !== '1') {
+    const cache = createLookupCache(db)
+    const http = createLookupHttp({ userAgent: userAgent() })
+    const secret = (name: SecretName): string | undefined => secretStore?.read(name)
     return createStages({
       db,
       python: () => pythonBridge,
-      bpmRange: () => readSettings(db).analysis
+      bpmRange: () => readSettings(db).analysis,
+      cache,
+      // Without an AcoustID key a fingerprint has nowhere to go.
+      wanted: () => secret('acoustid') !== undefined,
+      clients: {
+        acoustid: createAcoustIdClient({ http, cache, apiKey: () => secret('acoustid') }),
+        musicbrainz: createMusicBrainzClient({ http, cache }),
+        discogs: createDiscogsClient({
+          http,
+          cache,
+          credentials: () => {
+            const key = secret('discogsKey')
+            const discogsSecret = secret('discogsSecret')
+            return key !== undefined && discogsSecret !== undefined
+              ? { key, secret: discogsSecret }
+              : undefined
+          }
+        })
+      }
     })
   }
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])

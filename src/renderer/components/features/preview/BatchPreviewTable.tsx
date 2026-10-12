@@ -40,6 +40,8 @@ type BatchPreviewTableProps = {
   /** Resolves to false when the value was not taken. */
   onEdit: (trackId: number, field: EditablePreviewField, value: PreviewValue) => Promise<boolean>
   onSetExcluded: (trackId: number, excluded: boolean) => void
+  /** Told which row the keys act on, or null: for an action of the page on that row. */
+  onCursorRowChange?: (trackId: number | null) => void
 }
 
 function rowState(row: PreviewRow): { icon: LucideIcon; label: string; className: string } {
@@ -66,7 +68,8 @@ export function BatchPreviewTable({
   columns: allColumns,
   styles,
   onEdit,
-  onSetExcluded
+  onSetExcluded,
+  onCursorRowChange
 }: BatchPreviewTableProps): React.JSX.Element {
   const scrollRef = React.useRef<HTMLDivElement>(null)
   // Measured here: the virtualizer only reports a change of the height it scrolls in.
@@ -94,10 +97,21 @@ export function BatchPreviewTable({
     [styles, tableWidth]
   )
 
-  // A wide-only column is the first to give way: it is shown only where the table
-  // has room for every column, so that it never makes the table scroll sideways.
-  const showWideOnly = tableWidth >= Math.max(WIDE_FROM_WIDTH, leastWidthOf(allColumns))
-  const columns = allColumns.filter((column) => showWideOnly || !column.wideOnly)
+  // A wide-only column never makes the table scroll sideways: such columns join in
+  // the order they are defined, each only where the table still has room for it.
+  const columns = React.useMemo(() => {
+    const shown = allColumns.filter((column) => !column.wideOnly)
+    if (tableWidth < WIDE_FROM_WIDTH) return shown
+    const joined = new Set<string>()
+    for (const column of allColumns) {
+      if (!column.wideOnly) continue
+      if (leastWidthOf([...shown, column]) > tableWidth) break
+      shown.push(column)
+      joined.add(column.id)
+    }
+    // In the order of the definition, wherever a column joined.
+    return allColumns.filter((column) => !column.wideOnly || joined.has(column.id))
+  }, [allColumns, tableWidth])
   const editable = columns.filter((column) => column.edit !== undefined)
   const template = `${LEADING_COLUMNS} ${columns.map((column) => column.track).join(' ')}`
   const minWidth = leastWidthOf(columns)
@@ -114,6 +128,13 @@ export function BatchPreviewTable({
 
   const cursorIndex = cursor === null ? -1 : rows.findIndex((row) => row.trackId === cursor.trackId)
   const cursorRow = cursorIndex === -1 ? undefined : rows[cursorIndex]
+  // A row that failed is not written, so the page has nothing to do with it.
+  const cursorTrackId = cursorRow && !cursorRow.error ? cursorRow.trackId : null
+  React.useEffect(() => {
+    onCursorRowChange?.(cursorTrackId)
+    // A table that is gone has no row to act on: the page must not keep the last one.
+    return () => onCursorRowChange?.(null)
+  }, [cursorTrackId, onCursorRowChange])
   // A column that is gone (the table got narrower, or the tab changed) is no place to be.
   const cursorColumn =
     editable.find((column) => column.id === cursor?.columnId) ?? editable[0] ?? null

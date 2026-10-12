@@ -15,6 +15,7 @@ import type { PipelineState, RunProgress } from './pipeline'
 import type {
   ApproveOutcome,
   PreviewEdit,
+  PreviewRefresh,
   PreviewExclude,
   PreviewPage,
   PreviewRow,
@@ -65,6 +66,7 @@ export const IPC_CHANNELS = {
   previewState: 'preview:state',
   previewRows: 'preview:rows',
   previewEdit: 'preview:edit',
+  previewRefreshLookup: 'preview:refreshLookup',
   previewSetExcluded: 'preview:setExcluded',
   previewApprove: 'preview:approve',
   previewDiscard: 'preview:discard',
@@ -163,6 +165,8 @@ export interface FixLibraryApi {
      * what follows from the field, such as the file name, is brought up to date.
      */
     edit: (edit: PreviewEdit) => Promise<Result<PreviewRow>>
+    /** Asks the online services again about one row of the batch that waits. */
+    refreshLookup: (request: PreviewRefresh) => Promise<Result<PreviewRow>>
     /** Takes rows out of the batch, or back in. Tracks are named by id only. */
     setExcluded: (request: PreviewExclude) => Promise<Result<PreviewState>>
     /**

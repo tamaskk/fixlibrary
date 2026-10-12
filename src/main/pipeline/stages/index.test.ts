@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createDemoStages } from './demo'
 import { createStages, selectableStages, validateStages, withDependencies } from './index'
+import type { LookupClients } from '../../services/lookup/chain'
 import type { Stage } from './stage'
 import type { AppDatabase } from '../../db/connection'
 
@@ -22,7 +23,10 @@ describe('validateStages', () => {
     const stages = createStages({
       db: {} as AppDatabase,
       python: () => null,
-      bpmRange: () => ({ bpmMin: 85, bpmMax: 175 })
+      bpmRange: () => ({ bpmMin: 85, bpmMax: 175 }),
+      cache: { get: () => undefined, put: () => {} },
+      wanted: () => false,
+      clients: {} as LookupClients
     })
 
     // Act
@@ -206,6 +210,9 @@ describe('the demo stages', () => {
       fileName: null,
       artist: 'AC/DC',
       title: 'Thunder',
+      album: null,
+      label: null,
+      year: null,
       bpm: null,
       key: null,
       mix: 'Live',

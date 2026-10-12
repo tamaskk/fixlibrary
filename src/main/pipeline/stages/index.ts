@@ -1,11 +1,19 @@
 import { createBpmKeyStage, type BpmKeyStageDependencies } from './bpm-key'
+import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
+import { createLookupStage, type LookupStageDependencies } from './lookup'
 import type { Stage } from './stage'
 
-export type StageDependencies = BpmKeyStageDependencies
+export type StageDependencies = BpmKeyStageDependencies &
+  FingerprintStageDependencies &
+  LookupStageDependencies
 
 /** Every stage the app has, in the order the function chooser lists them. */
 export function createStages(dependencies: StageDependencies): Stage[] {
-  return [createBpmKeyStage(dependencies)]
+  return [
+    createFingerprintStage(dependencies),
+    createLookupStage(dependencies),
+    createBpmKeyStage(dependencies)
+  ]
 }
 
 /**
