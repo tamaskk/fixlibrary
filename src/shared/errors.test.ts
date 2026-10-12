@@ -11,6 +11,7 @@ describe('ERROR_CODES', () => {
         'LOOKUP_FAILED',
         'PYTHON_CRASHED',
         'CLAUDE_FAILED',
+        'CLAUDE_LIMIT',
         'WRITE_FAILED'
       ])
     )

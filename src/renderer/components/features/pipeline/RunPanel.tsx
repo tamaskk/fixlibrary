@@ -120,6 +120,11 @@ export function RunPanel({
             <StatusLine tone="warning" className="truncate">
               A könyvtár lemeze nincs csatlakoztatva. Csatlakoztasd, és folytasd a futást.
             </StatusLine>
+          ) : progress.claudeRetryAt !== null ? (
+            <StatusLine tone="warning" className="truncate">
+              Claude usage limit elérve. Az app 15 percenként újrapróbálja; a többi lépés megy
+              tovább.
+            </StatusLine>
           ) : (
             <p
               aria-label={`Lépések: ${steps}`}

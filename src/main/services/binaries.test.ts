@@ -119,8 +119,9 @@ describe('checkAll', () => {
     writeTool(join(locations.bundledDir, 'fpcalc'), 'echo "something else entirely"')
 
     // Act
-    // Long enough for macOS to scan the freshly written scripts on their first run.
-    const checks = await checkAll(locations, { timeoutMs: 2000 })
+    // Long enough for macOS to scan the freshly written scripts on their first run,
+    // also while other test files start processes of their own at the same time.
+    const checks = await checkAll(locations, { timeoutMs: 6000 })
 
     // Assert
     expect(summarize(checks)).toEqual([
@@ -129,7 +130,7 @@ describe('checkAll', () => {
       ['fpcalc', 'unrecognized'],
       ['mp3gain', 'missing']
     ])
-  })
+  }, 20_000)
 
   it('reports yt-dlp as missing where there is no interpreter', async () => {
     // Arrange

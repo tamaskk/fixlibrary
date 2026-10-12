@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import type { ToolCheck, ToolCheckFailure } from '@shared/tools'
+import { ClaudeStatus } from './ClaudeStatus'
 import { SettingsSection } from './SettingsSection'
 import { StatusLine } from '@/components/ui/status-line'
 
@@ -88,6 +89,7 @@ export function SystemSection(): React.JSX.Element {
       <div role="status">
         {logFolderFailed && <StatusLine tone="danger">A logmappa nem nyitható meg.</StatusLine>}
       </div>
+      <ClaudeStatus />
     </SettingsSection>
   )
 }

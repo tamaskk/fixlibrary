@@ -36,6 +36,7 @@ function progress(changes: Partial<RunProgress> = {}): RunProgress {
     state: 'running',
     outcome: null,
     pauseReason: null,
+    claudeRetryAt: null,
     counts: { total: 40, done: 4, failed: 0, skipped: 0, running: 2 },
     stages: [],
     tracks: { total: 20, failed: 0 },

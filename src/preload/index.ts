@@ -38,7 +38,11 @@ const api: FixLibraryApi = {
   },
   system: {
     checkTools: (force) => ipcRenderer.invoke(IPC_CHANNELS.systemCheckTools, force),
-    openLogFolder: () => ipcRenderer.invoke(IPC_CHANNELS.systemOpenLogFolder)
+    openLogFolder: () => ipcRenderer.invoke(IPC_CHANNELS.systemOpenLogFolder),
+    claudeStatus: (force) => ipcRenderer.invoke(IPC_CHANNELS.systemClaudeStatus, force),
+    pickClaude: () => ipcRenderer.invoke(IPC_CHANNELS.systemPickClaude),
+    clearClaude: () => ipcRenderer.invoke(IPC_CHANNELS.systemClearClaude),
+    testClaude: () => ipcRenderer.invoke(IPC_CHANNELS.systemTestClaude)
   },
   library: {
     status: () => ipcRenderer.invoke(IPC_CHANNELS.libraryStatus),

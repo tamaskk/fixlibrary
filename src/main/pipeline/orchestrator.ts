@@ -38,6 +38,7 @@ import {
   type ResourceLimits,
   type RunProgress
 } from '@shared/pipeline'
+import { CLAUDE_LIMIT_RETRY_MS } from '@shared/timeouts'
 import { readProposal } from '@shared/preview'
 import type { BatchFiles, UndoSummary } from './batch-files'
 import { createJobQueue } from './queue'
@@ -83,6 +84,8 @@ export interface OrchestratorDependencies {
   onBusyChange?: (busy: boolean) => void
   now?: () => number
   maxAttempts?: number
+  /** How long the steps that need Claude wait after the usage limit was reached. */
+  claudeRetryMs?: number
 }
 
 export interface Orchestrator {
@@ -143,6 +146,8 @@ interface Run {
   durations: Map<string, number[]>
   controllers: Map<number, AbortController>
   pauseReason: 'user' | 'offline' | null
+  /** When Claude is asked again after its usage limit was reached, or null. */
+  claudeRetryAt: number | null
   /** In the apply phase: how many tracks are written. The others were left out. */
   writtenTracks: number | null
   /** The tracks that a stage of this phase failed for. */
@@ -250,6 +255,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       state,
       outcome,
       pauseReason: active.pauseReason,
+      claudeRetryAt: active.claudeRetryAt,
       counts: total,
       stages: perStage,
       tracks: {
@@ -362,6 +368,41 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const dependent of dependentsOf(active, job)) skipWithDependents(active, dependent)
   }
 
+  // The timer that lets the steps that need Claude go on again, or null.
+  let claudeTimer: NodeJS.Timeout | null = null
+
+  function forgetClaudeLimit(): void {
+    if (claudeTimer) clearTimeout(claudeTimer)
+    claudeTimer = null
+    queue.resumeResource('claude')
+  }
+
+  /**
+   * Puts a job back in line after Claude's usage limit was reached, and holds every
+   * step that needs Claude until it is time to ask again. The rest of the run goes on.
+   */
+  function waitForClaude(active: Run, job: RunJob): void {
+    // Stored first: if that fails, nothing is held that no timer would let go again.
+    requeueJobs(db, [job.id])
+    queue.pauseResource('claude')
+    setStatus(active, job, 'queued')
+    queue.addFirst(job)
+    if (active.claudeRetryAt !== null) return
+    const waitMs = dependencies.claudeRetryMs ?? CLAUDE_LIMIT_RETRY_MS
+    active.claudeRetryAt = now() + waitMs
+    logger.warn(`Batch ${active.batchId}: the Claude usage limit is reached, trying again later`)
+    claudeTimer = setTimeout(() => {
+      claudeTimer = null
+      if (run !== active) return
+      active.claudeRetryAt = null
+      logger.info(`Batch ${active.batchId}: asking Claude again`)
+      queue.resumeResource('claude')
+      report()
+    }, waitMs)
+    // A run that waits for Claude must not keep the app from quitting.
+    claudeTimer.unref()
+  }
+
   /**
    * Lets the jobs that waited for a finished one go on. If that cannot be stored,
    * they are taken off the run in memory, so the run still comes to an end; the
@@ -395,8 +436,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   function leave(active: Run, outcome: NonNullable<RunProgress['outcome']>): void {
     // The run is over before anyone is told: a listener that reacts by cancelling or
     // pausing finds no run to act on.
+    active.claudeRetryAt = null
     const last = snapshot(active, 'finished', outcome)
     run = null
+    forgetClaudeLimit()
     queue.resume()
     const waiters = finishedWaiters
     finishedWaiters = []
@@ -529,7 +572,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       if (!stillOurs()) return
 
       if (!outcome.ok) {
-        fail(active, job, outcome.error)
+        // Not the track's fault, and no reason to give it up: it waits for room.
+        if (outcome.error.code === 'CLAUDE_LIMIT') waitForClaude(active, job)
+        else fail(active, job, outcome.error)
         return
       }
       const proposal = outcome.value?.proposal
@@ -586,6 +631,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       durations: new Map(),
       controllers: new Map(),
       pauseReason,
+      claudeRetryAt: null,
       writtenTracks: null,
       failedTracks: new Set(),
       activeMs: 0,
@@ -825,6 +871,8 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     shutdown() {
       shutDown = true
       const active = run
+      if (claudeTimer) clearTimeout(claudeTimer)
+      claudeTimer = null
       queue.pause()
       queue.clear()
       if (!active) return

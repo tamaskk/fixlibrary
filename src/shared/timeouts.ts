@@ -30,3 +30,12 @@ export const ENGINE_CHECK_TIMEOUT_MS = 15 * SECOND
 
 /** How long a job in the sidecar may take to stop after it was told to. */
 export const JOB_CANCEL_TIMEOUT_MS = 5 * SECOND
+
+/** How long one `claude -p` call may take, whatever it was asked. */
+export const CLAUDE_CALL_TIMEOUT_MS = 120 * SECOND
+
+/** For finding `claude` and asking it for its version or its login state. */
+export const CLAUDE_CHECK_TIMEOUT_MS = 15 * SECOND
+
+/** How long the app waits before it tries Claude again after the usage limit was reached. */
+export const CLAUDE_LIMIT_RETRY_MS = 15 * MINUTE
