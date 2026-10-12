@@ -5,6 +5,8 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
   bpmKey: 'BPM és key elemzés',
   naming: 'Fájlnév és névtisztítás',
   rename: 'Átnevezés',
+  duplicates: 'Duplikátumok keresése',
+  setAside: 'Duplikátumok félretétele',
   demoAnalyze: 'Demo elemzés',
   demoLookup: 'Demo lookup',
   demoRename: 'Demo átnevezés'

@@ -102,7 +102,8 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
       'Minden funkció',
       'Online lookup',
       'BPM és key elemzés',
-      'Fájlnév és névtisztítás'
+      'Fájlnév és névtisztítás',
+      'Duplikátumok keresése'
     ])
     await expect(run.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeEnabled()
     await expect(run.getByRole('button', { name: 'Futtatás a teljes könyvtáron' })).toBeEnabled()

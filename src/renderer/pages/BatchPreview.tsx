@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { BatchPreviewTable } from '@/components/features/preview/BatchPreviewTable'
+import { DuplicateGroups } from '@/components/features/preview/DuplicateGroups'
 import { columnsFor, ERROR_COLUMNS } from '@/components/features/preview/preview-columns'
 import { PreviewActions } from '@/components/features/preview/PreviewActions'
 import { PreviewNoticeLine } from '@/components/features/preview/PreviewNoticeLine'
@@ -14,6 +15,7 @@ import { FILTER_LABELS } from '@/lib/preview-labels'
 import { useAppStore } from '@/stores/app-store'
 import { usePipelineStore } from '@/stores/pipeline-store'
 import { countRows, shownRows, usePreviewStore, type PreviewTab } from '@/stores/preview-store'
+import { DUPLICATES_FOLDER } from '@shared/duplicates'
 import { PREVIEW_FILTERS, type PreviewFilter } from '@shared/preview'
 
 function parseFilter(value: string): PreviewFilter {
@@ -26,6 +28,9 @@ export function BatchPreview(): React.JSX.Element {
   const batch = usePreviewStore((state) => state.batch)
   const canUndo = usePreviewStore((state) => state.canUndo)
   const list = usePreviewStore((state) => state.rows)
+  const duplicates = usePreviewStore((state) => state.duplicates)
+  const loadDuplicates = usePreviewStore((state) => state.loadDuplicates)
+  const keepDuplicate = usePreviewStore((state) => state.keepDuplicate)
   const styles = usePreviewStore((state) => state.styles)
   const tab = usePreviewStore((state) => state.tab)
   const filter = usePreviewStore((state) => state.filter)
@@ -49,6 +54,7 @@ export function BatchPreview(): React.JSX.Element {
   // The row the keys of the table act on; "Lookup frissítése" asks about that one.
   const [cursorTrackId, setCursorTrackId] = React.useState<number | null>(null)
   const heading = React.useRef<HTMLHeadingElement>(null)
+  const duplicatesNoteId = React.useId()
   const undoButton = React.useRef<HTMLButtonElement>(null)
   const refreshButton = React.useRef<HTMLButtonElement>(null)
   // The button is disabled while it asks, which takes the focus from it: it gets the
@@ -73,6 +79,14 @@ export function BatchPreview(): React.JSX.Element {
     [rows, tab, filter]
   )
   const counts = React.useMemo(() => countRows(rows ?? []), [rows])
+  // The copies an approval moves out of the library: not kept, and not taken out.
+  const setAside = React.useMemo(() => {
+    if (!batch?.findsDuplicates) return 0
+    if (duplicates.status !== 'ready') return null
+    return duplicates.groups
+      .flatMap((group) => group.members)
+      .filter((member) => !member.keep && !member.excluded).length
+  }, [batch, duplicates])
   /** The button a dialog was opened from, or the top of the page when it is gone or disabled. */
   function focusOrHeading(button: HTMLButtonElement | null): void {
     if (button && !button.disabled) button.focus()
@@ -126,7 +140,7 @@ export function BatchPreview(): React.JSX.Element {
           </StatusLine>
         )}
         {editNote === 'busy' && (
-          <StatusLine tone="neutral">Jóváhagyás közben a batch nem változtatható.</StatusLine>
+          <StatusLine tone="neutral">A batch most nem változtatható.</StatusLine>
         )}
       </div>
 
@@ -184,6 +198,16 @@ export function BatchPreview(): React.JSX.Element {
               >
                 <TabsList aria-label="A batch nézetei">
                   <TabsTrigger value="changes">Változások</TabsTrigger>
+                  {batch.findsDuplicates && (
+                    <TabsTrigger value="duplicates">
+                      Duplikátumok
+                      <span className="font-mono text-data tabular-nums">
+                        {duplicates.status === 'ready'
+                          ? formatCount(duplicates.groups.length)
+                          : '–'}
+                      </span>
+                    </TabsTrigger>
+                  )}
                   <TabsTrigger value="errors">
                     Hibák
                     <span className="font-mono text-data tabular-nums">
@@ -242,17 +266,76 @@ export function BatchPreview(): React.JSX.Element {
                         )}
                       </>
                     )}
+                    {tab === 'duplicates' && (
+                      <p
+                        id={duplicatesNoteId}
+                        className="flex min-h-8 min-w-0 items-center text-small text-text-muted"
+                      >
+                        {/* In words: rows that cannot be chosen say nothing of why. */}
+                        {runActive
+                          ? 'Futás közben nem módosítható.'
+                          : busy !== null
+                            ? 'Most nem módosítható.'
+                            : `Csoportonként egy példány marad, a többi a ${DUPLICATES_FOLDER} mappába kerül. Fájl nem törlődik.`}
+                      </p>
+                    )}
                     <p className="ml-auto flex h-8 shrink-0 items-center gap-1 text-small whitespace-nowrap text-text-muted">
-                      <span className="font-mono text-data text-text tabular-nums">
-                        {shown.length === rows.length
-                          ? formatCount(rows.length)
-                          : `${formatCount(shown.length)} / ${formatCount(rows.length)}`}
-                      </span>{' '}
-                      track
+                      {tab === 'duplicates' ? (
+                        <>
+                          <span className="font-mono text-data text-text tabular-nums">
+                            {duplicates.status === 'ready'
+                              ? formatCount(duplicates.groups.length)
+                              : '–'}
+                          </span>{' '}
+                          csoport
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono text-data text-text tabular-nums">
+                            {shown.length === rows.length
+                              ? formatCount(rows.length)
+                              : `${formatCount(shown.length)} / ${formatCount(rows.length)}`}
+                          </span>{' '}
+                          track
+                        </>
+                      )}
                     </p>
                   </div>
 
-                  {shown.length === 0 ? (
+                  {tab === 'duplicates' ? (
+                    <>
+                      {(duplicates.status === 'idle' || duplicates.status === 'loading') && (
+                        <p role="status" className="text-body text-text-muted">
+                          Duplikátumok betöltése…
+                        </p>
+                      )}
+                      {duplicates.status === 'error' && (
+                        <div
+                          role="alert"
+                          className="flex flex-1 flex-col items-center justify-center gap-4"
+                        >
+                          <StatusLine tone="danger">A duplikátumok nem tölthetők be.</StatusLine>
+                          <Button variant="secondary" onClick={() => void loadDuplicates()}>
+                            Próbáld újra
+                          </Button>
+                        </div>
+                      )}
+                      {duplicates.status === 'ready' &&
+                        (duplicates.groups.length === 0 ? (
+                          <EmptyState
+                            className="flex-1 rounded-lg border border-border"
+                            message="Ebben a batch-ben nincs duplikátum."
+                          />
+                        ) : (
+                          <DuplicateGroups
+                            groups={duplicates.groups}
+                            disabled={runActive || busy !== null}
+                            disabledReasonId={duplicatesNoteId}
+                            onKeep={(trackId) => void keepDuplicate(trackId)}
+                          />
+                        ))}
+                    </>
+                  ) : shown.length === 0 ? (
                     <EmptyState
                       className="flex-1 rounded-lg border border-border"
                       message={
@@ -287,6 +370,7 @@ export function BatchPreview(): React.JSX.Element {
               <PreviewActions
                 mode={batch.mode}
                 counts={counts}
+                setAside={setAside}
                 busy={busy}
                 onApprove={async () => {
                   // The run panel of the Library page shows the apply phase.

@@ -60,6 +60,17 @@ export function Library(): React.JSX.Element {
     void loadPreview()
   }, [load, loadPipeline, loadPreview])
 
+  // A batch that wrote changed the files of its tracks: their names, and
+  // whether they are still part of the library. The page may have been open all along.
+  const reloadedFor = React.useRef(runFinished)
+  React.useEffect(() => {
+    // Not on a visit of the page, which reads the list anyway.
+    if (reloadedFor.current === runFinished) return
+    reloadedFor.current = runFinished
+    // Also one that was cancelled: what it had written by then stays written.
+    if (runFinished?.phase === 'apply') void load()
+  }, [runFinished, load])
+
   const tracks = list.status === 'ready' ? list.tracks : null
   const rows = React.useMemo(
     () => (tracks === null ? [] : applyView(tracks, view, styles)),

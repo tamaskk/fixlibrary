@@ -2,11 +2,17 @@ import * as React from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogFooter } from '@/components/ui/dialog'
 import { formatCount } from '@/lib/format'
+import { DUPLICATES_FOLDER } from '@shared/duplicates'
 import type { PreviewBatch } from '@shared/preview'
 
 type PreviewActionsProps = {
   mode: PreviewBatch['mode']
   counts: { applied: number; excluded: number; failed: number }
+  /**
+   * How many files an approval moves out of the library, into `_Duplicates`. Null
+   * when the batch looked for duplicates and what it found could not be read.
+   */
+  setAside: number | null
   /** The action that is on its way, or null. */
   busy: 'approve' | 'discard' | 'undo' | null
   onApprove: () => void
@@ -29,6 +35,7 @@ function Count({ value }: { value: number }): React.JSX.Element {
 export function PreviewActions({
   mode,
   counts,
+  setAside,
   busy,
   onApprove,
   onDiscard,
@@ -42,15 +49,33 @@ export function PreviewActions({
     else onFocusLost()
   }
   const left = counts.excluded + counts.failed
+  // Said before the approval, whether or not the tab of the duplicates was opened:
+  // these files leave the library.
+  const asideNote =
+    setAside === null
+      ? ` Lehet, hogy fájlok kerülnek a ${DUPLICATES_FOLDER} mappába: a duplikátumok nem tölthetők be.`
+      : setAside > 0
+        ? ` ${formatCount(setAside)} fájl a ${DUPLICATES_FOLDER} mappába kerül.`
+        : ''
 
   return (
     <section aria-label="Jóváhagyás" className="flex items-center gap-4">
-      <p role="status" className="mr-auto flex h-8 items-center gap-1 text-small text-text-muted">
+      {/* May take a second line: with every part present it is wider than the minimum window leaves it. */}
+      <p
+        role="status"
+        className="mr-auto flex min-h-8 min-w-0 flex-wrap items-center gap-x-1 text-small text-text-muted"
+      >
         <Count value={counts.applied} /> track alkalmazásra vár
         {counts.excluded > 0 && (
           <>
             <span aria-hidden="true"> · </span>
             <Count value={counts.excluded} /> kizárva
+          </>
+        )}
+        {setAside !== null && setAside > 0 && (
+          <>
+            <span aria-hidden="true"> · </span>
+            <Count value={setAside} /> fájl a {DUPLICATES_FOLDER} mappába kerül
           </>
         )}
         {counts.failed > 0 && (
@@ -88,7 +113,7 @@ export function PreviewActions({
             backTo(approveButton.current)
           }}
           title="Jóváhagyod a változásokat?"
-          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad. ${MODE_NOTES[mode]}`}
+          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote} ${MODE_NOTES[mode]}`}
         >
           <DialogFooter>
             <DialogClose asChild>

@@ -20,6 +20,10 @@ export function PreviewNoticeLine({ notice }: { notice: PreviewNotice }): React.
   if (notice === null) return null
   switch (notice.kind) {
     case 'failed':
+      // Not a failure: the page has read the batch again, and asks for a second look.
+      if (notice.code === 'PREVIEW_CHANGED') {
+        return <StatusLine tone="warning">{errorMessage(notice.code)}</StatusLine>
+      }
       return <StatusLine tone="danger">{describeFailure(notice.code)}</StatusLine>
     case 'noSpace':
       return (

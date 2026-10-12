@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { DuplicateGroup } from '@shared/duplicates'
 import type { FixLibraryApi } from '@shared/ipc'
 import type { PreviewCell, PreviewRow, PreviewState } from '@shared/preview'
 import { countRows, shownRows, usePreviewStore } from './preview-store'
@@ -49,7 +50,8 @@ const WAITING: PreviewState = {
     total: 3,
     excluded: 1,
     failed: 1,
-    canRefresh: true
+    canRefresh: true,
+    findsDuplicates: false
   },
   canUndo: false
 }
@@ -241,5 +243,217 @@ describe('the preview store', () => {
     // Assert
     expect(started).toBe(true)
     expect(usePreviewStore.getState().batch).toBeNull()
+  })
+})
+
+describe('the duplicates of a batch', () => {
+  const FINDS: PreviewState = {
+    batch: { ...(WAITING.batch as NonNullable<PreviewState['batch']>), findsDuplicates: true },
+    canUndo: false
+  }
+  const member = (trackId: number, keep: boolean): DuplicateGroup['members'][number] => ({
+    trackId,
+    fileName: `track-${trackId}.mp3`,
+    folder: '/Music/Inbox',
+    format: 'mp3',
+    bitrateKbps: 320,
+    durationMs: 300_000,
+    keep,
+    suggested: trackId === 1,
+    excluded: false
+  })
+  const group = (kept: number): DuplicateGroup => ({
+    id: 1,
+    artist: 'Bicep',
+    title: 'Glue',
+    mix: null,
+    members: [member(1, kept === 1), member(2, kept === 2)]
+  })
+
+  it('are read with the rows, for a batch that looked for them', async () => {
+    // Arrange
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () => ({ ok: true, value: [group(1)] })
+    })
+
+    // Act
+    await usePreviewStore.getState().load()
+
+    // Assert
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'ready', groups: [group(1)] })
+  })
+
+  it('are not asked for when the batch did not look for them', async () => {
+    // Arrange
+    const duplicates = vi.fn(async () => ({ ok: true as const, value: [] }))
+    stubApi({ duplicates })
+
+    // Act
+    await usePreviewStore.getState().load()
+
+    // Assert
+    expect(duplicates).not.toHaveBeenCalled()
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'idle' })
+    expect(shownRows(ROWS, 'duplicates', 'all')).toEqual([])
+  })
+
+  it('show an error of their own, and the rows all the same, when they cannot be read', async () => {
+    // Arrange
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () => ({ ok: false, code: 'UNEXPECTED' })
+    })
+
+    // Act
+    await usePreviewStore.getState().load()
+
+    // Assert
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'error' })
+    expect(usePreviewStore.getState().rows.status).toBe('ready')
+  })
+
+  it('show the copy that is kept only once main has taken the choice', async () => {
+    // Arrange
+    let answer: (result: Awaited<ReturnType<PreviewApi['keepDuplicate']>>) => void = () => {}
+    const keepDuplicate = vi.fn(
+      () =>
+        new Promise<Awaited<ReturnType<PreviewApi['keepDuplicate']>>>(
+          (resolve) => (answer = resolve)
+        )
+    )
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () => ({ ok: true, value: [group(1)] }),
+      keepDuplicate
+    })
+    await usePreviewStore.getState().load()
+
+    // Act
+    const keeping = usePreviewStore.getState().keepDuplicate(2)
+    // A second choice while the first is on its way is not sent.
+    await usePreviewStore.getState().keepDuplicate(1)
+    const meanwhile = usePreviewStore.getState().duplicates
+    answer({ ok: true, value: [group(2)] })
+    await keeping
+
+    // Assert
+    expect(keepDuplicate).toHaveBeenCalledTimes(1)
+    expect(keepDuplicate).toHaveBeenCalledWith({ batchId: 7, trackId: 2 })
+    expect(meanwhile).toEqual({ status: 'ready', groups: [group(1)] })
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'ready', groups: [group(2)] })
+  })
+
+  it('say so when a choice comes while the batch is being approved', async () => {
+    // Arrange
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () => ({ ok: true, value: [group(1)] }),
+      keepDuplicate: async () => ({ ok: false, code: 'RUN_ACTIVE' })
+    })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().keepDuplicate(2)
+
+    // Assert
+    expect(usePreviewStore.getState().editNote).toBe('busy')
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'ready', groups: [group(1)] })
+  })
+
+  it('are read again after a name was changed, and the rows say who is a copy now', async () => {
+    // Arrange: row 2 is flagged as a copy; after the edit rows 1 and 3 are the copies.
+    let groups = [group(1)]
+    const rows = vi.fn(async () => ({
+      ok: true as const,
+      value: { rows: ROWS, total: ROWS.length }
+    }))
+    stubApi({
+      state: async () => FINDS,
+      rows,
+      duplicates: async () => ({ ok: true, value: groups }),
+      edit: async () => ({ ok: true, value: row(1) })
+    })
+    await usePreviewStore.getState().load()
+    groups = [{ ...group(1), members: [member(1, true), member(3, false)] }]
+
+    // Act
+    await usePreviewStore.getState().edit(1, 'energy', 7)
+    const afterEnergy = usePreviewStore.getState().duplicates
+    await usePreviewStore.getState().edit(1, 'title', 'Another')
+
+    // Assert: an energy makes no track a copy of another, a title may.
+    expect(afterEnergy).toEqual({ status: 'ready', groups: [group(1)] })
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'ready', groups })
+    const shown = usePreviewStore.getState().rows
+    expect(shown.status === 'ready' && shown.rows.map((each) => each.warnings)).toEqual([
+      ['DUPLICATE'],
+      [],
+      ['DUPLICATE']
+    ])
+    // The rows themselves are not all read again.
+    expect(rows).toHaveBeenCalledTimes(1)
+  })
+
+  it('keep the rows that are shown when they cannot be read again after an edit', async () => {
+    // Arrange
+    let fails = false
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () =>
+        fails ? { ok: false, code: 'UNEXPECTED' } : { ok: true, value: [group(1)] },
+      edit: async () => ({ ok: true, value: row(1) })
+    })
+    await usePreviewStore.getState().load()
+    fails = true
+
+    // Act
+    const taken = await usePreviewStore.getState().edit(1, 'title', 'Another')
+
+    // Assert
+    expect(taken).toBe(true)
+    expect(usePreviewStore.getState().rows.status).toBe('ready')
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'error' })
+  })
+
+  it('are read again when an approval is refused because they were out of date', async () => {
+    // Arrange
+    let groups = [group(1)]
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () => ({ ok: true, value: groups }),
+      approve: async () => ({ ok: false, code: 'PREVIEW_CHANGED' })
+    })
+    await usePreviewStore.getState().load()
+    groups = [group(2)]
+
+    // Act
+    const started = await usePreviewStore.getState().approve()
+
+    // Assert: nothing was started, the reason is said, and the page shows what main holds.
+    expect(started).toBe(false)
+    expect(usePreviewStore.getState().notice).toEqual({ kind: 'failed', code: 'PREVIEW_CHANGED' })
+    expect(usePreviewStore.getState().duplicates).toEqual({ status: 'ready', groups: [group(2)] })
+    expect(usePreviewStore.getState().batch?.id).toBe(7)
+  })
+
+  it('say of a copy that it was taken out as soon as its row says so', async () => {
+    // Arrange
+    stubApi({
+      state: async () => FINDS,
+      duplicates: async () => ({ ok: true, value: [group(1)] }),
+      setExcluded: async () => ({ ok: true, value: FINDS })
+    })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().setExcluded([1], true)
+
+    // Assert
+    const { duplicates } = usePreviewStore.getState()
+    expect(duplicates.status === 'ready' && duplicates.groups[0]?.members).toMatchObject([
+      { trackId: 1, excluded: true },
+      { trackId: 2, excluded: false }
+    ])
   })
 })
