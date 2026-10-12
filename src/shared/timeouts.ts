@@ -35,6 +35,12 @@ export const ENGINE_CHECK_TIMEOUT_MS = 15 * SECOND
 /** How long a job in the sidecar may take to stop after it was told to. */
 export const JOB_CANCEL_TIMEOUT_MS = 5 * SECOND
 
+/**
+ * How long quitting waits for a stage to end the file step it is in, before the
+ * database is closed. A copy of a large file to a slow drive is the longest such step.
+ */
+export const QUIT_FILE_WORK_WAIT_MS = 30 * SECOND
+
 /** How long one `claude -p` call may take, whatever it was asked. */
 export const CLAUDE_CALL_TIMEOUT_MS = 120 * SECOND
 

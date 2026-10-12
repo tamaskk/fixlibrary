@@ -752,6 +752,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     },
 
     async applyBatch(batchId) {
+      // Refused before anything is waited for: an undo or an approval that is under
+      // way must never be followed by another that was only queued behind it.
+      if (busyWithFiles) return { ok: false, code: 'RUN_ACTIVE' }
       await pruning
       await dependencies.batchFiles.settled()
       if (shutDown) return { ok: false, code: 'INVALID_INPUT' }
@@ -784,6 +787,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     },
 
     async undoLast() {
+      if (busyWithFiles) return { ok: false, code: 'RUN_ACTIVE' }
       await pruning
       // A stage of a cancelled batch may still be finishing a copy or a rename.
       await dependencies.batchFiles.settled()

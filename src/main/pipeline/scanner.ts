@@ -64,6 +64,13 @@ export interface ScanDependencies {
    * see files half renamed, and take them for missing tracks and new ones.
    */
   isChangingFiles?: () => boolean
+  /**
+   * Runs at the start of every scan, before anything is read. For putting right
+   * what the scan would otherwise misread: a file that an interrupted batch renamed
+   * without telling its track looks like a new track next to a missing one. If it
+   * fails, the scan does not run.
+   */
+  beforeScan?: () => Promise<void>
   /** The path with its links resolved. Replaced in tests that need a path on a volume. */
   resolvePath?: (path: string) => Promise<string>
 }
@@ -462,7 +469,10 @@ export function createLibraryScanner(dependencies: ScanDependencies): LibrarySca
       if (running === null && dependencies.isChangingFiles?.()) {
         return Promise.resolve({ ok: false, code: 'RUN_ACTIVE' })
       }
-      running ??= runScan(dependencies)
+      running ??= (async () => {
+        await dependencies.beforeScan?.()
+        return runScan(dependencies)
+      })()
         .catch((error: unknown): Result<ScanSummary> => {
           logger.error(`The library scan failed: ${describeError(error)}`)
           return { ok: false, code: 'UNEXPECTED' }

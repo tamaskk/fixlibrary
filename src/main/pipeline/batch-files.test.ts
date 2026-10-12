@@ -8,6 +8,8 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync
 } from 'fs'
 import { writeFile } from 'fs/promises'
@@ -19,6 +21,7 @@ import { deleteCreatedFile, listBackups, listCreatedFiles, recordCreatedFile } f
 import { createBatch, getBatch, setBatchStatus, type BatchMode } from '../db/batches'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { backups as backupsTable, batchItems } from '../db/schema'
+import { finishJob, insertJobs, listJobs } from '../db/jobs'
 import { getTrackById, insertTracks, updateTrack } from '../db/tracks'
 import { createFileOps, type FileOps } from '../services/file-ops'
 import { logger } from '../services/logger'
@@ -313,6 +316,234 @@ describe('after the app stopped in the middle of the apply phase', () => {
     expect([...filesUnder(library), ...filesUnder(clean), ...filesUnder(backups)]).toEqual([
       'Music/House/track-01.mp3'
     ])
+  })
+})
+
+describe('before the library is scanned after a stop', () => {
+  /** What `move` leaves when the app stops right after the rename: the name is noted, the track is not told. */
+  async function renamedButNotToldTo(
+    mode: BatchMode
+  ): Promise<{ id: number; old: string; renamed: string }> {
+    const { ids } = addTracks(1)
+    const [id] = ids as [number]
+    const batch = newBatch(mode, ids)
+    // The step that renames was running when the app stopped.
+    insertJobs(testDatabase.db, [
+      { batchId: batch.id, trackId: id, stage: 'rename', phase: 'apply' }
+    ])
+    const working = await trackFiles(batch, id).workingPath()
+    const renamed = join(dirname(working), 'Renamed.mp3')
+    recordCreatedFile(testDatabase.db, { batchId: batch.id, trackId: id, path: renamed })
+    renameSync(working, renamed)
+    return { id, old: working, renamed }
+  }
+
+  it('tells a track where its file is when it was renamed just before the stop', async () => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { id, old, renamed } = await renamedButNotToldTo('in_place')
+    const bytes = sha256(renamed)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert: the row names the file, so a scan finds nothing missing and nothing new.
+    expect(found).toBe(1)
+    expect(pathOf(id)).toBe(renamed)
+    expect(existsSync(old)).toBe(false)
+    expect(sha256(renamed)).toBe(bytes)
+  })
+
+  it('changes nothing for tracks whose files are where the database says', async () => {
+    // Arrange
+    const { ids, paths } = addTracks(2)
+    const batch = newBatch('in_place', ids)
+    const [first] = ids as [number]
+    await trackFiles(batch, first).move(join(library, 'Inbox', 'Moved.mp3'))
+    const before = ids.map(pathOf)
+    const tree = filesUnder(folder)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(ids.map(pathOf)).toEqual(before)
+    expect(filesUnder(folder)).toEqual(tree)
+    expect(paths).toHaveLength(2)
+  })
+
+  it('leaves a track alone whose file is under none of the names the batch gave it', async () => {
+    // Arrange
+    const warned = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { id, old, renamed } = await renamedButNotToldTo('in_place')
+    rmSync(renamed)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(pathOf(id)).toBe(old)
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('1 tracks of batch'))
+  })
+
+  it.each([
+    ['a folder', (path: string) => mkdirSync(path)],
+    // To a file inside the library that no track has: only its being a link speaks against it.
+    ['a link', (path: string) => symlinkSync(join(library, 'unowned.mp3'), path)]
+  ])('does not take %s under the noted name for the file of a track', async (_name, put) => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { id, old, renamed } = await renamedButNotToldTo('in_place')
+    rmSync(renamed)
+    writeFileSync(join(library, 'unowned.mp3'), FIXTURE)
+    put(renamed)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(pathOf(id)).toBe(old)
+  })
+
+  it('does not point a track at a file outside the folders of the library', async () => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { ids, paths } = addTracks(1)
+    const [id] = ids as [number]
+    const batch = newBatch('in_place', ids)
+    const outside = join(folder, 'Outside.mp3')
+    recordCreatedFile(testDatabase.db, { batchId: batch.id, trackId: id, path: outside })
+    renameSync(paths[0] as string, outside)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(pathOf(id)).toBe(paths[0])
+  })
+
+  it('does not point a track at a file another track has, in any letter case', async () => {
+    // Arrange: a stale note of the first track names what is the second track's file now.
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { ids, paths } = addTracks(2)
+    const [first, second] = ids as [number, number]
+    const batch = newBatch('in_place', ids)
+    const secondPath = paths[1] as string
+    recordCreatedFile(testDatabase.db, {
+      batchId: batch.id,
+      trackId: first,
+      path: join(dirname(secondPath), basename(secondPath).toUpperCase())
+    })
+    rmSync(paths[0] as string)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(pathOf(first)).toBe(paths[0])
+    expect(pathOf(second)).toBe(secondPath)
+  })
+
+  it('leaves a track alone whose step had ended, whatever sits under a name it once had', async () => {
+    // Arrange: a batch that named a file twice and finished. Later the file is
+    // deleted outside the app and another file is put under the first of its names.
+    const warned = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { ids } = addTracks(1)
+    const [id] = ids as [number]
+    const batch = newBatch('in_place', ids)
+    insertJobs(testDatabase.db, [
+      { batchId: batch.id, trackId: id, stage: 'rename', phase: 'apply' }
+    ])
+    const first = (await trackFiles(batch, id).move(join(library, 'Inbox', 'First.mp3'))).path
+    const second = (await trackFiles(batch, id).move(join(library, 'Inbox', 'Second.mp3'))).path
+    const [job] = listJobs(testDatabase.db, batch.id)
+    finishJob(testDatabase.db, job?.id ?? 0, { status: 'done' })
+    rmSync(second)
+    writeFileSync(first, FIXTURE)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert: the file under the old name is not the track's, and stays out of undo's reach.
+    expect(found).toBe(0)
+    expect(pathOf(id)).toBe(second)
+    expect(warned).not.toHaveBeenCalled()
+  })
+
+  it('does not take a file of another size under the noted name', async () => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { id, old, renamed } = await renamedButNotToldTo('in_place')
+    updateTrack(testDatabase.db, id, { fileSizeBytes: statSync(renamed).size })
+    writeFileSync(renamed, 'another file, put there since')
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(pathOf(id)).toBe(old)
+  })
+
+  it('finds the copy of a track in the clean library that was renamed just before the stop', async () => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const { id, renamed } = await renamedButNotToldTo('clean_library')
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(1)
+    expect(pathOf(id)).toBe(renamed)
+    expect(renamed.startsWith(clean)).toBe(true)
+  })
+
+  it('says in one line how many tracks it did not find, and fails on anything else', async () => {
+    // Arrange
+    const warned = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const first = await renamedButNotToldTo('in_place')
+    rmSync(first.renamed)
+
+    const failing = createBatchFiles({
+      db: testDatabase.db,
+      fileOps: {
+        ...fileOps,
+        isRegularFile: async () => {
+          throw new TypeError('The database connection is not open')
+        }
+      },
+      folders: () => ({ libraryRoot: library, cleanLibraryFolder: clean, backupFolder: backups }),
+      listMountedVolumes: () => NO_VOLUMES
+    })
+
+    // Act
+    const found = await files.reconcileInterrupted()
+    const afterClose = failing.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
+    expect(warned).toHaveBeenCalledTimes(1)
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('1 tracks of batch'))
+    // An error that says nothing about a file is not "not found": the pass fails, and
+    // the scan with it.
+    await expect(afterClose).rejects.toThrow('not open')
+  })
+
+  it('does nothing when no batch has written a file', async () => {
+    // Arrange
+    addTracks(2)
+
+    // Act
+    const found = await files.reconcileInterrupted()
+
+    // Assert
+    expect(found).toBe(0)
   })
 })
 
@@ -1064,5 +1295,95 @@ describe('the note about a file a batch created', () => {
     // Assert
     expect(noted).toEqual([decomposed.normalize('NFC')])
     expect(listCreatedFiles(testDatabase.db, batchId)).toEqual([])
+  })
+})
+
+describe('work on files that quitting waits for', () => {
+  /** File rules whose `restore` stands still until the test lets it go. */
+  function holdingRestore(): { held: BatchFiles; release: () => void; reached: Promise<void> } {
+    let release: () => void = () => {}
+    let arrive: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const reached = new Promise<void>((resolve) => {
+      arrive = resolve
+    })
+    const held = createBatchFiles({
+      db: testDatabase.db,
+      fileOps: {
+        ...fileOps,
+        restore: async (...given) => {
+          arrive()
+          await gate
+          return fileOps.restore(...given)
+        }
+      },
+      folders: () => ({ libraryRoot: library, cleanLibraryFolder: clean, backupFolder: backups }),
+      listMountedVolumes: () => NO_VOLUMES
+    })
+    return { held, release, reached }
+  }
+
+  it('counts an undo from its start to its end, and says that it is an undo', async () => {
+    // Arrange: a batch that changed a file, and an undo that is held in the middle.
+    const { ids, paths } = addTracks(1)
+    const [id] = ids as [number]
+    const original = sha256(paths[0] as string)
+    const batch = newBatch('in_place', ids)
+    await trackFiles(batch, id).replaceContent((temp) => writeFile(temp, 'changed'))
+    const { held, release, reached } = holdingRestore()
+    let settled = false
+
+    // Act
+    const undo = held.undoLast()
+    await reached
+    void held.settled().then(() => {
+      settled = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const during = { busy: held.busy(), undoing: held.undoing(), settled }
+    release()
+    const undone = await undo
+    await held.settled()
+
+    // Assert
+    expect(during).toEqual({ busy: true, undoing: true, settled: false })
+    expect(undone).toMatchObject({ ok: true })
+    expect({ busy: held.busy(), undoing: held.undoing() }).toEqual({ busy: false, undoing: false })
+    expect(sha256(paths[0] as string)).toBe(original)
+  })
+
+  it('counts an undo that has nothing to undo out again', async () => {
+    // Act
+    const undone = await files.undoLast()
+
+    // Assert
+    expect(undone).toEqual({ ok: false, code: 'NOTHING_TO_UNDO' })
+    expect({ busy: files.busy(), undoing: files.undoing() }).toEqual({
+      busy: false,
+      undoing: false
+    })
+  })
+
+  it('counts the deletion of older backups, which is no undo', async () => {
+    // Arrange: two batches that each changed a file.
+    const { ids } = addTracks(2)
+    const [first, second] = ids as [number, number]
+    const older = newBatch('in_place', [first])
+    await trackFiles(older, first).replaceContent((temp) => writeFile(temp, 'one'))
+    const newer = newBatch('in_place', [second])
+    await trackFiles(newer, second).replaceContent((temp) => writeFile(temp, 'two'))
+
+    // Act
+    const pruning = files.pruneOlderBackups(newer.id)
+    const during = { busy: files.busy(), undoing: files.undoing() }
+    await pruning
+
+    // Assert
+    expect(during).toEqual({ busy: true, undoing: false })
+    expect(files.busy()).toBe(false)
+    expect(listBackups(testDatabase.db, older.id)).toEqual([])
+    expect(listBackups(testDatabase.db, newer.id)).toHaveLength(1)
   })
 })

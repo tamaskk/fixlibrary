@@ -85,6 +85,8 @@ export interface FileOps {
   /** Creates one of the allowed folders if it is not there. Refuses a link in its place. */
   createRoot: (path: string) => Promise<void>
   exists: (path: string) => Promise<boolean>
+  /** True for a regular file: not a folder, not a link, not anything else. */
+  isRegularFile: (path: string) => Promise<boolean>
   /** True when both paths name one file on disk, however they are spelled. */
   sameFile: (first: string, second: string) => Promise<boolean>
   /** True when `path` is `folder` or lies inside it, by what they are on disk. */
@@ -365,6 +367,14 @@ export function createFileOps(options: FileOpsOptions): FileOps {
 
     exists,
 
+    async isRegularFile(path) {
+      try {
+        return (await lstat(path)).isFile()
+      } catch {
+        return false
+      }
+    },
+
     async sameFile(first, second) {
       const identity = await identityOf(first)
       return identity !== null && identity === (await identityOf(second))
@@ -433,8 +443,16 @@ export function createFileOps(options: FileOpsOptions): FileOps {
             const path = `${folder}${sep}${entry.name}`
             if (entry.isDirectory()) pending.push(path)
             else if (entry.isFile() && isTempName(entry.name)) {
-              await rm(path)
-              removed += 1
+              // One file that cannot be removed must not keep the rest of the folder,
+              // and the folders below it, from being cleaned.
+              try {
+                await rm(path)
+                removed += 1
+              } catch (error) {
+                // Gone already: on some drives a file takes a companion file with it.
+                if (codeOf(error) === 'ENOENT') continue
+                logger.warn(`A temp file could not be removed: ${describeError(error)}`)
+              }
             }
           }
         } catch (error) {
