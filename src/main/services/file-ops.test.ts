@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process'
 import { createHash } from 'crypto'
 import {
   copyFileSync,
@@ -605,6 +606,35 @@ describe('the folders it may touch', () => {
 })
 
 describe('removeTempFiles', () => {
+  // `chflags` is how macOS makes a file that cannot be removed; the app runs nowhere else.
+  it.skipIf(process.platform !== 'darwin')(
+    'goes on with the rest of a folder, and the folders below it, after a file it cannot remove',
+    async () => {
+      // Arrange: a temp file the system will not let go of, among others.
+      vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      addTrack('House/Deep/c.mp3')
+      const stuck = join(library, 'House', '.a.mp3.11111111.fixlib-tmp')
+      writeFileSync(stuck, 'half')
+      writeFileSync(join(library, 'House', '.b.mp3.22222222.fixlib-tmp'), 'half')
+      writeFileSync(join(library, 'House', 'Deep', '.c.mp3.33333333.fixlib-tmp'), 'half')
+      execFileSync('chflags', ['uchg', stuck])
+
+      try {
+        // Act
+        const removed = await files.removeTempFiles(library)
+
+        // Assert
+        expect(removed).toBe(2)
+        expect(allFiles()).toEqual([
+          'Music/House/.a.mp3.11111111.fixlib-tmp',
+          'Music/House/Deep/c.mp3'
+        ])
+      } finally {
+        execFileSync('chflags', ['nouchg', stuck])
+      }
+    }
+  )
+
   it('deletes what interrupted writes left behind, in every folder, and nothing else', async () => {
     // Arrange
     addTrack('a.mp3')

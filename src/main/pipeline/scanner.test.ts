@@ -783,3 +783,44 @@ describe('a field the user set by hand', () => {
     expect(storedTracks()[0]).toMatchObject({ title: 'By Hand', artist: 'Artist' })
   })
 })
+
+describe('what runs before a scan', () => {
+  it('runs before anything of the library is read, at every scan', async () => {
+    // Arrange
+    addFile('a.mp3')
+    const order: string[] = []
+    const scans = scanner({
+      beforeScan: async () => void order.push('before'),
+      readTags: async (paths) => {
+        order.push('read')
+        return fakeReadTags(paths)
+      }
+    })
+
+    // Act
+    await scans.scan()
+    addFile('b.mp3')
+    await scans.scan()
+
+    // Assert
+    expect(order).toEqual(['before', 'read', 'before', 'read'])
+  })
+
+  it('keeps the scan from running when it fails', async () => {
+    // Arrange
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    addFile('a.mp3')
+    const scans = scanner({
+      beforeScan: async () => {
+        throw new Error('the database is not open')
+      }
+    })
+
+    // Act
+    const result = await scans.scan()
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'UNEXPECTED' })
+    expect(storedTracks()).toEqual([])
+  })
+})
