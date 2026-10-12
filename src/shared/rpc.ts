@@ -68,6 +68,19 @@ export const bpmKeyResultSchema = z
 
 export type BpmKeyResult = z.output<typeof bpmKeyResultSchema>
 
+export const fingerprintResultSchema = z.object({
+  /** As fpcalc prints it: URL-safe base64. The same limit is in fixlib_py/fingerprint.py. */
+  fingerprint: z
+    .string()
+    .min(1)
+    .max(8192)
+    .regex(/^[A-Za-z0-9_-]+$/),
+  /** The length of the whole track in seconds, as AcoustID asks for it. */
+  duration: z.number().int().min(1).max(86_400)
+})
+
+export type Fingerprint = z.output<typeof fingerprintResultSchema>
+
 export const RPC_SCHEMAS = {
   ping: {
     params: z.object({}),
@@ -101,6 +114,11 @@ export const RPC_SCHEMAS = {
       bpmMax: z.number()
     }),
     result: bpmKeyResultSchema
+  },
+  /** The AcoustID fingerprint of one file. Reads the file only. */
+  'fingerprint.compute': {
+    params: z.object({ path: z.string().min(1), jobId: z.string().min(1).max(64) }),
+    result: fingerprintResultSchema
   }
 } as const
 

@@ -11,6 +11,7 @@ import { AppError } from '@shared/errors'
 import { readProposal } from '@shared/preview'
 import { BPM_KEY_ANALYZER_VERSION, type BpmKeyResult } from '@shared/rpc'
 import { z } from 'zod'
+import { writeHouseLoop } from './audio.test-util'
 import { bpmConfidenceOf, createBpmKeyStage } from './bpm-key'
 import type { StageContext } from './stage'
 
@@ -298,35 +299,6 @@ describe('bpmConfidenceOf', () => {
 const PYTHON_DIR = join(__dirname, '../../../../python')
 const PYTHON_PATH = join(PYTHON_DIR, '.venv/bin/python')
 const FFMPEG_PATH = join(__dirname, '../../../../resources/bin/ffmpeg')
-
-/** A kick on every beat over an A minor chord, as 16 bit mono WAV. */
-function writeHouseLoop(path: string, bpm: number, seconds: number): void {
-  const rate = 44_100
-  const beat = 60 / bpm
-  const samples = Buffer.alloc(rate * seconds * 2)
-  for (let index = 0; index < rate * seconds; index++) {
-    const time = index / rate
-    const sinceBeat = time % beat
-    const kick = Math.sin(2 * Math.PI * 55 * sinceBeat) * Math.exp(-sinceBeat * 18)
-    const pad =
-      [220, 261.63, 329.63].reduce((sum, hz) => sum + Math.sin(2 * Math.PI * hz * time), 0) / 3
-    samples.writeInt16LE(Math.round((0.6 * kick + 0.3 * pad) * 32767), index * 2)
-  }
-  const header = Buffer.alloc(44)
-  header.write('RIFF', 0)
-  header.writeUInt32LE(36 + samples.length, 4)
-  header.write('WAVEfmt ', 8)
-  header.writeUInt32LE(16, 16)
-  header.writeUInt16LE(1, 20)
-  header.writeUInt16LE(1, 22)
-  header.writeUInt32LE(rate, 24)
-  header.writeUInt32LE(rate * 2, 28)
-  header.writeUInt16LE(2, 32)
-  header.writeUInt16LE(16, 34)
-  header.write('data', 36)
-  header.writeUInt32LE(samples.length, 40)
-  writeFileSync(path, Buffer.concat([header, samples]))
-}
 
 // Needs the development Python environment and the tools of scripts/fetch-binaries.sh;
 // CI has neither.

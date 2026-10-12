@@ -63,6 +63,7 @@ const api: FixLibraryApi = {
     state: () => ipcRenderer.invoke(IPC_CHANNELS.previewState),
     rows: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewRows, request),
     edit: (edit) => ipcRenderer.invoke(IPC_CHANNELS.previewEdit, edit),
+    refreshLookup: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewRefreshLookup, request),
     setExcluded: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewSetExcluded, request),
     approve: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewApprove, batchId),
     discard: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDiscard, batchId),

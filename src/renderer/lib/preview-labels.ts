@@ -11,6 +11,8 @@ export const WARNING_LABELS: Readonly<Record<PreviewWarning, string>> = {
 
 export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {
   lookup: 'Lookup',
+  musicbrainz: 'MusicBrainz',
+  discogs: 'Discogs',
   id3: 'ID3',
   analysis: 'Elemzés',
   claude: 'Claude',

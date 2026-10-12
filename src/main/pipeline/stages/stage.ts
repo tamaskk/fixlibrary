@@ -20,6 +20,11 @@ export interface StageContext {
    * stages before it, with what the user changed in the preview.
    */
   proposal: Proposal & Record<string, unknown>
+  /**
+   * True when the user asked for this track to be looked at afresh: a stage that
+   * keeps answers of an online service asks the service again.
+   */
+  refresh?: boolean
 }
 
 export interface StageResult {
@@ -54,6 +59,17 @@ export interface Stage {
    * file, no network, no database.
    */
   recompute?: (track: Track, values: Record<PreviewField, PreviewValue>) => Proposal | void
+  /**
+   * True for a stage whose result the user can ask for again from the preview, for
+   * one track: it is then run once more with `context.refresh` set.
+   */
+  refreshable?: boolean
+  /**
+   * The fields a refreshable stage proposes. When it is asked again, what it proposed
+   * for them before is dropped first, so a row never mixes two answers; a field the
+   * user set by hand stays.
+   */
+  proposes?: readonly PreviewField[]
   /**
    * The warnings this stage reports. When it proposes again after an edit, those are
    * replaced by what it reports then; the warnings of other stages stay.

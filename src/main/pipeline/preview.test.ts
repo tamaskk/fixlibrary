@@ -14,6 +14,7 @@ import { batchItems } from '../db/schema'
 import { listStyles, replaceStyles } from '../db/styles'
 import { getTrackById, insertTracks, updateTrack } from '../db/tracks'
 import { logger } from '../services/logger'
+import { AppError } from '@shared/errors'
 import type { PreviewRow } from '@shared/preview'
 import { buildPreviewRow, commitApprovedValues, createPreview, type Preview } from './preview'
 import type { Stage } from './stages/stage'
@@ -43,8 +44,9 @@ const naming: Stage = {
   })
 }
 
-function preview(stages: Stage[] = [naming]): Preview {
+function preview(stages: Stage[] = [naming], now?: () => number): Preview {
   return createPreview({
+    now,
     db: testDatabase.db,
     stages,
     orchestrator: {
@@ -571,7 +573,15 @@ describe('the state of the preview', () => {
 
     // Assert
     expect(state).toEqual({
-      batch: { id: batchId, type: 'run', mode: 'in_place', total: 3, excluded: 0, failed: 0 },
+      batch: {
+        id: batchId,
+        type: 'run',
+        mode: 'in_place',
+        total: 3,
+        excluded: 0,
+        failed: 0,
+        canRefresh: false
+      },
       canUndo: true
     })
   })
@@ -867,5 +877,390 @@ describe('the tempo and key of a batch', () => {
     expect(shown.cells.key.before).toBe('8A')
     expect(shown.cells.bpm.before).toBe(123.5)
     expect(hidden.cells.key.before).toBeNull()
+  })
+})
+
+describe('what a lookup found', () => {
+  const ACOUSTID = '9ff43b6a-4f16-427c-93c2-92307ca505e0'
+  const MBID = '59d61a60-0a62-4004-b0d5-8c55fa62ddbe'
+  const found = {
+    fields: {
+      title: { value: 'Found Title', source: 'musicbrainz', confidence: 0.9 },
+      album: { value: 'Found Album', source: 'musicbrainz', confidence: 0.9 },
+      label: { value: 'Found Label', source: 'discogs', confidence: 0.9 },
+      year: { value: 1997, source: 'musicbrainz', confidence: 0.9 }
+    },
+    identifiers: { acoustId: ACOUSTID, musicbrainzRecordingId: MBID }
+  }
+
+  /** A lookup that answers with the next of `answers`, and notes how it was asked. */
+  function lookupStage(answers: (Record<string, unknown> | Error)[]): Stage & { asked: boolean[] } {
+    const asked: boolean[] = []
+    return {
+      name: 'lookup',
+      phase: 'compute',
+      resource: 'network',
+      dependsOn: [],
+      selectable: true,
+      refreshable: true,
+      timeoutMs: 1000,
+      warnings: ['LOW_CONFIDENCE'],
+      asked,
+      run: async (context) => {
+        asked.push(context.refresh === true)
+        const answer = answers.shift()
+        if (answer instanceof Error) throw answer
+        return { proposal: answer }
+      }
+    }
+  }
+
+  function withLookupJobs(): void {
+    insertJobs(
+      testDatabase.db,
+      trackIds.map((trackId) => ({ batchId, trackId, stage: 'lookup', phase: 'compute' as const }))
+    )
+  }
+
+  it('is shown with the album, the label and the year next to what the track had', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, found)
+
+    // Act
+    const row = rowOf(id)
+
+    // Assert
+    expect(row.cells.album).toMatchObject({ before: null, after: 'Found Album', changed: true })
+    expect(row.cells.label).toMatchObject({ after: 'Found Label', source: 'discogs' })
+    expect(row.cells.year).toMatchObject({ after: 1997, source: 'musicbrainz' })
+  })
+
+  it('leaves its names to the stage that writes the tags, and gives the track its ids', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, found)
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({
+      acoustId: ACOUSTID,
+      musicbrainzRecordingId: MBID,
+      // The row says no more than the file: the names wait for the tags to be written.
+      title: 'old one',
+      album: null,
+      label: null,
+      year: null,
+      lockedFields: []
+    })
+  })
+
+  it('gives the track no id that is none', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, { ...found, identifiers: { acoustId: 'x; drop', musicbrainzRecordingId: MBID } })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ acoustId: null, musicbrainzRecordingId: null })
+  })
+
+  it('says that a batch which looked tracks up can be asked again, row by row', () => {
+    // Arrange
+    withLookupJobs()
+
+    // Act
+    const state = preview([naming, lookupStage([])]).state()
+
+    // Assert
+    expect(state.batch?.canRefresh).toBe(true)
+  })
+
+  it('asks again for one row, and shows what was found this time', async () => {
+    // Arrange
+    const [id, other] = trackIds as [number, number]
+    withLookupJobs()
+    propose(id, {
+      fields: { title: { value: 'old one', source: 'id3' } },
+      warnings: ['LOW_CONFIDENCE']
+    })
+    const lookup = lookupStage([found])
+    const rows = preview([naming, lookup])
+
+    // Act
+    const refreshed = await rows.refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(lookup.asked).toEqual([true])
+    expect(refreshed.ok && refreshed.value.cells.title).toMatchObject({
+      after: 'Found Title',
+      source: 'musicbrainz'
+    })
+    // The flag of the first answer is gone, and the file name follows the new title.
+    expect(refreshed.ok && refreshed.value.warnings).toEqual([])
+    expect(refreshed.ok && refreshed.value.cells.fileName.after).toBe(
+      'Old Artist - Found Title.mp3'
+    )
+    expect(rowOf(other).cells.title.changed).toBe(false)
+  })
+
+  it('keeps what the user typed when a row is asked about again', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    withLookupJobs()
+    const rows = preview([naming, lookupStage([found])])
+    rows.edit({ batchId, trackId: id, field: 'title', value: 'By Hand' })
+
+    // Act
+    const refreshed = await rows.refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(refreshed.ok && refreshed.value.cells.title).toMatchObject({
+      after: 'By Hand',
+      source: 'manual'
+    })
+    expect(refreshed.ok && refreshed.value.cells.album.after).toBe('Found Album')
+  })
+
+  it('leaves the row as it was when the services cannot be asked', async () => {
+    // Arrange
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const [id] = trackIds as [number]
+    withLookupJobs()
+    propose(id, found)
+    const before = rowOf(id)
+    const rows = preview([naming, lookupStage([new AppError('LOOKUP_FAILED', 'offline')])])
+
+    // Act
+    const refreshed = await rows.refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(refreshed).toEqual({ ok: false, code: 'LOOKUP_FAILED' })
+    expect(rowOf(id)).toEqual(before)
+    expect(getBatchItem(testDatabase.db, batchId, id)?.error).toBeNull()
+  })
+
+  it('lets nothing else change the batch while a row is asked about', async () => {
+    // Arrange
+    const [id, other] = trackIds as [number, number]
+    withLookupJobs()
+    const rows = preview([naming, lookupStage([found, found])])
+
+    // Act
+    const refreshing = rows.refresh({ batchId, trackId: id })
+    const second = await rows.refresh({ batchId, trackId: other })
+    const edited = rows.edit({ batchId, trackId: other, field: 'title', value: 'late' })
+    const approved = await rows.approve(batchId)
+    await refreshing
+    const afterwards = rows.edit({ batchId, trackId: other, field: 'title', value: 'now' })
+
+    // Assert
+    expect(second).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(edited).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(approved).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(applied).toEqual([])
+    expect(afterwards.ok).toBe(true)
+  })
+
+  it.each([
+    ['a batch that looked nothing up', false, {}],
+    ['a row of another batch', true, { batchId: 999 }],
+    ['a track that is not in the batch', true, { trackId: 999 }],
+    ['a request with anything else in it', true, { field: 'title' }]
+  ])('refuses to ask again for %s', async (_name, ranLookup, change) => {
+    // Arrange
+    const [id] = trackIds as [number]
+    if (ranLookup) withLookupJobs()
+    const lookup = lookupStage([found])
+
+    // Act
+    const refreshed = await preview([naming, lookup]).refresh({ batchId, trackId: id, ...change })
+
+    // Assert
+    expect(refreshed).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(lookup.asked).toEqual([])
+  })
+
+  it('refuses to ask again about a track that failed', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    withLookupJobs()
+    setBatchItemError(testDatabase.db, batchId, {
+      trackId: id,
+      stage: 'lookup',
+      code: 'LOOKUP_FAILED',
+      message: 'The online lookup failed'
+    })
+    const lookup = lookupStage([found])
+
+    // Act
+    const refreshed = await preview([naming, lookup]).refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(refreshed).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(lookup.asked).toEqual([])
+  })
+})
+
+describe('a lookup that is asked again', () => {
+  const ACOUSTID = '9ff43b6a-4f16-427c-93c2-92307ca505e0'
+  const MBID = '59d61a60-0a62-4004-b0d5-8c55fa62ddbe'
+  const OTHER_MBID = 'cd2e7c47-16f5-46c6-a37c-a1eb7bf599ff'
+  const first = {
+    fields: {
+      title: { value: 'First Title', source: 'musicbrainz', confidence: 0.9 },
+      album: { value: 'First Album', source: 'musicbrainz', confidence: 0.9 },
+      label: { value: 'First Label', source: 'discogs', confidence: 0.9 }
+    },
+    identifiers: { acoustId: ACOUSTID, musicbrainzRecordingId: MBID }
+  }
+
+  function asking(answer: Record<string, unknown>): Stage {
+    return {
+      name: 'lookup',
+      phase: 'compute',
+      resource: 'network',
+      dependsOn: [],
+      selectable: true,
+      refreshable: true,
+      proposes: ['artist', 'title', 'album', 'label', 'year'],
+      timeoutMs: 1000,
+      warnings: ['LOW_CONFIDENCE'],
+      run: async () => ({ proposal: answer })
+    }
+  }
+
+  beforeEach(() => {
+    insertJobs(
+      testDatabase.db,
+      trackIds.map((trackId) => ({ batchId, trackId, stage: 'lookup', phase: 'compute' as const }))
+    )
+  })
+
+  it('and finds nothing this time leaves nothing of the first answer with the row', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, first)
+    const nothing = {
+      fields: { title: { value: 'old one', source: 'id3', confidence: 0 } },
+      warnings: ['LOW_CONFIDENCE'],
+      identifiers: null
+    }
+
+    // Act
+    const refreshed = await preview([naming, asking(nothing)]).refresh({ batchId, trackId: id })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(refreshed.ok && refreshed.value.cells.title).toMatchObject({
+      after: 'old one',
+      source: 'id3'
+    })
+    expect(refreshed.ok && refreshed.value.cells.album).toMatchObject({
+      after: null,
+      changed: false
+    })
+    expect(refreshed.ok && refreshed.value.cells.label.changed).toBe(false)
+    expect(refreshed.ok && refreshed.value.warnings).toEqual(['LOW_CONFIDENCE'])
+    expect(track(id)).toMatchObject({ acoustId: null, musicbrainzRecordingId: null })
+  })
+
+  it('and finds another recording shows that one alone, also where it names less', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, first)
+    const second = {
+      fields: { title: { value: 'Second Title', source: 'musicbrainz', confidence: 0.8 } },
+      identifiers: { acoustId: null, musicbrainzRecordingId: OTHER_MBID }
+    }
+
+    // Act
+    const refreshed = await preview([naming, asking(second)]).refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(refreshed.ok && refreshed.value.cells.title.after).toBe('Second Title')
+    expect(refreshed.ok && refreshed.value.cells.album.after).toBeNull()
+    expect(refreshed.ok && refreshed.value.cells.label.after).toBeNull()
+  })
+
+  it('keeps a title the user typed, and drops the rest of the old answer', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, first)
+    const rows = preview([
+      naming,
+      asking({ fields: {}, warnings: ['LOW_CONFIDENCE'], identifiers: null })
+    ])
+    rows.edit({ batchId, trackId: id, field: 'title', value: 'By Hand' })
+
+    // Act
+    const refreshed = await rows.refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(refreshed.ok && refreshed.value.cells.title).toMatchObject({
+      after: 'By Hand',
+      source: 'manual'
+    })
+    expect(refreshed.ok && refreshed.value.cells.album.after).toBeNull()
+  })
+
+  it('by names keeps the AcoustID an earlier match by fingerprint gave the track', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    updateTrack(testDatabase.db, id, { acoustId: ACOUSTID, musicbrainzRecordingId: MBID })
+    propose(id, {
+      fields: { title: { value: 'Found', source: 'musicbrainz', confidence: 0.8 } },
+      identifiers: { acoustId: null, musicbrainzRecordingId: OTHER_MBID }
+    })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({ acoustId: ACOUSTID, musicbrainzRecordingId: OTHER_MBID })
+  })
+})
+
+describe('a page that asks for refreshes in a loop', () => {
+  it('is answered at most once in two seconds, and the services are not asked in between', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    insertJobs(testDatabase.db, [{ batchId, trackId: id, stage: 'lookup', phase: 'compute' }])
+    let asked = 0
+    const lookup: Stage = {
+      ...naming,
+      name: 'lookup',
+      refreshable: true,
+      recompute: undefined,
+      run: async () => {
+        asked += 1
+        return {
+          proposal: { fields: { title: { value: `Answer ${asked}`, source: 'musicbrainz' } } }
+        }
+      }
+    }
+    let time = 10_000
+    const rows = preview([lookup], () => time)
+
+    // Act
+    const first = await rows.refresh({ batchId, trackId: id })
+    time += 1999
+    const tooSoon = await rows.refresh({ batchId, trackId: id })
+    time += 1
+    const later = await rows.refresh({ batchId, trackId: id })
+
+    // Assert
+    expect(first.ok).toBe(true)
+    expect(tooSoon).toEqual({ ok: false, code: 'RUN_ACTIVE' })
+    expect(later.ok && later.value.cells.title.after).toBe('Answer 2')
+    expect(asked).toBe(2)
   })
 })

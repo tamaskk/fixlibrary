@@ -12,7 +12,13 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { logger, rotateLogFiles, startFileLogging, stopFileLogging } from './logger'
+import {
+  logger,
+  maskSecretsInLog,
+  rotateLogFiles,
+  startFileLogging,
+  stopFileLogging
+} from './logger'
 
 let folder: string
 
@@ -234,5 +240,66 @@ describe('rotateLogFiles', () => {
     // Assert
     expect(rotate).not.toThrow()
     expect(readdirSync(folder)).toEqual([])
+  })
+})
+
+describe('masking of key values', () => {
+  afterEach(() => {
+    maskSecretsInLog(() => [])
+  })
+
+  it('replaces a key in a message, in a text detail and in an error before it is written', () => {
+    // Arrange
+    const logFile = startFileLogging(folder) as string
+    maskSecretsInLog(() => ['ACOUSTIDKEY123', 'DISCOGSSECRET456'])
+
+    // Act
+    logger.warn('Request to ?client=ACOUSTIDKEY123 failed', 'secret=DISCOGSSECRET456')
+    logger.error('Lookup failed', new Error('401 for key ACOUSTIDKEY123'))
+
+    // Assert
+    const written = readFileSync(logFile, 'utf8')
+    expect(written).toContain('Request to ?client=[secret] failed secret=[secret]')
+    expect(written).toContain('401 for key [secret]')
+    expect(written).not.toContain('ACOUSTIDKEY123')
+    expect(written).not.toContain('DISCOGSSECRET456')
+  })
+
+  it('replaces a key as it would stand in an address', () => {
+    // Arrange
+    const logFile = startFileLogging(folder) as string
+    maskSecretsInLog(() => ['key+with&signs'])
+
+    // Act
+    logger.warn('GET /lookup?client=key%2Bwith%26signs failed')
+
+    // Assert
+    expect(readFileSync(logFile, 'utf8')).toContain('GET /lookup?client=[secret] failed')
+  })
+
+  it('leaves a line alone that holds no key, and ignores a value too short to be one', () => {
+    // Arrange
+    const logFile = startFileLogging(folder) as string
+    maskSecretsInLog(() => ['ACOUSTIDKEY123', 'ab'])
+
+    // Act
+    logger.info('A batch of 20 tracks was applied')
+
+    // Assert
+    expect(readFileSync(logFile, 'utf8')).toContain('A batch of 20 tracks was applied')
+  })
+
+  it('still logs when the keys cannot be read', () => {
+    // Arrange
+    const logFile = startFileLogging(folder) as string
+    maskSecretsInLog(() => {
+      throw new Error('the Keychain is locked')
+    })
+
+    // Act
+    logger.info('Still here')
+
+    // Assert
+    expect(readFileSync(logFile, 'utf8')).toContain('Still here')
   })
 })

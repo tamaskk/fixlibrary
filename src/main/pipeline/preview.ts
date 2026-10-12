@@ -11,6 +11,7 @@ import {
   getBatchItem,
   countApprovedBatchItems,
   listBatchItems,
+  mergeBatchItemProposal,
   setBatchItemProposal,
   setBatchItemsExcluded,
   type BatchItem
@@ -31,6 +32,7 @@ import {
   PREVIEW_WARNINGS,
   previewEditSchema,
   previewExcludeSchema,
+  previewRefreshSchema,
   previewRowsRequestSchema,
   previewValueSchemas,
   readProposal,
@@ -48,6 +50,8 @@ import { keyOfCamelot } from '@shared/keys'
 import { toOneLine } from '@shared/text'
 import type { BatchFiles } from './batch-files'
 import type { Orchestrator } from './orchestrator'
+import { runStage } from './run-stage'
+import { identifiersSchema } from './stages/lookup'
 import type { Stage } from './stages/stage'
 
 // As long as a file name can be on macOS.
@@ -69,6 +73,9 @@ const beforeSchema = z.object({
   artist: shownText,
   title: shownText,
   mix: shownText,
+  album: shownText,
+  label: shownText,
+  year: z.number().nullable().catch(null),
   bpm: z.number().nullable().catch(null),
   camelotKey: z.string().nullable().catch(null),
   primaryStyleId: z.number().nullable().catch(null),
@@ -85,6 +92,9 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     artist: track.artist,
     title: track.title,
     mix: track.mix,
+    album: track.album,
+    label: track.label,
+    year: track.year,
     bpm: track.bpm,
     // Shown only as one of the 24 codes; whatever else a row may hold is no key.
     key: track.camelotKey === null ? null : (keyOfCamelot(track.camelotKey)?.camelot ?? null),
@@ -151,11 +161,25 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
     if (!item || !item.approved) return
     const fields = readProposal(item.after).fields ?? {}
     const manual = EDITABLE_PREVIEW_FIELDS.filter((field) => fields[field]?.source === 'manual')
-    if (manual.length === 0 && !fields.bpm && !fields.key) return
+    // Which recording the track is, as a lookup found it out: like the tempo and
+    // the key, a fact about the audio that needs no file to be written.
+    const identifiers = identifiersSchema.safeParse(
+      z.record(z.string(), z.unknown()).safeParse(item.after).data?.['identifiers']
+    )
+    if (manual.length === 0 && !fields.bpm && !fields.key && !identifiers.success) return
     const track = getTrackById(tx, trackId, new Set())
     if (!track) return
     const committed = new Set<string>(manual)
     const changes: TrackChanges = {}
+    // Only an id that was found: a match by names knows no AcoustID, and must not
+    // take away the one an earlier match by fingerprint gave the track.
+    if (identifiers.success) {
+      const { acoustId, musicbrainzRecordingId } = identifiers.data
+      if (acoustId !== null) changes.acoustId = acoustId
+      if (musicbrainzRecordingId !== null) {
+        changes.musicbrainzRecordingId = musicbrainzRecordingId
+      }
+    }
     // A field that was locked after the stage proposed for it keeps its value.
     const free = (field: PreviewField): boolean =>
       fields[field]?.source === 'manual' || !track.lockedFields.includes(field)
@@ -184,6 +208,9 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
   })
 }
 
+// The least time between two refreshes of a row, counted from when the first began.
+const MIN_REFRESH_INTERVAL_MS = 2000
+
 // A stage that throws on every edit must not fill the log.
 const logRecompute = createLogLimiter((line) => logger.error(line), {
   limit: 20,
@@ -197,6 +224,7 @@ export interface PreviewDependencies {
   orchestrator: Pick<Orchestrator, 'applyBatch' | 'undoLast'>
   batchFiles: Pick<BatchFiles, 'checkSpace' | 'lastUndoable'>
   listMountedVolumes: () => ReadonlySet<string>
+  now?: () => number
 }
 
 export interface Preview {
@@ -205,6 +233,11 @@ export interface Preview {
   rows: (request: unknown) => Result<PreviewPage>
   /** Sets one field of one row by hand, and returns the row as it is afterwards. */
   edit: (request: unknown) => Result<PreviewRow>
+  /**
+   * Asks again what the batch's steps that keep answers of online services found for
+   * one track, and returns the row as it is afterwards. What the user set by hand stays.
+   */
+  refresh: (request: unknown) => Promise<Result<PreviewRow>>
   /** Takes rows out of the batch, or back in. */
   setExcluded: (request: unknown) => Result<PreviewState>
   /**
@@ -219,12 +252,27 @@ export interface Preview {
 
 export function createPreview(dependencies: PreviewDependencies): Preview {
   const { db, stages, orchestrator, batchFiles, listMountedVolumes } = dependencies
+  const now = dependencies.now ?? Date.now
   // True while an approval is on its way: the batch must not change under it.
   let approving = false
+  // True while a row is asked about again: one at a time, and nothing else changes
+  // the batch until its answer is in.
+  let refreshing = false
+  // A refresh goes around what was kept, so a page must not ask in a loop: the
+  // services would be held at their limits with the owner's keys.
+  let lastRefreshAt = -Infinity
+
+  /** The stages of a batch whose result can be asked for again. */
+  function refreshableStages(batchId: number): Stage[] {
+    const ran = new Set(listJobStageNames(db, batchId))
+    return stages.filter(
+      (stage) => stage.refreshable === true && stage.phase === 'compute' && ran.has(stage.name)
+    )
+  }
 
   /** The batch with this id, if it is the one that waits for approval and may change. */
   function waitingBatch(batchId: number): Result<{ id: number }> {
-    if (approving) return { ok: false, code: 'RUN_ACTIVE' }
+    if (approving || refreshing) return { ok: false, code: 'RUN_ACTIVE' }
     // The one batch that waits, not merely one that is marked as waiting.
     const batch = findPreviewBatch(db)
     if (!batch || batch.id !== batchId) return { ok: false, code: 'INVALID_INPUT' }
@@ -235,7 +283,13 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
     const batch = findPreviewBatch(db)
     return {
       batch: batch
-        ? { id: batch.id, type: batch.type, mode: batch.mode, ...countBatchItems(db, batch.id) }
+        ? {
+            id: batch.id,
+            type: batch.type,
+            mode: batch.mode,
+            ...countBatchItems(db, batch.id),
+            canRefresh: refreshableStages(batch.id).length > 0
+          }
         : null,
       canUndo: batchFiles.lastUndoable() !== null
     }
@@ -313,6 +367,67 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       return { ok: true, value: buildPreviewRow(stored) }
     },
 
+    async refresh(request) {
+      const parsed = previewRefreshSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
+      const { batchId, trackId } = parsed.data
+      const batch = waitingBatch(batchId)
+      if (!batch.ok) return batch
+      if (now() - lastRefreshAt < MIN_REFRESH_INTERVAL_MS) return { ok: false, code: 'RUN_ACTIVE' }
+      const item = getBatchItem(db, batchId, trackId)
+      const track = getTrackById(db, trackId, listMountedVolumes())
+      const again = refreshableStages(batchId)
+      // A track that a stage failed for is not written, so there is nothing to ask about.
+      if (!item || !track || item.error !== null || again.length === 0) {
+        return { ok: false, code: 'INVALID_INPUT' }
+      }
+      if (track.offline || track.fileMissing) return { ok: false, code: 'LIBRARY_UNAVAILABLE' }
+
+      refreshing = true
+      lastRefreshAt = now()
+      try {
+        for (const stage of again) {
+          const current = getBatchItem(db, batchId, trackId)
+          if (!current) return { ok: false, code: 'INVALID_INPUT' }
+          const proposal = readProposal(current.after)
+          const outcome = await runStage(
+            { trackId, stage: stage.name, timeoutMs: stage.timeoutMs },
+            (signal) => stage.run({ signal, batchId, files: null, proposal, refresh: true }, track)
+          )
+          // The row stays as it was: a refresh that failed is no failure of the track.
+          if (!outcome.ok) return { ok: false, code: outcome.error.code }
+          if (!outcome.value?.proposal) continue
+          // The warnings a stage reports are its own to take back, as after an edit,
+          // and so is what it proposed before: the new answer replaces the old one
+          // whole, also where it names less. What the user typed is not the stage's.
+          const owned = stage.warnings ?? []
+          const fields = { ...proposal.fields }
+          for (const field of stage.proposes ?? []) {
+            if (fields[field]?.source !== 'manual') delete fields[field]
+          }
+          setBatchItemProposal(db, batchId, trackId, {
+            fields,
+            warnings: proposal.warnings?.filter((warning) => !owned.includes(warning))
+          })
+          mergeBatchItemProposal(db, batchId, trackId, outcome.value.proposal, track.lockedFields)
+        }
+        // A new artist or title gives a new file name, like an edit by hand.
+        const stored = getBatchItem(db, batchId, trackId)
+        if (!stored) return { ok: false, code: 'INVALID_INPUT' }
+        setBatchItemProposal(
+          db,
+          batchId,
+          trackId,
+          recomputed(batchId, track, stored.before, readProposal(stored.after))
+        )
+        const shown = getBatchItem(db, batchId, trackId)
+        if (!shown) return { ok: false, code: 'INVALID_INPUT' }
+        return { ok: true, value: buildPreviewRow(shown) }
+      } finally {
+        refreshing = false
+      }
+    },
+
     setExcluded(request) {
       const parsed = previewExcludeSchema.safeParse(request)
       if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
@@ -356,7 +471,7 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
     },
 
     async undoLast() {
-      if (approving) return { ok: false, code: 'RUN_ACTIVE' }
+      if (approving || refreshing) return { ok: false, code: 'RUN_ACTIVE' }
       const undone = await orchestrator.undoLast()
       if (!undone.ok) return undone
       const { restored, removed } = undone.value

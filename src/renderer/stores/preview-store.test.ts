@@ -20,6 +20,9 @@ function row(trackId: number, overrides: Partial<PreviewRow> = {}): PreviewRow {
       artist: CELL,
       title: CELL,
       mix: CELL,
+      album: CELL,
+      label: CELL,
+      year: CELL,
       bpm: CELL,
       key: CELL,
       styleId: CELL,
@@ -39,7 +42,15 @@ const ROWS = [
   row(3, { error: FAILED, excluded: true })
 ]
 const WAITING: PreviewState = {
-  batch: { id: 7, type: 'run', mode: 'in_place', total: 3, excluded: 1, failed: 1 },
+  batch: {
+    id: 7,
+    type: 'run',
+    mode: 'in_place',
+    total: 3,
+    excluded: 1,
+    failed: 1,
+    canRefresh: true
+  },
   canUndo: false
 }
 

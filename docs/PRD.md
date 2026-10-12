@@ -93,6 +93,7 @@ Measured on the roughly 50-track real test set and the full library.
 - (assumed — confirm) Python code is linted and formatted with ruff.
 - (assumed — confirm) React component and page files are PascalCase; all other files kebab-case.
 - The spec lists Bandcamp as a download source, the plan excludes it. The plan is followed here.
+- Beatport is not a lookup source: its search page refuses the app's own User-Agent with a bot check (found in T-014). The mix name and genre it was meant to add, and the cross-check of an online tempo and key, have no source until an official Beatport API key is asked for. Worth doing?
 - Does the 8-cue scheme need per-style variants later, or stay identical for every style?
 
 ## 09 Glossary

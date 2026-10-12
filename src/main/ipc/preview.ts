@@ -13,6 +13,11 @@ export function registerPreviewIpc(preview: Preview): void {
   handleIpc(IPC_CHANNELS.previewState, noArguments, () => preview.state())
   handleIpc(IPC_CHANNELS.previewRows, oneUnknown, (_event, request) => preview.rows(request))
   handleIpc(IPC_CHANNELS.previewEdit, oneUnknown, (_event, edit) => preview.edit(edit))
+  // One row at a time, refused while another is on its way; the services themselves
+  // are asked no faster than their limits allow, whoever asks.
+  handleIpc(IPC_CHANNELS.previewRefreshLookup, oneUnknown, (_event, request) =>
+    preview.refresh(request)
+  )
   handleIpc(IPC_CHANNELS.previewSetExcluded, oneUnknown, (_event, request) =>
     preview.setExcluded(request)
   )

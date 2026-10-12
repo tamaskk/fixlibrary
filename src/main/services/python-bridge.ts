@@ -40,6 +40,8 @@ export interface PythonBridgeOptions {
   logDir: string
   /** The ffmpeg the sidecar decodes audio with. Without it, analysis fails per track. */
   ffmpegPath?: string
+  /** The fpcalc the sidecar fingerprints with. Without it, fingerprinting fails per track. */
+  fpcalcPath?: string
   onProgress?: (progress: RpcProgress) => void
   /** What the bridge itself has to say: crashes, restarts, rejected lines. */
   log?: (message: string) => void
@@ -129,6 +131,7 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
       PYTHONUTF8: '1'
     }
     if (options.ffmpegPath !== undefined) env['FIXLIB_FFMPEG'] = options.ffmpegPath
+    if (options.fpcalcPath !== undefined) env['FIXLIB_FPCALC'] = options.fpcalcPath
     for (const name of INHERITED_ENV) {
       const value = process.env[name]
       if (value !== undefined) env[name] = value

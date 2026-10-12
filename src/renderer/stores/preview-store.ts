@@ -47,14 +47,19 @@ interface PreviewStoreState {
   /**
    * How the last edit or exclusion went wrong, or null. `refused`: the field cannot
    * hold the value. `busy`: an approval is on its way. `failed`: anything else; the
-   * rows were read again.
+   * rows were read again. `lookupFailed`: the services could not be asked again; the
+   * row is as it was. `lookupBusy`: a row cannot be asked about just now. `lookupDone`: a row was asked about again and is shown as it is now.
    */
-  editNote: 'refused' | 'busy' | 'failed' | null
+  editNote: 'refused' | 'busy' | 'failed' | 'lookupFailed' | 'lookupBusy' | 'lookupDone' | null
+  /** The row the online services are asked about again right now, or null. */
+  refreshing: number | null
   load: () => Promise<void>
   setTab: (tab: PreviewTab) => void
   setFilter: (filter: PreviewFilter) => void
   /** Sets a field by hand. Resolves to false when the value was not taken. */
   edit: (trackId: number, field: EditablePreviewField, value: PreviewValue) => Promise<boolean>
+  /** Asks the online services again about one row. */
+  refreshLookup: (trackId: number) => Promise<void>
   setExcluded: (trackIds: readonly number[], excluded: boolean) => Promise<void>
   /** Resolves to true when the apply phase has started. */
   approve: () => Promise<boolean>
@@ -147,6 +152,7 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
     canUndo: false,
     rows: { status: 'idle' },
     styles: [],
+    refreshing: null,
     tab: 'changes',
     filter: 'all',
     busy: null,
@@ -205,6 +211,26 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
       } catch {
         await resync()
         return false
+      }
+    },
+
+    async refreshLookup(trackId) {
+      const { batch, refreshing } = get()
+      if (!batch || refreshing !== null) return
+      set({ refreshing: trackId, editNote: null })
+      try {
+        const result = await window.api.preview.refreshLookup({ batchId: batch.id, trackId })
+        if (result.ok) {
+          replaceRow(result.value)
+          set({ editNote: 'lookupDone' })
+        } else if (result.code === 'RUN_ACTIVE') set({ editNote: 'lookupBusy' })
+        else if (result.code === 'INVALID_INPUT') await resync()
+        // The services did not answer: nothing was changed.
+        else set({ editNote: 'lookupFailed' })
+      } catch {
+        await resync()
+      } finally {
+        set({ refreshing: null })
       }
     },
 
