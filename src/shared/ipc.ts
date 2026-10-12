@@ -1,6 +1,7 @@
 // Single source of truth for the renderer <-> main contract.
 // Every channel is listed here; preload and main both derive their types from it.
 import type { ClaudeStatus, ClaudeTestResult } from './claude'
+import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { Result } from './errors'
 import type {
   LibraryPage,
@@ -68,6 +69,8 @@ export const IPC_CHANNELS = {
   previewEdit: 'preview:edit',
   previewRefreshLookup: 'preview:refreshLookup',
   previewSetExcluded: 'preview:setExcluded',
+  previewDuplicates: 'preview:duplicates',
+  previewKeepDuplicate: 'preview:keepDuplicate',
   previewApprove: 'preview:approve',
   previewDiscard: 'preview:discard',
   previewUndoLast: 'preview:undoLast'
@@ -167,6 +170,13 @@ export interface FixLibraryApi {
     edit: (edit: PreviewEdit) => Promise<Result<PreviewRow>>
     /** Asks the online services again about one row of the batch that waits. */
     refreshLookup: (request: PreviewRefresh) => Promise<Result<PreviewRow>>
+    /** The groups of duplicates in the batch that waits for approval. */
+    duplicates: (batchId: number) => Promise<Result<DuplicateGroup[]>>
+    /**
+     * Makes one copy the one its group keeps. Resolves with the groups as they are
+     * afterwards. The track is named by id only; no file is touched before approval.
+     */
+    keepDuplicate: (request: KeepDuplicate) => Promise<Result<DuplicateGroup[]>>
     /** Takes rows out of the batch, or back in. Tracks are named by id only. */
     setExcluded: (request: PreviewExclude) => Promise<Result<PreviewState>>
     /**

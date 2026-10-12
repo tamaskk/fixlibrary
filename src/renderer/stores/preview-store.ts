@@ -1,8 +1,10 @@
 import { create } from 'zustand'
+import type { DuplicateGroup } from '@shared/duplicates'
 import type { ErrorCode } from '@shared/errors'
 import {
   matchesPreviewFilter,
   PREVIEW_PAGE_SIZE,
+  PREVIEW_WARNINGS,
   type EditablePreviewField,
   type PreviewBatch,
   type PreviewEdit,
@@ -14,13 +16,22 @@ import {
 } from '@shared/preview'
 import type { Style } from '@shared/settings'
 
-export type PreviewTab = 'changes' | 'errors'
+export type PreviewTab = 'changes' | 'duplicates' | 'errors'
 
 type PreviewRows =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'error' }
   | { status: 'ready'; rows: PreviewRow[] }
+
+type PreviewDuplicates =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; groups: DuplicateGroup[] }
+
+// A change of one of these may make a row a copy of another, or one no more.
+const NAME_FIELDS: readonly EditablePreviewField[] = ['artist', 'title', 'mix']
 
 /** What the last approval, discard or undo came to; null until there is one. */
 export type PreviewNotice =
@@ -37,6 +48,8 @@ interface PreviewStoreState {
   batch: PreviewBatch | null
   canUndo: boolean
   rows: PreviewRows
+  /** The groups of duplicates, for a batch that looked for them. */
+  duplicates: PreviewDuplicates
   /** For the style column and its editor. */
   styles: Style[]
   tab: PreviewTab
@@ -61,6 +74,10 @@ interface PreviewStoreState {
   /** Asks the online services again about one row. */
   refreshLookup: (trackId: number) => Promise<void>
   setExcluded: (trackIds: readonly number[], excluded: boolean) => Promise<void>
+  /** Reads the groups of duplicates again. */
+  loadDuplicates: () => Promise<void>
+  /** Makes one copy the one its group keeps. */
+  keepDuplicate: (trackId: number) => Promise<void>
   /** Resolves to true when the apply phase has started. */
   approve: () => Promise<boolean>
   discard: () => Promise<void>
@@ -74,6 +91,8 @@ export function shownRows(
   filter: PreviewFilter
 ): PreviewRow[] {
   if (tab === 'errors') return rows.filter((row) => row.error !== null)
+  // That tab shows groups, not rows.
+  if (tab === 'duplicates') return []
   return rows.filter((row) => matchesPreviewFilter(row, filter))
 }
 
@@ -92,6 +111,10 @@ export function countRows(rows: readonly PreviewRow[]): {
 export const usePreviewStore = create<PreviewStoreState>((set, get) => {
   // Only the answer to the latest request for the rows is kept.
   let latestRowsRequest = 0
+  // Only the answer to the latest request for the groups is kept.
+  let latestGroupsRequest = 0
+  // True while a choice of a copy is on its way to the main process.
+  let keeping = false
   // The rows whose exclusion is on its way to the main process.
   const excluding = new Set<number>()
 
@@ -100,7 +123,13 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
     set({ batch, canUndo, loaded: true, loadFailed: false })
     // Another batch, or none: the rows that are shown belong to the old one.
     if (batch?.id !== known?.id) {
-      set({ rows: { status: 'idle' }, filter: 'all', tab: 'changes', editNote: null })
+      set({
+        rows: { status: 'idle' },
+        duplicates: { status: 'idle' },
+        filter: 'all',
+        tab: 'changes',
+        editNote: null
+      })
     }
   }
 
@@ -128,6 +157,49 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
     }
   }
 
+  async function loadGroups(batchId: number): Promise<void> {
+    const request = ++latestGroupsRequest
+    if (get().duplicates.status !== 'ready') set({ duplicates: { status: 'loading' } })
+    try {
+      const result = await window.api.preview.duplicates(batchId)
+      if (request !== latestGroupsRequest) return
+      set({
+        duplicates: result.ok ? { status: 'ready', groups: result.value } : { status: 'error' }
+      })
+    } catch {
+      if (request === latestGroupsRequest) set({ duplicates: { status: 'error' } })
+    }
+  }
+
+  /**
+   * After a change of a row that may have changed the groups: the groups are read
+   * again. A row says in its warnings whether it is a copy of another, and that
+   * follows from the groups, so the rows are brought in step here instead of all
+   * being read again. Rows that are shown stay when the groups cannot be read.
+   */
+  async function reloadAfterRegroup(batch: PreviewBatch): Promise<void> {
+    if (!batch.findsDuplicates) return
+    await loadGroups(batch.id)
+    const { duplicates, rows } = get()
+    if (duplicates.status !== 'ready' || rows.status !== 'ready') return
+    const copies = new Set(
+      duplicates.groups.flatMap((group) => group.members.map((member) => member.trackId))
+    )
+    set({
+      rows: {
+        status: 'ready',
+        rows: rows.rows.map((row) => {
+          const flagged = row.warnings.includes('DUPLICATE')
+          if (flagged === copies.has(row.trackId)) return row
+          const warnings = PREVIEW_WARNINGS.filter((warning) =>
+            warning === 'DUPLICATE' ? !flagged : row.warnings.includes(warning)
+          )
+          return { ...row, warnings }
+        })
+      }
+    })
+  }
+
   function replaceRow(next: PreviewRow): void {
     const { rows } = get()
     if (rows.status !== 'ready') return
@@ -151,6 +223,7 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
     batch: null,
     canUndo: false,
     rows: { status: 'idle' },
+    duplicates: { status: 'idle' },
     styles: [],
     refreshing: null,
     tab: 'changes',
@@ -163,7 +236,11 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
       try {
         applyState(await window.api.preview.state())
         const { batch } = get()
-        if (batch) await loadRows(batch.id)
+        if (!batch) return
+        await Promise.all([
+          loadRows(batch.id),
+          batch.findsDuplicates ? loadGroups(batch.id) : Promise.resolve()
+        ])
       } catch {
         set({ loaded: true, loadFailed: true })
       }
@@ -187,6 +264,7 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
         if (result.ok) {
           replaceRow(result.value)
           set({ editNote: null })
+          if (NAME_FIELDS.includes(field)) await reloadAfterRegroup(batch)
           return true
         }
         if (result.code === 'RUN_ACTIVE') {
@@ -223,6 +301,8 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
         if (result.ok) {
           replaceRow(result.value)
           set({ editNote: 'lookupDone' })
+          // A lookup may have found other names for the row.
+          await reloadAfterRegroup(batch)
         } else if (result.code === 'RUN_ACTIVE') set({ editNote: 'lookupBusy' })
         else if (result.code === 'INVALID_INPUT') await resync()
         // The services did not answer: nothing was changed.
@@ -256,18 +336,57 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
         // Shown once main has taken it; the rows may have been edited meanwhile.
         const current = get().rows
         if (current.status !== 'ready') return
+        const { duplicates } = get()
         set({
           batch: result.value.batch,
           editNote: null,
           rows: {
             status: 'ready',
             rows: current.rows.map((row) => (ids.has(row.trackId) ? { ...row, excluded } : row))
-          }
+          },
+          // The groups say of each copy whether it was taken out.
+          duplicates:
+            duplicates.status !== 'ready'
+              ? duplicates
+              : {
+                  status: 'ready',
+                  groups: duplicates.groups.map((group) => ({
+                    ...group,
+                    members: group.members.map((member) =>
+                      ids.has(member.trackId) ? { ...member, excluded } : member
+                    )
+                  }))
+                }
         })
       } catch {
         await resync()
       } finally {
         for (const id of ids) excluding.delete(id)
+      }
+    },
+
+    async loadDuplicates() {
+      const { batch } = get()
+      if (batch?.findsDuplicates) await loadGroups(batch.id)
+    },
+
+    async keepDuplicate(trackId) {
+      const { batch } = get()
+      // One at a time: a second choice would be made from groups that are out of date.
+      if (!batch || keeping) return
+      keeping = true
+      try {
+        const result = await window.api.preview.keepDuplicate({ batchId: batch.id, trackId })
+        if (result.ok) {
+          // A later request for the groups would bring the same; an earlier one is old.
+          latestGroupsRequest += 1
+          set({ duplicates: { status: 'ready', groups: result.value }, editNote: null })
+        } else if (result.code === 'RUN_ACTIVE') set({ editNote: 'busy' })
+        else await resync()
+      } catch {
+        await resync()
+      } finally {
+        keeping = false
       }
     },
 
@@ -279,6 +398,8 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
         const result = await window.api.preview.approve(batch.id)
         if (!result.ok) {
           set({ notice: { kind: 'failed', code: result.code } })
+          // What the page shows is not what the batch holds: it is read again.
+          if (result.code === 'PREVIEW_CHANGED') await get().load()
           return false
         }
         if (!result.value.started) {
@@ -287,7 +408,7 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
           return false
         }
         // The batch is being written now: nothing waits for approval any more.
-        set({ batch: null, rows: { status: 'idle' } })
+        set({ batch: null, rows: { status: 'idle' }, duplicates: { status: 'idle' } })
         return true
       } catch {
         set({ notice: { kind: 'failed', code: 'UNEXPECTED' } })

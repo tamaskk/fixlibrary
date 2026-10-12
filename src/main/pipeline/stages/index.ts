@@ -1,11 +1,14 @@
 import { createBpmKeyStage, type BpmKeyStageDependencies } from './bpm-key'
+import { createDuplicatesStage, type DuplicatesStageDependencies } from './duplicates'
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
 import { createNamingStage } from './naming'
 import { createRenameStage } from './rename'
+import { createSetAsideStage } from './set-aside'
 import type { Stage } from './stage'
 
 export type StageDependencies = BpmKeyStageDependencies &
+  DuplicatesStageDependencies &
   FingerprintStageDependencies &
   LookupStageDependencies
 
@@ -16,7 +19,9 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createLookupStage(dependencies),
     createBpmKeyStage(dependencies),
     createNamingStage(),
-    createRenameStage()
+    createDuplicatesStage(dependencies),
+    createRenameStage(),
+    createSetAsideStage()
   ]
 }
 
@@ -31,6 +36,14 @@ export function validateStages(stages: readonly Stage[]): void {
     byName.set(stage.name, stage)
   }
   for (const stage of stages) {
+    for (const name of stage.after ?? []) {
+      const earlier = byName.get(name)
+      // Only the order inside a phase is a stage's to ask for. A stage that is not
+      // there is nothing to wait for.
+      if (earlier && earlier.phase !== stage.phase) {
+        throw new Error(`Stage "${stage.name}" comes after "${name}" of another phase`)
+      }
+    }
     for (const name of stage.dependsOn) {
       const dependency = byName.get(name)
       if (!dependency) throw new Error(`Stage "${stage.name}" depends on unknown "${name}"`)
@@ -51,7 +64,10 @@ export function validateStages(stages: readonly Stage[]): void {
       throw new Error(`Stages depend on each other in a circle: ${cycle.join(' -> ')}`)
     }
     following.push(stage.name)
-    for (const name of stage.dependsOn) follow(byName.get(name) as Stage)
+    for (const name of [...stage.dependsOn, ...(stage.after ?? [])]) {
+      const earlier = byName.get(name)
+      if (earlier) follow(earlier)
+    }
     following.pop()
     finished.add(stage.name)
   }

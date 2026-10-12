@@ -15,6 +15,8 @@ describe('STAGE_TIMEOUTS_MS', () => {
       fingerprint: 120_000,
       naming: 10_000,
       rename: 300_000,
+      duplicates: 10_000,
+      setAside: 300_000,
       bpmKey: 120_000,
       energy: 120_000,
       demucs: 900_000,

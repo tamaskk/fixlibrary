@@ -286,6 +286,7 @@ function registerLibraryAndPipeline(): void {
   const environment = { homeDir: homedir(), cpuCount: cpus().length }
   // Set once the file rules exist, a few lines below.
   let reconcileBeforeScan: (() => Promise<number>) | null = null
+  let restoredOriginals: (() => Promise<ReadonlySet<string>>) | null = null
   const scanner = createLibraryScanner({
     db,
     environment,
@@ -295,6 +296,7 @@ function registerLibraryAndPipeline(): void {
     isChangingFiles: () => stopping !== null || (orchestrator?.changingFiles() ?? false),
     // Before every scan, also one asked for from the page or after a drive came
     // back: a file that an interrupted batch renamed would be taken for a new track.
+    knownFiles: async () => (await restoredOriginals?.()) ?? new Set<string>(),
     beforeScan: async () => {
       const found = (await reconcileBeforeScan?.()) ?? 0
       if (found > 0) {
@@ -340,6 +342,7 @@ function registerLibraryAndPipeline(): void {
   })
   fileWork = batchFiles
   reconcileBeforeScan = () => batchFiles.reconcileInterrupted()
+  restoredOriginals = () => batchFiles.restoredOriginals()
 
   let startupDone = false
   const stages = availableStages(db)

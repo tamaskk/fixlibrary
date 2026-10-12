@@ -580,7 +580,8 @@ describe('the state of the preview', () => {
         total: 3,
         excluded: 0,
         failed: 0,
-        canRefresh: false
+        canRefresh: false,
+        findsDuplicates: false
       },
       canUndo: true
     })

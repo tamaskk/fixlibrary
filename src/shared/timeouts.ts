@@ -11,6 +11,9 @@ export const STAGE_TIMEOUTS_MS = {
   naming: 10 * SECOND,
   // In the clean library the copy of the whole file is made by this step.
   rename: 5 * MINUTE,
+  duplicates: 10 * SECOND,
+  // Like a rename: the backup or the copy of the whole file is made by this step.
+  setAside: 5 * MINUTE,
   bpmKey: 120 * SECOND,
   energy: 120 * SECOND,
   demucs: 15 * MINUTE,

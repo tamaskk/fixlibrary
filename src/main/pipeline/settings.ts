@@ -1,4 +1,5 @@
 // Reads and changes the app settings. Every rule about what a setting may be lives here.
+import { isSetAsidePath } from '@shared/duplicates'
 import { realpathSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import type { z } from 'zod'
@@ -199,6 +200,7 @@ const LIBRARY_FOLDER_KINDS: readonly FolderKind[] = ['libraryRoot', 'cleanLibrar
  * True for a folder that must not be scanned as the library: the home folder or
  * anything above it (`/`, `/Users`), and `/Volumes` itself. A scan of these would
  * take in every audio file of the machine or of every drive. A whole drive is fine.
+ * Also a folder that is, or is inside, a `_Duplicates` folder.
  */
 export function isUnsuitableLibraryRoot(folder: string, environment: SettingsEnvironment): boolean {
   const volumesRoot = join(sep, 'Volumes')
@@ -206,6 +208,8 @@ export function isUnsuitableLibraryRoot(folder: string, environment: SettingsEnv
   // above the first one.
   const homeOnDataVolume = join(sep, 'System', 'Volumes', 'Data', environment.homeDir)
   return (
+    // A folder of that name is no part of any library: every track would be left out.
+    isSetAsidePath(join(folder, 'file')) ||
     isInsideOrSame(environment.homeDir, folder) ||
     isInsideOrSame(homeOnDataVolume, folder) ||
     (isInsideOrSame(folder, volumesRoot) && isInsideOrSame(volumesRoot, folder))
@@ -261,6 +265,10 @@ export function setFolder(
 
   if (kind === 'libraryRoot' && folder !== null && isUnsuitableLibraryRoot(folder, environment)) {
     return { ok: false, code: 'LIBRARY_ROOT_UNSUITABLE' }
+  }
+  // The tracks of a clean library in such a folder would all count as set aside.
+  if (kind === 'cleanLibrary' && folder !== null && isSetAsidePath(join(folder, 'file'))) {
+    return { ok: false, code: 'INVALID_INPUT' }
   }
   if (
     LIBRARY_FOLDER_KINDS.includes(kind) &&

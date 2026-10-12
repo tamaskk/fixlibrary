@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync
@@ -16,7 +17,7 @@ import { basename, dirname, join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { setSetting } from '../db/settings'
-import { insertTracks, listTracks, updateTrack, type Track } from '../db/tracks'
+import { getTrackById, insertTracks, listTracks, updateTrack, type Track } from '../db/tracks'
 import { logger } from '../services/logger'
 import { createPythonBridge, type PythonBridge } from '../services/python-bridge'
 import { AppError } from '@shared/errors'
@@ -101,6 +102,175 @@ afterEach(() => {
   testDatabase.cleanup()
   rmSync(folder, { recursive: true, force: true })
   vi.restoreAllMocks()
+})
+
+describe('the folder of the duplicates that were set aside', () => {
+  it('is not read: what is in it is no track, at the top of the library or below it', async () => {
+    // Arrange
+    addFile('House/a.mp3')
+    addFile('_Duplicates/a.mp3')
+    addFile('_duplicates/b.mp3')
+    addFile('House/_Duplicates/c.mp3')
+    // A file is not set aside by its name.
+    addFile('House/_Duplicates.mp3')
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { found: 2, added: 2, complete: true } })
+    expect(storedNames()).toEqual(['House/_Duplicates.mp3', 'House/a.mp3'])
+  })
+
+  it('does not call a track missing that a batch moved there', async () => {
+    // Arrange
+    addFile('House/a.mp3')
+    const moved = addFile('_Duplicates/b.mp3')
+    const [id] = insertTracks(testDatabase.db, [
+      { path: moved, originalPath: join(library, 'House/b.mp3'), format: 'mp3' }
+    ]) as [number]
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { missing: 0 } })
+    expect(getTrackById(testDatabase.db, id, NO_VOLUMES)).toMatchObject({
+      path: moved,
+      fileMissing: false
+    })
+  })
+  it('takes a copy for its track again when the user moved it back to where it was', async () => {
+    // Arrange: set aside by a batch, then moved back by hand. A move keeps size and time.
+    const back = addFile('House/b.mp3')
+    const { size, mtimeMs } = statSync(back)
+    const [id] = insertTracks(testDatabase.db, [
+      {
+        path: join(library, '_Duplicates/b.mp3'),
+        originalPath: back,
+        format: 'mp3',
+        artist: 'Bicep',
+        fileSizeBytes: size,
+        fileMtimeMs: Math.trunc(mtimeMs)
+      }
+    ]) as [number]
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert: the same track, in the library again, and no second row for the file.
+    expect(result).toMatchObject({ ok: true, value: { found: 1, added: 0, missing: 0 } })
+    expect(storedTracks().map((track) => [track.id, track.path, track.artist])).toEqual([
+      [id, back, 'Bicep']
+    ])
+  })
+
+  it('takes another file that came to stand at the old place for a new track', async () => {
+    // Arrange: the copy was deleted from _Duplicates, and something else was saved
+    // under the name it once had.
+    const other = addFile('House/b.mp3', 'another recording altogether')
+    const [id] = insertTracks(testDatabase.db, [
+      {
+        path: join(library, '_Duplicates/b.mp3'),
+        originalPath: other,
+        format: 'mp3',
+        artist: 'Bicep',
+        fileSizeBytes: 5,
+        fileMtimeMs: 1_000
+      }
+    ]) as [number]
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert: the old track keeps its path and is missing; the file is a track of its own.
+    expect(result).toMatchObject({ ok: true, value: { found: 1, added: 1, missing: 1 } })
+    expect(getTrackById(testDatabase.db, id, NO_VOLUMES)).toMatchObject({
+      path: join(library, '_Duplicates/b.mp3'),
+      fileMissing: true
+    })
+    expect(storedTracks().map((track) => [track.path, track.artist])).toEqual([[other, 'Artist']])
+  })
+
+  it('adds a new file that stands where a copy was before it was set aside', async () => {
+    // Arrange: the copy is still in _Duplicates; the same name was downloaded again.
+    const again = addFile('House/b.mp3')
+    const moved = addFile('_Duplicates/b.mp3')
+    insertTracks(testDatabase.db, [{ path: moved, originalPath: again, format: 'mp3' }])
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { found: 1, added: 1, missing: 0 } })
+    expect(storedNames()).toEqual(['House/b.mp3'])
+  })
+
+  it('adds a new file that stands where a track was before it was renamed', async () => {
+    // Arrange
+    const renamed = addFile('House/Artist - Title.mp3')
+    const again = addFile('House/download.mp3')
+    insertTracks(testDatabase.db, [{ path: renamed, originalPath: again, format: 'mp3' }])
+
+    // Act
+    const result = await scanner().scan()
+
+    // Assert
+    expect(result).toMatchObject({ ok: true, value: { found: 2, added: 1 } })
+    expect(storedNames()).toEqual(['House/Artist - Title.mp3', 'House/download.mp3'])
+  })
+
+  it('draws no conclusion about a copy it is not allowed to ask about', async () => {
+    // Arrange: the folder cannot be looked into, and another file stands at the old place.
+    const other = addFile('House/b.mp3')
+    const moved = addFile('_Duplicates/b.mp3')
+    const { size, mtimeMs } = statSync(other)
+    const [id] = insertTracks(testDatabase.db, [
+      {
+        path: moved,
+        originalPath: other,
+        format: 'mp3',
+        fileSizeBytes: size,
+        fileMtimeMs: Math.trunc(mtimeMs)
+      }
+    ]) as [number]
+    chmodSync(join(library, '_Duplicates'), 0o000)
+
+    // Act
+    const result = await scanner().scan()
+    chmodSync(join(library, '_Duplicates'), 0o755)
+
+    // Assert: neither missing nor moved to the other file.
+    expect(result).toMatchObject({ ok: true, value: { missing: 0 } })
+    expect(getTrackById(testDatabase.db, id, NO_VOLUMES)).toMatchObject({
+      path: moved,
+      fileMissing: false
+    })
+  })
+
+  it('marks a copy missing whose file was deleted from _Duplicates, and finds it again', async () => {
+    // Arrange
+    addFile('House/a.mp3')
+    const moved = addFile('_Duplicates/b.mp3')
+    const [id] = insertTracks(testDatabase.db, [
+      { path: moved, originalPath: join(library, 'House/b.mp3'), format: 'mp3' }
+    ]) as [number]
+    rmSync(moved)
+
+    // Act
+    const gone = await scanner().scan()
+    const missing = getTrackById(testDatabase.db, id, NO_VOLUMES)?.fileMissing
+    addFile('_Duplicates/b.mp3')
+    await scanner().scan()
+
+    // Assert
+    expect(gone).toMatchObject({ ok: true, value: { missing: 1 } })
+    expect(missing).toBe(true)
+    expect(getTrackById(testDatabase.db, id, NO_VOLUMES)).toMatchObject({
+      path: moved,
+      fileMissing: false
+    })
+  })
 })
 
 describe('scanning a library for the first time', () => {

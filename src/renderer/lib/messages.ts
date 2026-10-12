@@ -17,6 +17,8 @@ export function errorMessage(code: ErrorCode): string {
       return 'A könyvtár mappája nem érhető el. Csatlakoztasd a lemezt, és próbáld újra.'
     case 'RUN_ACTIVE':
       return 'Most nem változtatható: egy futás dolgozik, vagy egy batch jóváhagyásra vár.'
+    case 'PREVIEW_CHANGED':
+      return 'A duplikátumcsoportok megváltoztak. Semmi nem változott a fájljaidon. Nézd át újra, és hagyd jóvá még egyszer.'
     case 'BACKUPS_IN_USE':
       return 'A backup mappa most nem változhat: az utolsó batch még innen vonható vissza.'
     case 'FILE_UNREADABLE':

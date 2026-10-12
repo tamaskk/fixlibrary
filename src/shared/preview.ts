@@ -293,6 +293,8 @@ export interface PreviewBatch {
   failed: number
   /** True when the batch ran a step whose result can be asked for again, row by row. */
   canRefresh: boolean
+  /** True when the batch looked for duplicates: the "Duplikátumok" tab is shown. */
+  findsDuplicates: boolean
 }
 
 export interface PreviewState {

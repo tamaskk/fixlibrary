@@ -11,6 +11,7 @@ import {
   getTracksByIds,
   insertTracks,
   listTrackFileStates,
+  listTrackAvailability,
   listTracks,
   setTracksMissing,
   updateTrack,
@@ -214,6 +215,43 @@ describe('listTracks', () => {
       { cover: 'failed' }
     ])
     expect(logged).toHaveBeenCalledOnce()
+  })
+})
+
+describe('a copy that was set aside as a duplicate', () => {
+  it('is in no list of the library and is not counted, wherever its _Duplicates folder is', () => {
+    // Arrange
+    const { db } = testDatabase
+    const [kept, , , named] = insertTracks(db, [
+      newTrack('/Volumes/DJ/Music/House/a.mp3'),
+      newTrack('/Volumes/DJ/Music/_Duplicates/a.mp3'),
+      newTrack('/Volumes/DJ/Clean/_duplicates/b.mp3'),
+      // A file is not set aside by its name, nor by a folder that only starts like it.
+      newTrack('/Volumes/DJ/Music/_Duplicates of mine/_Duplicates.mp3')
+    ])
+
+    // Act
+    const listed = listTracks(db, { limit: 10, offset: 0 }, NO_VOLUMES).map((track) => track.id)
+    const available = listTrackAvailability(db, NO_VOLUMES).map((track) => track.id)
+
+    // Assert
+    expect(listed).toEqual([kept, named])
+    expect(available).toEqual([kept, named])
+    expect(countTracks(db)).toBe(2)
+  })
+
+  it('keeps its row: it can be read by its id, and a rescan still knows its file', () => {
+    // Arrange
+    const { db } = testDatabase
+    const [id] = insertTracks(db, [newTrack('/Volumes/DJ/Music/_Duplicates/a.mp3')]) as [number]
+
+    // Act
+    const track = getTrackById(db, id, NO_VOLUMES)
+    const states = listTrackFileStates(db)
+
+    // Assert
+    expect(track?.path).toBe('/Volumes/DJ/Music/_Duplicates/a.mp3')
+    expect(states.map((state) => state.id)).toEqual([id])
   })
 })
 

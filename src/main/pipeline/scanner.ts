@@ -10,6 +10,7 @@ import {
   insertTracks,
   listTrackFileStates,
   setTracksMissing,
+  updateTrack,
   updateTracks,
   type NewTrack,
   type TrackChanges,
@@ -18,6 +19,7 @@ import {
 import { describeError } from '../services/error-text'
 import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
+import { isDuplicatesFolder, isSetAsidePath } from '@shared/duplicates'
 import { AppError, type ErrorCode, type Result } from '@shared/errors'
 import type { ScanProgress, ScanSummary } from '@shared/library'
 import { fileTagsSchema, TAG_BATCH_SIZE, type FileTags } from '@shared/rpc'
@@ -71,6 +73,12 @@ export interface ScanDependencies {
    * fails, the scan does not run.
    */
   beforeScan?: () => Promise<void>
+  /**
+   * Files that are no new tracks although no track has their path: the originals
+   * that the undo of the last batch has put back already, before it could say so.
+   * Asked once per scan.
+   */
+  knownFiles?: () => Promise<ReadonlySet<string>>
   /** The path with its links resolved. Replaced in tests that need a path on a volume. */
   resolvePath?: (path: string) => Promise<string>
 }
@@ -143,6 +151,8 @@ async function walkLibrary(
           // Links are never followed: a link could lead out of the library or into a loop.
           const kind = entry.isFile() || entry.isDirectory() ? entry : await lstat(diskPath)
           if (kind.isDirectory()) {
+            // What was set aside as a duplicate is no part of the library any more.
+            if (isDuplicatesFolder(entry.name)) continue
             if (!excludedFolders.has(normalizeTrackPath(diskPath))) pending.push(diskPath)
             continue
           }
@@ -285,6 +295,12 @@ function fileFields(file: FoundFile): TrackChanges {
   return { format: file.format, fileSizeBytes: file.sizeBytes, fileMtimeMs: file.mtimeMs }
 }
 
+/** True for the error of asking about a path that has no file. */
+function isNotThere(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
 async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSummary>> {
   const { db, environment, listMountedVolumes, onProgress } = dependencies
   const resolvePath = dependencies.resolvePath ?? realpath
@@ -333,18 +349,58 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     const stored = new Map<string, TrackFileState>(
       listTrackFileStates(db).map((state) => [state.path, state])
     )
+    const rootPrefix = normalizeTrackPath(root) + sep
     // In clean library mode a track points at its copy, and its original stays in
-    // the library untouched. That file is known, not a new track.
+    // the library untouched. That file is known, not a new track. Only then: a track
+    // that was renamed or set aside where it is has left its old place, and a file
+    // that turns up there is another file. Unless it is the very original, put back
+    // by an undo that did not get to its end: that one is known too.
     const originals = new Set(
       [...stored.values()]
-        .filter((state) => state.originalPath !== state.path)
+        .filter((state) => state.originalPath !== state.path && !state.path.startsWith(rootPrefix))
         .map((state) => state.originalPath)
     )
+    for (const path of (await dependencies.knownFiles?.()) ?? []) originals.add(path)
+    // The copies that were set aside under the library are not walked, so each is
+    // asked about by its own path: whether its file is still in `_Duplicates`.
+    // Null when the disk would not say: that is no answer, and nothing follows from it.
+    const setAsideThere = new Map<number, boolean | null>()
+    // By where it was before: a file the user moved back by hand is its track again.
+    const movedBack = new Map<string, TrackFileState>()
+    for (const state of stored.values()) {
+      if (!state.path.startsWith(rootPrefix) || !isSetAsidePath(state.path)) continue
+      const there = await lstat(state.path).then(
+        (found) => found.isFile(),
+        (error: unknown) => (isNotThere(error) ? false : null)
+      )
+      setAsideThere.set(state.id, there)
+      if (there === false && state.originalPath !== state.path) {
+        movedBack.set(state.originalPath, state)
+      }
+    }
+
     const toRead: FoundFile[] = []
     const foundAgain: number[] = []
     let unchanged = 0
     for (const file of walk.files) {
-      const known = stored.get(file.trackPath)
+      const listed = stored.get(file.trackPath)
+      const candidate = listed === undefined ? movedBack.get(file.trackPath) : undefined
+      // Only the very file: a move keeps the size and the time of a file. Another
+      // file that came to stand there is a new track, with nothing of the old one.
+      const back =
+        candidate !== undefined &&
+        candidate.fileSizeBytes === file.sizeBytes &&
+        candidate.fileMtimeMs === file.mtimeMs
+          ? candidate
+          : undefined
+      const known = back === undefined ? listed : { ...back, path: file.trackPath }
+      if (back !== undefined && known !== undefined) {
+        // The track is in the library again, where the user put its file.
+        updateTrack(db, back.id, { path: file.trackPath })
+        stored.delete(back.path)
+        stored.set(file.trackPath, known)
+        movedBack.delete(file.trackPath)
+      }
       if (known === undefined && originals.has(file.trackPath)) {
         unchanged += 1
         continue
@@ -363,6 +419,9 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
       }
       unchanged += 1
       if (known.fileMissing) foundAgain.push(known.id)
+    }
+    for (const state of stored.values()) {
+      if (state.fileMissing && setAsideThere.get(state.id) === true) foundAgain.push(state.id)
     }
     setTracksMissing(db, foundAgain, false)
 
@@ -436,9 +495,13 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
     if (!(await stillReachable())) return fail('LIBRARY_UNAVAILABLE')
 
     const foundPaths = new Set(walk.files.map((file) => file.trackPath))
-    const rootPrefix = normalizeTrackPath(root) + sep
-    const gone = [...stored.values()].filter(
-      (state) => state.path.startsWith(rootPrefix) && !foundPaths.has(state.path)
+    const gone = [...stored.values()].filter((state) =>
+      !state.path.startsWith(rootPrefix)
+        ? false
+        : isSetAsidePath(state.path)
+          ? // Not walked: missing only when its own file was asked for and is not there.
+            setAsideThere.get(state.id) === false
+          : !foundPaths.has(state.path)
     )
     // A library that had tracks and now shows no file at all is far more likely to be
     // unreadable (a permission the app lost, an empty mount) than emptied.
