@@ -212,6 +212,98 @@ describe('replace', () => {
   })
 })
 
+describe('create', () => {
+  it('makes a new file in one step, after its content is complete', async () => {
+    // Arrange
+    const target = join(library, 'House', 'a.aiff')
+    let thereWhileWriting = true
+
+    // Act
+    await files.create(target, async (temp) => {
+      await writeFile(temp, 'new content')
+      thereWhileWriting = existsSync(target)
+    })
+
+    // Assert
+    expect(thereWhileWriting).toBe(false)
+    expect(readFileSync(target, 'utf8')).toBe('new content')
+    expect(allFiles()).toEqual(['Music/House/a.aiff'])
+  })
+
+  it('never takes the place of a file: one that is there stays, and nothing is left beside it', async () => {
+    // Arrange
+    const taken = addTrack('a.mp3')
+
+    // Act
+    const create = files.create(taken, async (temp) => writeFile(temp, 'new content'))
+
+    // Assert
+    await expect(create).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+    expect(sha256(taken)).toBe(sha256(FIXTURE))
+    expect(allFiles()).toEqual(['Music/a.mp3'])
+  })
+
+  it('gives the file its name inside the turn it is handed, and writes outside it', async () => {
+    // Arrange
+    const target = join(library, 'a.aiff')
+    const order: string[] = []
+
+    // Act
+    await files.create(
+      target,
+      async (temp) => {
+        order.push('write')
+        await writeFile(temp, 'new content')
+      },
+      undefined,
+      async (name) => {
+        order.push('turn starts')
+        await name()
+        order.push(existsSync(target) ? 'named' : 'not named')
+      }
+    )
+
+    // Assert
+    expect(order).toEqual(['write', 'turn starts', 'named'])
+  })
+
+  it('does not name a file when the write was stopped while it waited for its turn', async () => {
+    // Arrange
+    const target = join(library, 'a.aiff')
+    const stopping = new AbortController()
+
+    // Act
+    const create = files.create(
+      target,
+      async (temp) => writeFile(temp, 'new content'),
+      stopping.signal,
+      async (name) => {
+        stopping.abort()
+        await name()
+      }
+    )
+
+    // Assert
+    await expect(create).rejects.toThrow()
+    expect(allFiles()).toEqual([])
+  })
+
+  it('refuses a link that was left where the content was to be written', async () => {
+    // Arrange
+    const target = join(library, 'a.aiff')
+    const elsewhere = join(outside, 'secret.aiff')
+    writeFileSync(elsewhere, 'not of the library')
+
+    // Act
+    const create = files.create(target, async (temp) => symlinkSync(elsewhere, temp))
+
+    // Assert: the file the link points to does not get a name in the library.
+    await expect(create).rejects.toMatchObject({ code: 'WRITE_FAILED' })
+    expect(existsSync(target)).toBe(false)
+    expect(readFileSync(elsewhere, 'utf8')).toBe('not of the library')
+  })
+})
+
 describe('restore', () => {
   it('puts a backup back over a changed file, byte for byte, in one step', async () => {
     // Arrange

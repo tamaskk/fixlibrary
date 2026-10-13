@@ -17,6 +17,9 @@ export function stubBatchFiles(overrides: Partial<BatchFiles> = {}): BatchFiles 
       move: async () => {
         throw new Error('this test has no files')
       },
+      convertTo: async () => {
+        throw new Error('this test has no files')
+      },
       setAside: async () => {
         throw new Error('this test has no files')
       },

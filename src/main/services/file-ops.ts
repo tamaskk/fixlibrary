@@ -33,8 +33,8 @@ import { logger } from './logger'
 const TEMP_SUFFIX = '.fixlib-tmp'
 // How much of a file's name its temp file carries; the rest is cut off.
 const MAX_TEMP_STEM_LENGTH = 200
-// After this many taken names something else is wrong than a name that is in use.
-const MAX_NAME_ATTEMPTS = 1000
+/** After this many taken names something else is wrong than a name that is in use. */
+export const MAX_NAME_ATTEMPTS = 1000
 /** The file systems of a Mac's drives never hold more in one name. */
 export const NAME_LIMIT = 255
 export interface FileOpsOptions {
@@ -66,6 +66,21 @@ export interface FileOps {
     target: string,
     write: (tempPath: string, signal: AbortSignal) => Promise<void>,
     signal?: AbortSignal
+  ) => Promise<void>
+  /**
+   * Makes a new file at `target` of what `write` puts into the temp file it is
+   * given. The file appears under its name in one step, after `write` has succeeded,
+   * and never in the place of another: if the name is taken by then, it fails.
+   */
+  create: (
+    target: string,
+    write: (tempPath: string, signal: AbortSignal) => Promise<void>,
+    signal?: AbortSignal,
+    /**
+     * Runs the one step that gives the file its name. For a caller whose names
+     * take turns under a lock: the writing, which is long, stays outside it.
+     */
+    naming?: (name: () => Promise<void>) => Promise<void>
   ) => Promise<void>
   /**
    * Renames a file. Never replaces another file: if the new name is taken, it fails,
@@ -248,12 +263,19 @@ export function createFileOps(options: FileOpsOptions): FileOps {
     await unlink(from)
   }
 
+  /** Throws unless what a write left at its temp name is a regular file. */
+  async function assertWrittenFile(temp: string): Promise<void> {
+    const written = await lstat(temp).catch(() => null)
+    if (!written?.isFile()) throw new AppError('WRITE_FAILED', 'what was written is not a file')
+  }
+
   /** Writes through a temp file next to `target` and puts it in place in one step. */
   async function writeThroughTemp(
     target: string,
     write: (tempPath: string, signal: AbortSignal) => Promise<void>,
     signal: AbortSignal,
-    mayOverwrite: boolean
+    mayOverwrite: boolean,
+    naming: (name: () => Promise<void>) => Promise<void> = (name) => name()
   ): Promise<void> {
     await assertAllowed(target)
     if (signal.aborted) throw stoppedError()
@@ -266,12 +288,23 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       // Checked after the write and before the rename: once a write was told to stop,
       // nothing of it may appear under the final name.
       if (signal.aborted) throw stoppedError()
+      // Before it is opened to be synced: a link there would be followed, and a
+      // pipe would never let go.
+      await assertWrittenFile(temp)
       await flush(temp)
       // Syncing a large file takes a while: whoever stopped the write meanwhile may
       // already be putting the file back to what it was.
       if (signal.aborted) throw stoppedError()
-      if (mayOverwrite) await rename(temp, target)
-      else await nameWithoutReplacing(temp, target)
+      await naming(async () => {
+        // The turn may have been waited for: a write that was stopped meanwhile
+        // must not appear under the final name either.
+        if (signal.aborted) throw stoppedError()
+        // Asked again at the last moment: a link put there meanwhile would bring in
+        // the file it points to, under the name of a library file.
+        await assertWrittenFile(temp)
+        if (mayOverwrite) await rename(temp, target)
+        else await nameWithoutReplacing(temp, target)
+      })
     } catch (error) {
       await rm(temp, { force: true }).catch((cleanupError: unknown) => {
         logger.warn(`A temp file could not be removed: ${describeError(cleanupError)}`)
@@ -307,6 +340,9 @@ export function createFileOps(options: FileOpsOptions): FileOps {
 
     replace: (target, write, signal = new AbortController().signal) =>
       writeThroughTemp(target, write, signal, true),
+
+    create: (target, write, signal = new AbortController().signal, naming) =>
+      writeThroughTemp(target, write, signal, false, naming),
 
     async move(from, to) {
       await assertAllowed(from)
