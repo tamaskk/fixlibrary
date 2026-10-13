@@ -215,7 +215,7 @@ build_ffmpeg() {
     --enable-protocol=file,pipe \
     --enable-demuxer=mp3,wav,aiff,flac,ogg,matroska,mov,aac \
     --enable-muxer=mp3,wav,aiff,flac,null \
-    --enable-decoder=mp3,mp3float,flac,aac,opus,vorbis,alac,pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_s16be,pcm_s24be,pcm_s32be \
+    --enable-decoder=mp3,mp3float,flac,aac,opus,vorbis,alac,pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,pcm_s16be,pcm_s24be,pcm_s32be,pcm_f32be,pcm_f64be \
     --enable-encoder=libmp3lame,flac,pcm_s16le,pcm_s24le,pcm_s16be,pcm_s24be \
     --enable-parser=mpegaudio,aac,flac,opus,vorbis \
     --enable-filter=aresample,aformat,anull,volume,loudnorm,ebur128 \
