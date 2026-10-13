@@ -62,10 +62,15 @@ export interface Stage {
   /**
    * For a compute stage whose proposal follows from other fields, such as a file
    * name: proposes again after the user changed a field in the preview. `values` are
-   * the fields as the preview shows them now. It must be quick and touch nothing: no
+   * the fields as the preview shows them now, and `after` what the item of the batch
+   * holds, with the entries the stages keep for themselves. It must be quick and touch nothing: no
    * file, no network, no database.
    */
-  recompute?: (track: Track, values: Record<PreviewField, PreviewValue>) => Proposal | void
+  recompute?: (
+    track: Track,
+    values: Record<PreviewField, PreviewValue>,
+    after: unknown
+  ) => Proposal | void
   /**
    * For a compute stage that looks at the tracks of a batch together, such as the
    * search for duplicates: called once every track of the batch is computed, and

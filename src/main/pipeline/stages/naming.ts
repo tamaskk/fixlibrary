@@ -3,7 +3,9 @@ import type { Track } from '../../db/tracks'
 import type { PreviewField, PreviewValue, Proposal, ProposedFields } from '@shared/preview'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { cleanNames, formatFileName, parseFileName, type NameParts } from '../naming'
+import { extensionOf } from '@shared/file-names'
 import { BPM_KEY_STAGE } from './bpm-key'
+import { CONVERT_STAGE, convertedName, wantsConversion } from './convert'
 import { LOOKUP_STAGE } from './lookup'
 import type { Stage } from './stage'
 
@@ -22,7 +24,7 @@ function whole(value: PreviewValue | undefined): number | null {
 
 /** The file name for the names and the analysis a row shows. */
 function fileNameFor(
-  track: Track,
+  extension: string,
   values: Partial<Record<PreviewField, PreviewValue>>
 ): string | null {
   return formatFileName({
@@ -32,8 +34,18 @@ function fileNameFor(
     camelot: text(values.key),
     bpm: whole(values.bpm),
     energy: whole(values.energy),
-    extension: extname(track.path)
+    extension
   })
+}
+
+/**
+ * The extension the file of a track will have when its batch is written: a file that
+ * is about to be converted gets the name of what it will be.
+ */
+function extensionFor(track: Track, after: unknown): string {
+  return wantsConversion(after)
+    ? extensionOf(convertedName(basename(track.path)))
+    : extname(track.path)
 }
 
 function propose(track: Track, proposal: Proposal): Proposal {
@@ -89,7 +101,7 @@ function propose(track: Track, proposal: Proposal): Proposal {
     }
   }
 
-  const fileName = fileNameFor(track, {
+  const fileName = fileNameFor(extensionFor(track, proposal), {
     ...names,
     key: proposed.key ? proposed.key.value : track.camelotKey,
     bpm: proposed.bpm ? proposed.bpm.value : track.bpm,
@@ -112,15 +124,18 @@ export function createNamingStage(): Stage {
     resource: 'cpu',
     // The name holds the key and the tempo, and the names a lookup found.
     dependsOn: [LOOKUP_STAGE, BPM_KEY_STAGE],
+    // The name ends as the file will: a conversion in the batch says so first.
+    after: [CONVERT_STAGE],
     selectable: true,
     timeoutMs: STAGE_TIMEOUTS_MS.naming,
     run: async ({ proposal }, track) => ({ proposal: propose(track, proposal) }),
     // After an edit the name follows the row as it is now. What the user typed is
     // not cleaned again: only what a file system refuses is replaced.
-    recompute: (track, values) => {
+    recompute: (track, values, after) => {
       // With nothing left to name the file by, the name that was proposed goes too:
       // it was built from names the row no longer shows. The file then keeps its own.
-      return { fields: { fileName: { value: fileNameFor(track, values), source: 'naming' } } }
+      const fileName = fileNameFor(extensionFor(track, after), values)
+      return { fields: { fileName: { value: fileName, source: 'naming' } } }
     }
   }
 }

@@ -16,6 +16,7 @@ export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {
   id3: 'ID3',
   fileName: 'Fájlnév',
   naming: 'Névszabály',
+  conversion: 'Konverzió',
   analysis: 'Elemzés',
   claude: 'Claude',
   manual: 'Kézi'
