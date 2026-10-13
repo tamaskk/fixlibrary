@@ -313,4 +313,6 @@ export type ApproveOutcome =
 export interface UndoOutcome {
   restored: number
   removed: number
+  /** Files that stayed because they were not what the batch had left there. */
+  left: number
 }

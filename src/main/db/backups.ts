@@ -47,18 +47,33 @@ export function deleteBackup(db: AppDatabase, id: number): void {
  */
 export function recordCreatedFile(
   db: AppDatabase,
-  file: { batchId: number; trackId: number; path: string }
+  file: { batchId: number; trackId: number; path: string; sha256?: string | null }
 ): void {
+  const sha256 = file.sha256 ?? null
   db.insert(batchFiles)
     // In the one spelling a track's path is stored in: undo knows a file of the
     // batch by comparing the two, and a folder may be spelled otherwise on disk.
-    .values({ ...file, path: normalizeTrackPath(file.path) })
-    // The name may have been another track's earlier in the batch: it is this one's now.
+    .values({ ...file, sha256, path: normalizeTrackPath(file.path) })
+    // The name may have been another track's earlier in the batch: it is this one's
+    // now, with what this track's file holds.
     .onConflictDoUpdate({
       target: [batchFiles.batchId, batchFiles.path],
-      set: { trackId: file.trackId }
+      set: { trackId: file.trackId, sha256 }
     })
     .run()
+}
+
+/** What a batch wrote down about the file at a path, if anything. */
+export function getCreatedFile(
+  db: AppDatabase,
+  batchId: number,
+  path: string
+): CreatedFile | undefined {
+  return db
+    .select()
+    .from(batchFiles)
+    .where(and(eq(batchFiles.batchId, batchId), eq(batchFiles.path, normalizeTrackPath(path))))
+    .get()
 }
 
 export function listCreatedFiles(db: AppDatabase, batchId: number): CreatedFile[] {

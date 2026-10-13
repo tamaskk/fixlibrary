@@ -65,7 +65,12 @@ export interface FileOps {
   replace: (
     target: string,
     write: (tempPath: string, signal: AbortSignal) => Promise<void>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /**
+     * Runs the one step that puts the content in place. For a caller that has a
+     * last question to ask of `target` first: if it throws, nothing is replaced.
+     */
+    naming?: (name: () => Promise<void>) => Promise<void>
   ) => Promise<void>
   /**
    * Makes a new file at `target` of what `write` puts into the temp file it is
@@ -106,6 +111,8 @@ export interface FileOps {
   isFolder: (path: string) => Promise<boolean>
   /** True when both paths name one file on disk, however they are spelled. */
   sameFile: (first: string, second: string) => Promise<boolean>
+  /** The sha256 of a regular file, or null when there is no such file. */
+  sha256Of: (path: string) => Promise<string | null>
   /**
    * True when both are regular files that hold the same bytes. Reads both: for the
    * few files of which it must be known that writing one over the other loses nothing.
@@ -338,8 +345,8 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       await writeThroughTemp(to, (temp) => copyInto(temp, from, expected), signal, true)
     },
 
-    replace: (target, write, signal = new AbortController().signal) =>
-      writeThroughTemp(target, write, signal, true),
+    replace: (target, write, signal = new AbortController().signal, naming) =>
+      writeThroughTemp(target, write, signal, true, naming),
 
     create: (target, write, signal = new AbortController().signal, naming) =>
       writeThroughTemp(target, write, signal, false, naming),
@@ -440,6 +447,15 @@ export function createFileOps(options: FileOpsOptions): FileOps {
     async sameFile(first, second) {
       const identity = await identityOf(first)
       return identity !== null && identity === (await identityOf(second))
+    },
+
+    async sha256Of(path) {
+      try {
+        if (!(await lstat(path)).isFile()) return null
+        return await digestOf(path)
+      } catch {
+        return null
+      }
     },
 
     async sameContent(first, second) {

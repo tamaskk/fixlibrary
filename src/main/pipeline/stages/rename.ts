@@ -7,6 +7,7 @@ import { NAMING_STAGE } from './naming'
 import { CONVERT_FILE_STAGE } from './convert'
 import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage } from './stage'
+import { WRITE_TAGS_STAGE } from './write-tags'
 
 export const RENAME_STAGE = 'rename'
 
@@ -26,7 +27,7 @@ export function createRenameStage(): Stage {
     // an AIFF first, so that the name it gets ends as the file does. Set aside first: a
     // copy that is not kept then gets its name in `_Duplicates`, and does not take
     // the name in the folder that the copy that is kept is about to get.
-    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE],
+    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE, WRITE_TAGS_STAGE],
     selectable: false,
     timeoutMs: STAGE_TIMEOUTS_MS.rename,
     run: async ({ files, proposal }, track) => {

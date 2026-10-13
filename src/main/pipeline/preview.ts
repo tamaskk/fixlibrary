@@ -56,6 +56,7 @@ import { runStage } from './run-stage'
 import { DUPLICATES_STAGE } from './stages/duplicates'
 import { identifiersSchema } from './stages/lookup'
 import type { Stage } from './stages/stage'
+import { tagsFor, takesTags, WRITE_TAGS_STAGE } from './stages/write-tags'
 
 // As long as a file name can be on macOS.
 const MAX_NAME_LENGTH = 255
@@ -169,7 +170,13 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
     const identifiers = identifiersSchema.safeParse(
       z.record(z.string(), z.unknown()).safeParse(item.after).data?.['identifiers']
     )
-    if (manual.length === 0 && !fields.bpm && !fields.key && !identifiers.success) return
+    // What the batch wrote into the file's tags is the track's own from then on: the
+    // names a lookup found and the naming cleaned. Only then, so that a row never
+    // says more than its file.
+    const tagged = listJobStageNames(tx, batchId).includes(WRITE_TAGS_STAGE)
+    if (!tagged && manual.length === 0 && !fields.bpm && !fields.key && !identifiers.success) {
+      return
+    }
     const track = getTrackById(tx, trackId, new Set())
     if (!track) return
     const committed = new Set<string>(manual)
@@ -191,6 +198,26 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       const key = fields.key.value === null ? null : keyOfCamelot(fields.key.value)
       changes.camelotKey = key?.camelot ?? null
       changes.musicalKey = key?.musical ?? null
+    }
+    if (tagged && takesTags(track.path)) {
+      // Field by field what went into the tag, and nothing that was left out of it
+      // because a tag cannot hold it.
+      const written = tagsFor(track, readProposal(item.after))
+      if (written.artist !== undefined && fields.artist && free('artist')) {
+        changes.artist = fields.artist.value
+      }
+      if (written.title !== undefined) {
+        if (fields.title && free('title')) changes.title = fields.title.value
+        if (fields.mix && free('mix')) changes.mix = fields.mix.value
+      }
+      if (written.album !== undefined && fields.album && free('album')) {
+        changes.album = fields.album.value
+      }
+      if (written.label !== undefined && fields.label && free('label')) {
+        changes.label = fields.label.value
+      }
+      if (written.year !== undefined && fields.year && free('year'))
+        changes.year = fields.year.value
     }
     if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
     if (fields.title?.source === 'manual') changes.title = fields.title.value
@@ -533,8 +560,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       if (approving || refreshing) return { ok: false, code: 'RUN_ACTIVE' }
       const undone = await orchestrator.undoLast()
       if (!undone.ok) return undone
-      const { restored, removed } = undone.value
-      return { ok: true, value: { restored, removed } }
+      const { restored, removed, left } = undone.value
+      return { ok: true, value: { restored, removed, left } }
     }
   }
 }

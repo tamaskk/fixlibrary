@@ -30,14 +30,22 @@ export async function waitForFileWork(
   // Only the undo is waited for without a limit; what else is still going on when
   // it has ended gets the time below.
   while (files.undoing()) await files.settled()
-  if (!files.busy()) return true
-  let timer: NodeJS.Timeout | undefined
-  const timedOut = new Promise<false>((resolve) => {
-    timer = setTimeout(() => resolve(false), timeoutMs)
-  })
-  try {
-    return await Promise.race([files.settled().then(() => true as const), timedOut])
-  } finally {
-    clearTimeout(timer)
+  // Asked again each time the work has ended: what waited for that same moment may
+  // have begun work of its own, such as the deletion of older backups. All of it
+  // together gets the time once.
+  const deadline = Date.now() + timeoutMs
+  while (files.busy()) {
+    const leftMs = deadline - Date.now()
+    if (leftMs <= 0) return false
+    let timer: NodeJS.Timeout | undefined
+    const timedOut = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), leftMs)
+    })
+    try {
+      if (!(await Promise.race([files.settled().then(() => true as const), timedOut]))) return false
+    } finally {
+      clearTimeout(timer)
+    }
   }
+  return true
 }

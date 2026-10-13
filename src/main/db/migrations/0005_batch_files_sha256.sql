@@ -1,0 +1,1 @@
+ALTER TABLE `batch_files` ADD `sha256` text;

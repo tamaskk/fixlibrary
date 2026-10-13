@@ -258,6 +258,13 @@ export const batchFiles = sqliteTable(
       .references(() => batches.id, { onDelete: 'restrict' }),
     trackId: integer('track_id').references(() => tracks.id, { onDelete: 'set null' }),
     path: text('path').notNull(),
+    /**
+     * The sha256 of what the batch wrote into the file, once it changed its bytes.
+     * Null for a file the batch only copied or moved: that one is known by holding
+     * what its backup or its original holds. Undo removes a file only if it is the
+     * batch's own by one of the two.
+     */
+    sha256: text('sha256'),
     createdAt
   },
   (table) => [

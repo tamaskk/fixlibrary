@@ -162,7 +162,10 @@ describe('changing files in place', () => {
     const undone = await files.undoLast()
 
     // Assert
-    expect(undone).toEqual({ ok: true, value: { batchId: batch.id, restored: 20, removed: 20 } })
+    expect(undone).toEqual({
+      ok: true,
+      value: { batchId: batch.id, restored: 20, removed: 20, left: 0 }
+    })
     expect(paths.map(sha256)).toEqual(originals)
     expect(filesUnder(library)).toEqual(paths.map((path) => path.slice(folder.length + 1)))
     expect(ids.map(pathOf)).toEqual(paths)
@@ -598,7 +601,7 @@ describe('working in the clean library', () => {
     const undone = await files.undoLast()
 
     // Assert
-    expect(undone).toMatchObject({ ok: true, value: { restored: 0, removed: 3 } })
+    expect(undone).toMatchObject({ ok: true, value: { restored: 0, removed: 3, left: 0 } })
     expect(filesUnder(clean)).toEqual([])
     expect(readdirSync(clean)).toEqual([])
     expect(paths.map(sha256)).toEqual(originals)

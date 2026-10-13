@@ -11,6 +11,7 @@ import { createNamingStage } from './naming'
 import { createRenameStage } from './rename'
 import { createSetAsideStage } from './set-aside'
 import type { Stage } from './stage'
+import { createWriteTagsStage } from './write-tags'
 
 export type StageDependencies = BpmKeyStageDependencies &
   ConvertStageDependencies &
@@ -28,6 +29,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createDuplicatesStage(dependencies),
     createConvertStage(),
     createConvertFileStage(dependencies),
+    createWriteTagsStage(dependencies),
     createRenameStage(),
     createSetAsideStage()
   ]
