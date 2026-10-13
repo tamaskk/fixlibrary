@@ -37,7 +37,8 @@ export type EditablePreviewField = (typeof EDITABLE_PREVIEW_FIELDS)[number]
  * Where a proposed value comes from. `manual` is what the user typed in the preview;
  * `musicbrainz` and `discogs` are the online services a lookup took it from;
  * `fileName` is what the name of the file said where no tag and no lookup did;
- * `naming` is a file name the app built from the other fields.
+ * `naming` is a file name the app built from the other fields; `conversion` is the
+ * name a file gets when it becomes a file of another format.
  */
 export const FIELD_SOURCES = [
   'lookup',
@@ -46,6 +47,7 @@ export const FIELD_SOURCES = [
   'id3',
   'fileName',
   'naming',
+  'conversion',
   'analysis',
   'claude',
   'manual'

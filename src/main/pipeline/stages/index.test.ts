@@ -206,19 +206,23 @@ describe('the demo stages', () => {
 
     // Act
     const proposed = await lookup?.run(context, track)
-    const again = lookup?.recompute?.(track, {
-      fileName: null,
-      artist: 'AC/DC',
-      title: 'Thunder',
-      album: null,
-      label: null,
-      year: null,
-      bpm: null,
-      key: null,
-      mix: 'Live',
-      styleId: null,
-      energy: null
-    })
+    const again = lookup?.recompute?.(
+      track,
+      {
+        fileName: null,
+        artist: 'AC/DC',
+        title: 'Thunder',
+        album: null,
+        label: null,
+        year: null,
+        bpm: null,
+        key: null,
+        mix: 'Live',
+        styleId: null,
+        energy: null
+      },
+      {}
+    )
 
     // Assert
     expect(proposed?.proposal?.fields).toMatchObject({

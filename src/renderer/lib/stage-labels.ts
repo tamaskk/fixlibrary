@@ -5,6 +5,8 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
   bpmKey: 'BPM és key elemzés',
   naming: 'Fájlnév és névtisztítás',
   rename: 'Átnevezés',
+  convert: 'WAV → AIFF konverzió',
+  convertFile: 'WAV fájlok konvertálása',
   duplicates: 'Duplikátumok keresése',
   setAside: 'Duplikátumok félretétele',
   demoAnalyze: 'Demo elemzés',

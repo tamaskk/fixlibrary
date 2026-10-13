@@ -307,13 +307,19 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
   }
 
   /** What the stages of the batch propose now that the user changed a field. */
-  function recomputed(batchId: number, track: Track, before: unknown, edited: Proposal): Proposal {
+  function recomputed(
+    batchId: number,
+    track: Track,
+    item: { before: unknown; after: unknown },
+    edited: Proposal
+  ): Proposal {
+    const { before, after } = item
     const ran = new Set(listJobStageNames(db, batchId))
     let proposal = edited
     for (const stage of stages) {
       if (!stage.recompute || stage.phase !== 'compute' || !ran.has(stage.name)) continue
       try {
-        const next = stage.recompute(track, valuesAfter(before, proposal))
+        const next = stage.recompute(track, valuesAfter(before, proposal), after)
         if (!next) continue
         // The warnings a stage reports are its own to take back: a name that was
         // taken, or a duplicate, may be neither after the edit.
@@ -391,7 +397,7 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
         ...current,
         fields: { ...current.fields, [field]: { value: value.data, source: 'manual' } }
       }
-      setBatchItemProposal(db, batchId, trackId, recomputed(batchId, track, item.before, edited))
+      setBatchItemProposal(db, batchId, trackId, recomputed(batchId, track, item, edited))
       // Only a name can make a track a copy of another; the batch may hold thousands.
       if (field === 'artist' || field === 'title' || field === 'mix') regroup(batchId)
       const stored = getBatchItem(db, batchId, trackId)
@@ -451,7 +457,7 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
           db,
           batchId,
           trackId,
-          recomputed(batchId, track, stored.before, readProposal(stored.after))
+          recomputed(batchId, track, stored, readProposal(stored.after))
         )
         regroup(batchId)
         regrouped = true

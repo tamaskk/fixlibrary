@@ -21,6 +21,7 @@ describe('STAGE_TIMEOUTS_MS', () => {
       energy: 120_000,
       demucs: 900_000,
       convert: 120_000,
+      convertFile: 360_000,
       normalize: 120_000
     })
   })

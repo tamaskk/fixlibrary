@@ -70,10 +70,24 @@ export function deleteCreatedFiles(db: AppDatabase, batchId: number): void {
   db.delete(batchFiles).where(eq(batchFiles.batchId, batchId)).run()
 }
 
-/** Takes back the note about one file: it was not created after all. */
-export function deleteCreatedFile(db: AppDatabase, batchId: number, path: string): void {
+/**
+ * Takes back the note about one file: it was not created after all. With a track,
+ * only if the note is still that track's: the name may have become another's since.
+ */
+export function deleteCreatedFile(
+  db: AppDatabase,
+  batchId: number,
+  path: string,
+  trackId?: number
+): void {
   db.delete(batchFiles)
-    .where(and(eq(batchFiles.batchId, batchId), eq(batchFiles.path, normalizeTrackPath(path))))
+    .where(
+      and(
+        eq(batchFiles.batchId, batchId),
+        eq(batchFiles.path, normalizeTrackPath(path)),
+        trackId === undefined ? undefined : eq(batchFiles.trackId, trackId)
+      )
+    )
     .run()
 }
 

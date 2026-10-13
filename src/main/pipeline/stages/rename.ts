@@ -4,6 +4,7 @@ import { extensionOf } from '@shared/file-names'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { isBuiltFileName } from '../naming'
 import { NAMING_STAGE } from './naming'
+import { CONVERT_FILE_STAGE } from './convert'
 import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage } from './stage'
 
@@ -21,10 +22,11 @@ export function createRenameStage(): Stage {
     phase: 'apply',
     resource: 'io',
     dependsOn: [NAMING_STAGE],
-    // Both move the file, and their steps must not be mixed. Set aside first: a
+    // All of them move the file, and their steps must not be mixed. A WAV becomes
+    // an AIFF first, so that the name it gets ends as the file does. Set aside first: a
     // copy that is not kept then gets its name in `_Duplicates`, and does not take
     // the name in the folder that the copy that is kept is about to get.
-    after: [SET_ASIDE_STAGE],
+    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE],
     selectable: false,
     timeoutMs: STAGE_TIMEOUTS_MS.rename,
     run: async ({ files, proposal }, track) => {
@@ -40,6 +42,9 @@ export function createRenameStage(): Stage {
       const fileName = proposal.fields?.fileName?.value
       // Nothing was proposed for this track: its file keeps its name.
       if (typeof fileName !== 'string') return kept
+      // The name a conversion showed is the name it gave: the file has it already,
+      // and it was never built by the naming, so its rule is not asked of it.
+      if (proposal.fields?.fileName?.source === 'conversion') return kept
       // Checked again here, whatever the preview showed: this is what reaches the
       // disk. Only a name as the naming builds one is written.
       if (!isBuiltFileName(fileName)) {

@@ -20,6 +20,7 @@ import {
   cancelPreviewBatches,
   findLastWrittenBatch,
   getBatch,
+  getBatchItem,
   listBatchItemsBefore,
   listBatchItemStates,
   setBatchStatus,
@@ -37,12 +38,19 @@ import {
   restoreTrack,
   updateTrack,
   type Track,
+  type TrackChanges,
   type TrackSnapshot
 } from '../db/tracks'
 import { describeError } from '../services/error-text'
-import { isRespelling, NAME_LIMIT, unusableNameReason, type FileOps } from '../services/file-ops'
+import {
+  isRespelling,
+  MAX_NAME_ATTEMPTS,
+  NAME_LIMIT,
+  unusableNameReason,
+  type FileOps
+} from '../services/file-ops'
 import { isSetAsidePath } from '@shared/duplicates'
-import { UNSAFE_TEXT } from '@shared/file-names'
+import { extensionOf, UNSAFE_TEXT } from '@shared/file-names'
 import { logger } from '../services/logger'
 import { AppError, type Result } from '@shared/errors'
 import type { SpaceCheck } from '@shared/file-ops'
@@ -50,8 +58,6 @@ import type { SpaceCheck } from '@shared/file-ops'
 // Kept free beyond what the copies need: a volume that is full to the last byte
 // fails in other places.
 const SPACE_MARGIN_BYTES = 64 * 1024 * 1024
-// How many names are tried for a file among what was set aside before its track fails.
-const MAX_SET_ASIDE_NAMES = 100
 
 export interface LibraryFolders {
   libraryRoot: string | null
@@ -112,6 +118,20 @@ export interface TrackFiles {
     folderName: string,
     keeperTrackId: number
   ) => Promise<{ path: string; collided: boolean }>
+  /**
+   * Makes the file a file of another format, under its name with the new extension,
+   * in the folder it is in. `write` reads `source` and puts the new content into the
+   * temp file it is given; what it returns is recorded on the track with the new
+   * path and format. The new file appears in one step and never in the place of
+   * another. Only then is the old one removed: by then it is saved in its backup,
+   * or is a copy in the clean library whose original stays in the library. At no
+   * point does a file hold content its name does not say. Done already when the
+   * file has the extension; then only an old file that a stopped run left is removed.
+   */
+  convertTo: (
+    target: { extension: string; format: Track['format'] },
+    write: (source: string, tempPath: string, signal: AbortSignal) => Promise<TrackChanges | void>
+  ) => Promise<{ path: string; collided: boolean }>
 }
 
 export interface UndoSummary {
@@ -167,6 +187,14 @@ export interface BatchFiles {
   settled: () => Promise<void>
 }
 
+/**
+ * A path as two names are compared that a drive may take for one: in one Unicode
+ * form and one letter case, the way `findTrackIdsWithName` folds a name.
+ */
+function foldedName(path: string): string {
+  return normalizeTrackPath(path).normalize('NFKC').toUpperCase().toLowerCase()
+}
+
 /** Lets pieces of work that must not overlap take turns. */
 function createLock(): <T>(work: () => Promise<T>) => Promise<T> {
   let last: Promise<unknown> = Promise.resolve()
@@ -195,6 +223,11 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   // Picking a free name and taking it are two steps: two tracks that want the same
   // name must not both see it free. Every name is taken under this lock.
   const withNames = createLock()
+  // The names files are being written for right now, by the track each is for: a
+  // conversion takes its name first and writes for a minute, and no other track may
+  // take the name meanwhile. Kept by the name as a drive that ignores letter case
+  // would compare it.
+  const reserved = new Map<string, number>()
   // The stages of one track take turns at its file.
   const trackLocks = new Map<number, ReturnType<typeof createLock>>()
   // Work on files that has started and not ended, also for a stage nobody waits for
@@ -352,7 +385,8 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     return withNames(async () => {
       // Named as a track's path is stored: the folders of the library may be spelled
       // decomposed on disk, and undo finds the copy by comparing the two.
-      const free = await fileOps.freeName(wanted)
+      // Also not a name another track is writing its file for right now.
+      const free = await freeNameFor(wanted, track.path, track.id)
       const path = normalizeTrackPath(free.path)
       if (free.collided) onCollision()
       recordCreatedFile(db, { batchId, trackId: track.id, path })
@@ -360,7 +394,7 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
         await fileOps.copy(track.path, path, signal)
       } catch (error) {
         // Not created after all: undo must not take a file at this path for ours.
-        deleteCreatedFile(db, batchId, path)
+        deleteCreatedFile(db, batchId, path, track.id)
         throw error
       }
       updateTrack(db, track.id, { path })
@@ -408,10 +442,10 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     from: string,
     trackId: number
   ): Promise<{ path: string; collided: boolean }> {
-    if (!isSetAsidePath(to)) return fileOps.freeName(to, from)
+    const aside = isSetAsidePath(to)
     const extension = extname(to)
     const stem = to.slice(0, to.length - extension.length)
-    for (let number = 1; number <= MAX_SET_ASIDE_NAMES; number += 1) {
+    for (let number = 1; number <= MAX_NAME_ATTEMPTS; number += 1) {
       const candidate = number === 1 ? to : `${stem} (${number})${extension}`
       if (candidate === from) return { path: from, collided: number > 1 }
       // A name the file system would refuse is not free, whatever the disk says.
@@ -420,10 +454,14 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
       // for it (a hard link) is one, and stays.
       const own = isRespelling(candidate, from) && (await fileOps.sameFile(candidate, from))
       if (!own && (await fileOps.exists(candidate))) continue
-      if (ownedByAnother(candidate, trackId)) continue
+      // A name another track is writing its file for right now is taken, though
+      // nothing stands there yet.
+      const reservedBy = reserved.get(foldedName(candidate))
+      if (reservedBy !== undefined && reservedBy !== trackId) continue
+      if (aside && ownedByAnother(candidate, trackId)) continue
       return { path: candidate, collided: number > 1 }
     }
-    throw new AppError('WRITE_FAILED', 'no name is free for the file among what was set aside')
+    throw new AppError('WRITE_FAILED', 'no name is free for the file')
   }
 
   /**
@@ -873,8 +911,136 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
             return moveTo(from, to)
           }),
 
+        convertTo: (target, write) =>
+          withTrack(trackId, async () => {
+            if (unusableNameReason(`name${target.extension}`, 'file') !== null) {
+              throw new AppError('INVALID_INPUT', 'not an extension of a library file')
+            }
+            // Before the file is asked for, which makes its backup or its copy: a
+            // track that is what it is to become already costs neither.
+            const track = await reconcile(batch.id, readTrack(trackId))
+            if (extensionOf(track.path) === target.extension) {
+              await removeConverted(track.path)
+              return { path: track.path, collided: false }
+            }
+            const from = await working()
+            // The old file goes once the new one is there, so every byte of it must
+            // be somewhere else, now and when it goes: the same bytes in its backup,
+            // or, for a copy in the clean library, in the original it was made of.
+            const heldElsewhere = await elsewhereOf(from)
+            if (!(await heldElsewhere())) {
+              throw new AppError('WRITE_FAILED', 'the file is not saved anywhere else as it is')
+            }
+            const stem = from.slice(0, from.length - extname(from).length)
+            const to = `${stem}${target.extension}`
+            await assertUsableTarget(await workingRoot(from), to, from)
+            // The name is taken under the lock, written down, and kept from every
+            // other track until the file is there; the writing itself, which may
+            // take a minute, holds up no other file.
+            const free = await withNames(async () => {
+              const name = await freeNameFor(to, from, trackId)
+              if (ownedByAnother(name.path, trackId)) {
+                throw new AppError('WRITE_FAILED', 'the new name belongs to another track')
+              }
+              if (signal.aborted) throw new AppError('WRITE_FAILED', 'the change was stopped')
+              recordCreatedFile(db, { batchId: batch.id, trackId, path: name.path })
+              reserved.set(foldedName(name.path), trackId)
+              return name
+            })
+            let changes: TrackChanges = {}
+            try {
+              await fileOps.create(
+                free.path,
+                async (temp, stop) => {
+                  changes = (await write(from, temp, stop)) ?? {}
+                  // What was converted is what will be removed: a file that was
+                  // changed meanwhile would lose that change, so nothing is put in
+                  // place and the file stays.
+                  if (!(await heldElsewhere())) {
+                    throw new AppError('WRITE_FAILED', 'the file changed while it was converted')
+                  }
+                },
+                signal,
+                // On a drive without hard links giving a name is two steps, and
+                // two files that are given one name must take turns at them.
+                withNames
+              )
+            } catch (error) {
+              // Not created after all: undo must not take a file at this path for
+              // ours. Only this track's own note: the name may be another's by now.
+              deleteCreatedFile(db, batch.id, free.path, trackId)
+              throw error
+            } finally {
+              reserved.delete(foldedName(free.path))
+            }
+            updateTrack(db, trackId, {
+              ...changes,
+              path: free.path,
+              format: target.format,
+              // The size a later step knows the file by, should the app stop in it.
+              fileSizeBytes: await fileOps.sizeOf(free.path)
+            })
+            prepared = Promise.resolve(free.path)
+            // Both files are there now, each what its name says. The old one goes
+            // last, and only if it is still what was converted: asked at this very
+            // moment, because syncing a large file to a slow drive took a while. One
+            // that was changed meanwhile stays beside the new file, with its change.
+            if (await heldElsewhere()) await fileOps.remove(from)
+            else logger.warn(`Track ${trackId}: its old file changed and stays beside the new one`)
+            return free
+          }),
+
         replaceContent: (write) =>
           withTrack(trackId, async () => fileOps.replace(await working(), write, signal))
+      }
+
+      /**
+       * Removes the file a conversion of this track left behind when it was stopped
+       * between putting the new file in place and removing the old one: the file at
+       * the place the batch backed the track up from, or a copy this batch made
+       * and converted. Under the very condition a conversion removes it under:
+       * every byte of it is in another file.
+       */
+      async function removeConverted(current: string): Promise<void> {
+        const now = normalizeTrackPath(current)
+        const backup = getBackup(db, batch.id, trackId)
+        const old =
+          backup !== undefined
+            ? [backup.originalPath]
+            : listCreatedFilesOfTrack(db, batch.id, trackId).map((file) => file.path)
+        for (const path of old) {
+          // Another file of this very track, of the format it had before.
+          if (path === now || extensionOf(path) === extensionOf(now)) continue
+          if (ownedByAnother(path, trackId) || !(await fileOps.isRegularFile(path))) continue
+          const heldElsewhere = await elsewhereOf(path)
+          if (await heldElsewhere()) await fileOps.remove(path)
+        }
+      }
+
+      /**
+       * A question that can be asked again and again: whether every byte of the
+       * file at `path` is in another file as well. That other file is the backup
+       * this batch made of it, which must be a file in the backup folder, or, for
+       * a copy this batch made in the clean library, the original the batch found
+       * the track at.
+       */
+      async function elsewhereOf(path: string): Promise<() => Promise<boolean>> {
+        const backup = getBackup(db, batch.id, trackId)
+        if (backup !== undefined) {
+          const { backupFolder } = folders()
+          const inBackups =
+            backupFolder !== null && (await fileOps.isInside(backup.backupPath, backupFolder))
+          return async () => inBackups && (await fileOps.sameContent(path, backup.backupPath))
+        }
+        const copied = listCreatedFilesOfTrack(db, batch.id, trackId).some(
+          (file) => file.path === normalizeTrackPath(path)
+        )
+        const original = pathOfSnapshot(getBatchItem(db, batch.id, trackId)?.before)
+        return async () =>
+          copied &&
+          original !== null &&
+          !(await fileOps.sameFile(original, path)) &&
+          (await fileOps.sameContent(path, original))
       }
 
       function moveTo(from: string, to: string): Promise<{ path: string; collided: boolean }> {
@@ -896,7 +1062,7 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
           try {
             await fileOps.move(from, free.path)
           } catch (error) {
-            deleteCreatedFile(db, batch.id, free.path)
+            deleteCreatedFile(db, batch.id, free.path, trackId)
             throw error
           }
           updateTrack(db, trackId, { path: free.path })

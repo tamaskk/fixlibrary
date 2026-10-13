@@ -1,6 +1,7 @@
 import { DUPLICATES_FOLDER } from '@shared/duplicates'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { readDuplicateMark } from '../batch-duplicates'
+import { CONVERT_FILE_STAGE } from './convert'
 import { DUPLICATES_STAGE } from './duplicates'
 import type { Stage } from './stage'
 
@@ -20,6 +21,8 @@ export function createSetAsideStage(): Stage {
     phase: 'apply',
     resource: 'io',
     dependsOn: [DUPLICATES_STAGE],
+    // Both give the file a new path; a conversion comes first, where there is one.
+    after: [CONVERT_FILE_STAGE],
     selectable: false,
     timeoutMs: STAGE_TIMEOUTS_MS.setAside,
     run: async ({ files, proposal }) => {

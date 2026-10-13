@@ -236,15 +236,13 @@ describe('the naming stage', () => {
     })
   })
 
-  it('takes the proposed name back when an edit leaves nothing to name the file by', () => {
-    // Arrange
-    const track = trackWith({ path: '/Music/a.mp3' })
-
-    // Act
-    const again = createNamingStage().recompute?.(track, {
-      fileName: 'A - T [8A Am - 124].mp3',
-      artist: null,
-      title: null,
+  it('names a file that is to be converted by what it will be, also when the row shows no name', () => {
+    // Arrange: an earlier edit left nothing to name the file by; this one gives a title again.
+    const track = trackWith({ path: '/Music/a.wav' })
+    const values = {
+      fileName: null,
+      artist: 'Bicep',
+      title: 'Glue',
       mix: null,
       album: null,
       label: null,
@@ -253,7 +251,39 @@ describe('the naming stage', () => {
       key: '8A',
       styleId: null,
       energy: null
-    })
+    }
+
+    // Act
+    const converted = createNamingStage().recompute?.(track, values, { convert: { to: 'aiff' } })
+    const kept = createNamingStage().recompute?.(track, values, {})
+
+    // Assert
+    expect(converted?.fields?.fileName?.value).toBe('Bicep - Glue [8A Am - 124].aiff')
+    expect(kept?.fields?.fileName?.value).toBe('Bicep - Glue [8A Am - 124].wav')
+  })
+
+  it('takes the proposed name back when an edit leaves nothing to name the file by', () => {
+    // Arrange
+    const track = trackWith({ path: '/Music/a.mp3' })
+
+    // Act
+    const again = createNamingStage().recompute?.(
+      track,
+      {
+        fileName: 'A - T [8A Am - 124].mp3',
+        artist: null,
+        title: null,
+        mix: null,
+        album: null,
+        label: null,
+        year: null,
+        bpm: 124,
+        key: '8A',
+        styleId: null,
+        energy: null
+      },
+      {}
+    )
 
     // Assert
     expect(again).toEqual({ fields: { fileName: { value: null, source: 'naming' } } })
@@ -323,19 +353,23 @@ describe('the naming stage', () => {
     const track = trackWith({ path: '/Music/a.aiff' })
 
     // Act
-    const again = createNamingStage().recompute?.(track, {
-      fileName: 'old.aiff',
-      artist: 'AC/DC',
-      title: 'Thunder (Audio)',
-      mix: 'Live',
-      album: null,
-      label: null,
-      year: null,
-      bpm: 134,
-      key: '5A',
-      styleId: null,
-      energy: 9
-    })
+    const again = createNamingStage().recompute?.(
+      track,
+      {
+        fileName: 'old.aiff',
+        artist: 'AC/DC',
+        title: 'Thunder (Audio)',
+        mix: 'Live',
+        album: null,
+        label: null,
+        year: null,
+        bpm: 134,
+        key: '5A',
+        styleId: null,
+        energy: 9
+      },
+      {}
+    )
 
     // Assert
     expect(again).toEqual({
@@ -372,6 +406,9 @@ describe('the rename stage', () => {
         moves.push(to)
         return { path: to, collided: false }
       },
+      convertTo: async () => {
+        throw new Error('a rename converts nothing')
+      },
       setAside: async () => {
         throw new Error('a rename sets nothing aside')
       },
@@ -384,6 +421,24 @@ describe('the rename stage', () => {
   function named(fileName: unknown): Proposal {
     return { fields: { fileName: { value: fileName, source: 'naming' } } } as Proposal
   }
+
+  it('leaves alone the name a conversion showed: the file has it already', async () => {
+    // Arrange: the name of the file as it is, with what the naming's own rule refuses in it.
+    const files = filesAt('/Music/What?.aiff')
+    const proposal = {
+      fields: { fileName: { value: 'What?.aiff', source: 'conversion' } }
+    } as Proposal
+
+    // Act
+    const result = await createRenameStage().run(
+      { signal: new AbortController().signal, batchId: 1, files, proposal },
+      trackWith({ path: '/Music/What?.aiff' })
+    )
+
+    // Assert
+    expect(result).toBeUndefined()
+    expect(files.moves).toEqual([])
+  })
 
   it('gives the file the proposed name, in the folder it is in', async () => {
     // Arrange
