@@ -18,7 +18,8 @@ The user's music files are irreplaceable. These rules have no exceptions.
 - Atomic writes: write to `.<name>.fixlib-tmp` in the same folder, then rename. Never write into the final path directly.
 - Never overwrite an existing different file: on a name collision append ` (2)`, ` (3)` and raise a `NAME_COLLISION` warning.
 - Check free space before a batch; refuse to start if backups or copies would not fit.
-- Deleting a library file is done only by undo (files the batch created) and by an explicit user choice in the duplicates view. Nothing else deletes.
+- Deleting a library file is done only by undo (files the batch created), by an explicit user choice in the duplicates view, and by a format conversion (`TrackFiles.convertTo`), which removes the old file once the new one is in place. Nothing else deletes.
+- A conversion removes the old file only while every byte of it is in another file: its backup in the backup folder, or the original of a clean library copy. That is compared byte for byte before the conversion, again before the new file gets its name, and immediately before the old file is removed, also when a later attempt removes what an interrupted one left. If it does not hold, the old file stays.
 - Excluded rows and fields in `locked_fields` are never written.
 - Every file-op change needs a test that proves it with sha256: untouched files stay identical, undo restores byte-identical originals.
 - While developing, run file operations only against temp directories or `tests/fixtures/synthetic/`.
