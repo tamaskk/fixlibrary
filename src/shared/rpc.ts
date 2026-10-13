@@ -81,6 +81,25 @@ export const fingerprintResultSchema = z.object({
 
 export type Fingerprint = z.output<typeof fingerprintResultSchema>
 
+/** The most a result of `convert.wav_to_aiff` may hold: what every Pioneer player takes. */
+export const MAX_CONVERTED_SAMPLE_RATE = 48_000
+
+export const convertResultSchema = z.object({
+  sampleRateHz: z.number().int().positive().max(MAX_CONVERTED_SAMPLE_RATE),
+  bitDepth: z.union([z.literal(16), z.literal(24)]),
+  channels: z.number().int().min(1).max(8),
+  durationMs: z.number().int().positive(),
+  /** False when the file held the result already and was only copied. */
+  converted: z.boolean(),
+  /**
+   * The ids of the tag frames of the source that the result does not hold: frames
+   * that ID3v2.3 has no place for, and frames no reader of the app knows.
+   */
+  tagsLost: z.array(z.string().regex(/^[A-Z0-9]{3,4}$/)).max(32)
+})
+
+export type ConvertResult = z.output<typeof convertResultSchema>
+
 export const RPC_SCHEMAS = {
   ping: {
     params: z.object({}),
@@ -114,6 +133,18 @@ export const RPC_SCHEMAS = {
       bpmMax: z.number()
     }),
     result: bpmKeyResultSchema
+  },
+  /**
+   * Writes a WAV as an AIFF to `dst`, a temp file the file rules of the app named.
+   * Reads `src`, writes `dst`, and touches nothing else.
+   */
+  'convert.wav_to_aiff': {
+    params: z.object({
+      src: z.string().min(1),
+      dst: z.string().min(1),
+      jobId: z.string().min(1).max(64)
+    }),
+    result: convertResultSchema
   },
   /** The AcoustID fingerprint of one file. Reads the file only. */
   'fingerprint.compute': {

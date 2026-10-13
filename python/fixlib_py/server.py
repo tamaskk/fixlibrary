@@ -412,7 +412,7 @@ def claim_stdin() -> TextIO:
 
 def main() -> None:
     # The modules whose `@rpc` methods the sidecar serves; importing registers them.
-    from fixlib_py import fingerprint, tags  # noqa: F401
+    from fixlib_py import convert, fingerprint, tags  # noqa: F401
     from fixlib_py.analysis import bpm_key  # noqa: F401
 
     protocol_output = claim_stdout()
