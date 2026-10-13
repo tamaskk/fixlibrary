@@ -36,9 +36,12 @@ export function PreviewNoticeLine({ notice }: { notice: PreviewNotice }): React.
       return <StatusLine tone="neutral">A batch elvetve. A fájljaid nem változtak.</StatusLine>
     case 'undone':
       return (
-        <StatusLine tone="success">
+        // A file that stayed is something to look at, not only a success.
+        <StatusLine tone={notice.outcome.left > 0 ? 'warning' : 'success'}>
           Az utolsó batch visszavonva: {formatCount(notice.outcome.restored)} fájl visszaállítva,{' '}
           {formatCount(notice.outcome.removed)} törölve.
+          {notice.outcome.left > 0 &&
+            ` ${formatCount(notice.outcome.left)} fájl a helyén maradt, mert időközben megváltozott.`}
         </StatusLine>
       )
   }

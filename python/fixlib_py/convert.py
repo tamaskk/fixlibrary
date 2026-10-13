@@ -10,7 +10,6 @@ where a file goes. File content, tags included, is untrusted.
 
 from __future__ import annotations
 
-import io
 import math
 import os
 import re
@@ -24,7 +23,17 @@ from fixlib_py.analysis.decode import (
     ffmpeg_path,
     run_tool,
 )
-from fixlib_py.files import NO_LINKS, open_regular_file
+from fixlib_py.files import open_regular_file
+from fixlib_py.safe_files import (
+    Refused,
+    Stopped,
+    check_temp_target,
+    copy_stream,
+    create_made,
+    open_made,
+    read_id3,
+    remove_made,
+)
 from fixlib_py.server import JobCancelled, cancellable, raise_if_cancelled, rpc
 
 # The highest rate every Pioneer player takes; a file above it is brought down to it.
@@ -35,14 +44,10 @@ MAX_CHANNELS = 8
 MAX_LENGTH_DIFFERENCE_MS = 10
 # Less than the stage's own limit in src/shared/timeouts.ts, so ffmpeg is ended here.
 CONVERT_TIMEOUT_S = 110
-# The app writes through a temp file of this ending (services/file-ops.ts) and names
-# it here. A path of any other shape is not a place this module writes to.
-TEMP_SUFFIX = ".fixlib-tmp"
 # The most an `id3 ` chunk may hold. A cover is a few megabytes at most.
 MAX_TAG_BYTES = 16 * 1024 * 1024
 # What an AIFF may hold beside its samples: its header and the texts ffmpeg carries.
 _OUTPUT_ROOM = 1024 * 1024
-_COPY_CHUNK = 1024 * 1024
 # The decoder for each kind of samples a WAV holds, and what the result is made of.
 # 24 bit is the most every player takes, so 32 bit and floating point become 24 bit.
 # The decoder is named to ffmpeg: the content of a file must not choose its own.
@@ -62,8 +67,11 @@ _MAX_LOST_FRAMES = 32
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 
 
-class ConvertError(Exception):
-    """The file could not be converted, or the result is not what it must be."""
+# What a caller of this module catches; one kind of refusal for every file the app
+# will not work on.
+ConvertError = Refused
+# Kept under its old name for the tests that ask it directly.
+_read_tags = read_id3
 
 
 def _chunks(file: BinaryIO, byteorder: str) -> Any:
@@ -162,101 +170,6 @@ def _id3_chunk(file: BinaryIO) -> bytes | None:
         file.seek(0)
 
 
-class _PackedFrame(Exception):
-    """A frame that would be unpacked: compressed, or encrypted."""
-
-
-class _Guarded:
-    """Stands where mutagen looks a frame class up, and refuses a packed frame.
-
-    mutagen unpacks a compressed frame as it reads it: a few hundred kilobytes can
-    stand for hundreds of megabytes, in memory and then in the file that is
-    written. Whether a frame is packed is asked here, of the very flags mutagen
-    reads and at the moment it reads them, so that no second reading of the tag can
-    come to another answer than the one that counts.
-    """
-
-    def __init__(self, frame: Any) -> None:
-        self._frame = frame
-
-    def _fromData(self, header: Any, flags: int, data: bytes) -> Any:  # noqa: N802
-        from mutagen.id3 import Frame
-
-        if header.version >= header._V24:
-            packed = flags & (Frame.FLAG24_COMPRESS | Frame.FLAG24_ENCRYPT)
-        elif header.version >= header._V23:
-            packed = flags & (Frame.FLAG23_COMPRESS | Frame.FLAG23_ENCRYPT)
-        else:
-            packed = 0
-        if packed:
-            raise _PackedFrame()
-        return self._frame._fromData(header, flags, data)
-
-
-def _read_tags(tag: bytes) -> Any:
-    """The frames of an `id3 ` chunk, read once, by the reader that also writes them.
-
-    No tagger a DJ uses writes compressed or encrypted frames, so a file that has
-    one is refused, and is told so; as is a chunk that is no ID3 tag.
-    """
-    from mutagen.id3 import ID3, Frames, Frames_2_2
-
-    known = {name: _Guarded(frame) for name, frame in {**Frames, **Frames_2_2}.items()}
-    try:
-        return ID3(io.BytesIO(tag), known_frames=known)
-    except _PackedFrame:
-        raise ConvertError("the tags of the file hold a compressed or encrypted frame") from None
-    except Exception:
-        raise ConvertError("the tags of the file cannot be read") from None
-
-
-def _create(path: str) -> tuple[int, int]:
-    """Makes the file the result goes to, and returns what it is known by.
-
-    Made here and made new: nothing that stands at the path, a link least of all,
-    is ever written through. Whatever is done to the path afterwards is done only
-    while it still is this very file.
-    """
-    try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NO_LINKS, 0o644)
-    except FileExistsError:
-        raise ValueError("dst must not exist") from None
-    try:
-        made = os.fstat(descriptor)
-        return (made.st_dev, made.st_ino)
-    finally:
-        os.close(descriptor)
-
-
-def _open_made(path: str, identity: tuple[int, int], mode: str) -> BinaryIO:
-    """Opens the file `_create` made, and nothing that was put in its place since."""
-    flags = os.O_RDONLY if mode == "rb" else os.O_RDWR
-    try:
-        descriptor = os.open(path, flags | NO_LINKS)
-    except OSError:
-        # A link, or nothing, where the file was made: said in fixed words, because
-        # what the system says of it names the path.
-        raise ConvertError("the file that was written is not the one that was made") from None
-    try:
-        found = os.fstat(descriptor)
-        if (found.st_dev, found.st_ino) != identity:
-            raise ConvertError("the file that was written is not the one that was made")
-        return os.fdopen(descriptor, mode)
-    except BaseException:
-        os.close(descriptor)
-        raise
-
-
-def _remove(path: str, identity: tuple[int, int]) -> None:
-    """Removes the file `_create` made, if it is still the one at the path."""
-    try:
-        found = os.lstat(path)
-        if (found.st_dev, found.st_ino) == identity:
-            os.remove(path)
-    except OSError:
-        pass
-
-
 # What ID3v2.3 says in other frames than ID3v2.4, which is no loss.
 _TRANSLATED = {"TDRC", "TDOR", "TIPL", "TMCL"}
 # Frames ID3v2.3 does not have and every player and tagger reads in it all the same:
@@ -314,11 +227,11 @@ def convert_file(
             # A run that was stopped after the content was written and before that
             # was recorded: the work is done, and doing it again is a plain copy.
             described = _describe(info)
-            with _open_made(dst, identity, "rb+") as copy:
-                for chunk in iter(lambda: source.read(_COPY_CHUNK), b""):
-                    if stop is not None and stop.is_set():
-                        raise ToolStopped()
-                    copy.write(chunk)
+            with open_made(dst, identity, "rb+") as copy:
+                try:
+                    copy_stream(source, copy, stop)
+                except Stopped:
+                    raise ToolStopped() from None
             return {**described, "converted": False, "tagsLost": []}
         samples = _SAMPLES.get(info.subtype)
         # `WAVEX` is the same file with a longer header, which most 24 bit files have.
@@ -332,7 +245,7 @@ def convert_file(
         # Looked at before anything is written: a file whose tags cannot be carried
         # is refused whole, not converted without them.
         tag = _id3_chunk(source)
-        tagged = None if tag is None else _read_tags(tag)
+        tagged = None if tag is None else read_id3(tag)
         frames = math.ceil(info.frames * rate / info.samplerate) + rate
         command = [
             ffmpeg_path(),
@@ -389,9 +302,9 @@ def convert_file(
 
     lost: list[str] = []
     if tagged is not None:
-        with _open_made(dst, identity, "rb+") as target:
+        with open_made(dst, identity, "rb+") as target:
             lost = _copy_tags(tagged, target)
-    with _open_made(dst, identity, "rb") as result:
+    with open_made(dst, identity, "rb") as result:
         described = _describe(_info(result))
     source_ms = info.frames * 1000 / info.samplerate
     if (
@@ -412,24 +325,17 @@ def wav_to_aiff(src: str, dst: str, job_id: str) -> dict[str, Any]:
     app puts it in place when this returns. It is made here, and must not be there
     before. When the call fails or is stopped, the file it made is removed.
     """
-    for path in (src, dst):
-        if not isinstance(path, str) or not os.path.isabs(path):
-            raise ValueError("src and dst must be absolute paths")
-    name = os.path.basename(dst)
-    if not name.startswith(".") or not name.endswith(TEMP_SUFFIX):
-        raise ValueError("dst must be a temp file of the app")
-    if os.path.dirname(dst) != os.path.dirname(src):
-        raise ValueError("dst must be a temp file of the app, next to src")
+    check_temp_target(src, dst)
     with cancellable(job_id) as stop:
         raise_if_cancelled(stop)
-        identity = _create(dst)
+        identity = create_made(dst)
         try:
             result = convert_file(src, dst, identity, stop)
             raise_if_cancelled(stop)
         except ToolStopped:
-            _remove(dst, identity)
+            remove_made(dst, identity)
             raise JobCancelled() from None
         except BaseException:
-            _remove(dst, identity)
+            remove_made(dst, identity)
             raise
     return result

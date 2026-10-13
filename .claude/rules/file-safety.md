@@ -4,6 +4,8 @@ paths:
   - 'src/main/pipeline/**'
   - 'python/fixlib_py/tags.py'
   - 'python/fixlib_py/convert.py'
+  - 'python/fixlib_py/tag_write.py'
+  - 'python/fixlib_py/safe_files.py'
   - 'python/fixlib_py/normalize.py'
 ---
 

@@ -18,6 +18,10 @@ export const STAGE_TIMEOUTS_MS = {
   energy: 120 * SECOND,
   demucs: 15 * MINUTE,
   convert: 120 * SECOND,
+  // One call to the sidecar that copies a file and changes its tags.
+  tags: 120 * SECOND,
+  // The backup or the copy of the whole file, and then the writing of its tags.
+  writeTags: 6 * MINUTE,
   // The backup or the copy of the whole file, and then the conversion of it.
   convertFile: 6 * MINUTE,
   normalize: 120 * SECOND

@@ -120,4 +120,31 @@ describe('waitForFileWork', () => {
     // Assert
     await expect(waiting).resolves.toBe(false)
   })
+
+  it('waits for work that begins the moment the work before it ends', async () => {
+    // Arrange: when the step of a stage ends, the deletion of older backups begins.
+    let busy = true
+    let end: () => void = () => {}
+    let settled = new Promise<void>((resolve) => (end = resolve))
+    const files: FileWork = { busy: () => busy, undoing: () => false, settled: () => settled }
+    let ended: boolean | null = null
+
+    // Act
+    void waitForFileWork(files, 15_000).then((result) => {
+      ended = result
+    })
+    const endFirst = end
+    settled = new Promise<void>((resolve) => (end = resolve))
+    endFirst()
+    await vi.advanceTimersByTimeAsync(1000)
+    const whileSecond = ended
+    busy = false
+    end()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Assert
+    expect(whileSecond).toBeNull()
+    expect(ended).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })

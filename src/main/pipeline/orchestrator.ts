@@ -496,8 +496,11 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     if (status === 'applied') {
       // Only the last batch can be undone: the backups of the ones before it go.
       // An apply or an undo that is asked for meanwhile waits for this to end.
+      // After the file work that is still ending: a step that ran out of time may
+      // yet take its backup back, and which batch wrote last is only known then.
       pruning = dependencies.batchFiles
-        .pruneOlderBackups(active.batchId)
+        .settled()
+        .then(() => dependencies.batchFiles.pruneOlderBackups(active.batchId))
         .catch((error: unknown) =>
           logger.error(`Older backups could not be deleted: ${describeError(error)}`)
         )

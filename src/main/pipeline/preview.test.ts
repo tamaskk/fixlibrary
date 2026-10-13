@@ -54,7 +54,7 @@ function preview(stages: Stage[] = [naming], now?: () => number): Preview {
         applied.push(id)
         return { ok: true, value: { batchId: id } }
       },
-      undoLast: async () => ({ ok: true, value: { batchId: 7, restored: 3, removed: 1 } })
+      undoLast: async () => ({ ok: true, value: { batchId: 7, restored: 3, removed: 1, left: 0 } })
     },
     batchFiles: { checkSpace: async () => space, lastUndoable: () => undoable },
     listMountedVolumes: () => NO_VOLUMES
@@ -592,7 +592,7 @@ describe('the state of the preview', () => {
     const undone = await preview().undoLast()
 
     // Assert
-    expect(undone).toEqual({ ok: true, value: { restored: 3, removed: 1 } })
+    expect(undone).toEqual({ ok: true, value: { restored: 3, removed: 1, left: 0 } })
   })
 })
 

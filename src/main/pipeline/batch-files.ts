@@ -1,10 +1,11 @@
 // The rules for changing the files of a batch: what is saved before the first change,
 // where the work happens in each mode, and how a batch is undone. The changes
 // themselves are made by `services/file-ops.ts`.
-import { basename, dirname, extname, join } from 'path'
+import { basename, dirname, extname, join, sep } from 'path'
 import {
   deleteBackup,
   deleteCreatedFile,
+  getCreatedFile,
   deleteCreatedFiles,
   getBackup,
   insertBackup,
@@ -140,6 +141,11 @@ export interface UndoSummary {
   restored: number
   /** Files the batch had created, now deleted. */
   removed: number
+  /**
+   * Files under a name the batch gave that were left where they are, because they
+   * do not hold what the batch wrote: put there, or changed, by somebody else since.
+   */
+  left: number
 }
 
 export interface BatchFiles {
@@ -327,8 +333,9 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   /**
    * Saves the file as it is, before this batch changes it for the first time. A
    * backup that was made stays until the batch is undone or a later batch is applied,
-   * also when the change it was made for fails: nothing here decides that a file is
-   * "still as it was" and takes its backup away. A backup too many costs an undo of
+   * also when a change it was made for fails. One case apart, `retractBackup`: the
+   * first change of the track failed and the file is byte for byte what the backup
+   * holds. A backup too many costs an undo of
    * the batch before; a backup too few cannot be made good.
    */
   async function backUp(batchId: number, track: Track, signal: AbortSignal): Promise<void> {
@@ -517,8 +524,13 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
       }
       // The file is in this folder, and so in every folder above it.
       if (await fileOps.isInside(from, folder)) break
-      if (name.startsWith('.')) refuse('it would put the file into a hidden folder')
-      if (UNSAFE_TEXT.test(name)) refuse('a folder on the way holds an invisible character')
+      // As the folder is on disk, not as the path spells it: a link named like any
+      // folder may lead into a hidden one.
+      const onDisk = (await fileOps.relativeTo(root, folder))?.split(sep) ?? [name]
+      for (const part of [name, ...onDisk]) {
+        if (part.startsWith('.')) refuse('it would put the file into a hidden folder')
+        if (UNSAFE_TEXT.test(part)) refuse('a folder on the way holds an invisible character')
+      }
     }
   }
 
@@ -542,6 +554,37 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
       .filter((item) => item.approved && !item.excluded && !item.failed)
       .map((item) => getTrackById(db, item.trackId, mounted))
       .filter((track): track is Track => track !== undefined)
+  }
+
+  // What one undo has found out about the files it may remove, from its plan to its
+  // end. Null outside an undo.
+  let ownFiles: Map<string, boolean> | null = null
+
+  /**
+   * True when the file at `path` is the one the batch left there for the track, and
+   * not one that was put under that name, or changed, by somebody else since. Asked
+   * before undo removes a file. A file whose bytes the batch changed is known by the
+   * sha256 the batch wrote down; one it only moved or copied by holding what its
+   * backup holds, or, for a copy in the clean library, what its original holds.
+   */
+  async function isOwnFile(
+    batchId: number,
+    trackId: number,
+    path: string,
+    backup: Backup | null,
+    original: string
+  ): Promise<boolean> {
+    const noted = getCreatedFile(db, batchId, path)
+    if (noted === undefined || noted.trackId !== trackId) return false
+    // Asked while undo plans and again while it acts: the answer of the plan stands.
+    const known = ownFiles?.get(path)
+    if (known !== undefined) return known
+    const own =
+      noted.sha256 !== null
+        ? (await fileOps.sha256Of(path)) === noted.sha256
+        : await fileOps.sameContent(path, backup === null ? original : backup.backupPath)
+    ownFiles?.set(path, own)
+    return own
   }
 
   /**
@@ -593,7 +636,9 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
       // Where the file was before the batch: the place it was backed up from, or,
       // for a track the batch only copied, where the record of the batch says.
       const wanted = backup?.originalPath ?? snapshotPath
-      if (!(await isTrackPlace(wanted))) {
+      // Asked of the folder: a link that stands at the old name leads wherever it
+      // likes, and is a name that is taken, not a reason to undo nothing at all.
+      if (!(await isTrackPlace(dirname(wanted)))) {
         return refuse(`the old place of track ${item.trackId} is outside the library`)
       }
       if (backup === null) {
@@ -622,8 +667,9 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     for (const each of found) {
       if (each.backup === null || each.currentPath === each.wanted) continue
       if (await fileOps.sameFile(each.currentPath, each.wanted)) continue
-      const created = listCreatedFilesOfTrack(db, batchId, each.trackId)
-      if (created.some((file) => file.path === each.currentPath)) {
+      // Only a file that is provably the batch's own goes: another one that stands
+      // under the name stays, and its name is then not free.
+      if (await isOwnFile(batchId, each.trackId, each.currentPath, each.backup, each.wanted)) {
         leaving.set(each.currentPath, each.trackId)
       }
     }
@@ -641,14 +687,20 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
         backupPath !== undefined && (await fileOps.sameContent(path, backupPath))
       const owner = findTrackIdByPath(db, path)
       if (owner === plan.trackId) {
-        // The track's own path, and so its own file, unless the batch moved the file
-        // away from here: then whatever told the track it is here again (a scan
-        // that found a file at the old place) is not taken at its word. Only a file
-        // that holds what the backup holds is the track's; any other is somebody
-        // else's, however alike in size, and is not written over.
-        const created = listCreatedFilesOfTrack(db, batchId, plan.trackId)
-        if (created.length === 0 || created.some((file) => file.path === path)) return false
+        // The track's own path, but not for that its own file: a scan may have told
+        // the track it is here again after the batch moved its file away, and
+        // another program may have written into the file since the batch did. The
+        // backup is written over a file here only if nothing is lost by it.
+        // Whatever the batch wrote down about the track, and also when it wrote
+        // down nothing: a write that failed leaves a backup and no note, and the
+        // file may have been changed since all the same.
         if (backupPath === undefined || !(await fileOps.exists(path))) return false
+        // Also where the batch wrote into the file without moving it: the file is
+        // the track's own only while it still holds what the batch wrote. One that
+        // another program has written into since stays, with what it holds now.
+        const noted = getCreatedFile(db, batchId, path)
+        const written = noted?.trackId === plan.trackId ? noted.sha256 : null
+        if (written !== null && (await fileOps.sha256Of(path)) === written) return false
         return !(await holdsTheBackup())
       }
       if (leaving.has(path)) return false
@@ -690,6 +742,7 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
     const batch = findLastWrittenBatch(db)
     if (!batch) return { ok: false, code: 'NOTHING_TO_UNDO' }
 
+    ownFiles = new Map()
     try {
       // Everything is decided and checked before the first file changes: half an
       // undo would be worse than none.
@@ -698,6 +751,27 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
 
       let restored = 0
       let removed = 0
+      let left = 0
+      /** Removes the file a track of the batch has now, unless it is not the batch's own. */
+      const removeOwn = async (plan: UndoPlan): Promise<void> => {
+        const own = await isOwnFile(
+          batch.id,
+          plan.trackId,
+          plan.currentPath,
+          plan.backup,
+          plan.restoredPath
+        )
+        if (!own) {
+          if (await fileOps.exists(plan.currentPath)) {
+            left += 1
+            logger.warn(
+              `Undo of batch ${batch.id}: the file of track ${plan.trackId} is not what the batch left, and stays`
+            )
+          }
+          return
+        }
+        if (await fileOps.remove(plan.currentPath)) removed += 1
+      }
       const createdBy = (trackId: number): string[] =>
         listCreatedFilesOfTrack(db, batch.id, trackId).map((file) => file.path)
       // First the files whose name another track of the batch gets back: restoring
@@ -708,7 +782,7 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
         if (plan.backup === null || plan.currentPath === plan.restoredPath) continue
         if (!targets.has(plan.currentPath)) continue
         if (!createdBy(plan.trackId).includes(plan.currentPath)) continue
-        if (await fileOps.remove(plan.currentPath)) removed += 1
+        await removeOwn(plan)
         gone.add(plan.trackId)
       }
       for (const plan of plans) {
@@ -726,8 +800,12 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
         // The file the batch left behind: a copy in the clean library, or the file
         // under its new name. Only what the batch wrote down as its own is deleted.
         const created = createdBy(plan.trackId)
-        if (!created.includes(plan.currentPath)) continue
-        if (await fileOps.remove(plan.currentPath)) removed += 1
+        if (!created.includes(plan.currentPath)) {
+          // Not the batch's to remove. Said when the original had to go beside it.
+          if (plan.backup !== null && (await fileOps.exists(plan.currentPath))) left += 1
+          continue
+        }
+        await removeOwn(plan)
         // Every folder the file passed through on its way, if it is empty now.
         for (const path of created) await removeEmptyFoldersAbove(path)
       }
@@ -759,13 +837,17 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
           logger.warn(`A used backup could not be deleted: ${describeError(error)}`)
         }
       }
-      logger.info(`Batch ${batch.id} undone: ${restored} files restored, ${removed} files removed`)
-      return { ok: true, value: { batchId: batch.id, restored, removed } }
+      logger.info(
+        `Batch ${batch.id} undone: ${restored} files restored, ${removed} removed, ${left} left as they are`
+      )
+      return { ok: true, value: { batchId: batch.id, restored, removed, left } }
     } catch (error) {
       // Whatever was put back stays put back, and undo can be asked for again: it
       // restores from the same backups.
       logger.error(`Undo of batch ${batch.id} stopped: ${describeError(error)}`)
       return { ok: false, code: error instanceof AppError ? error.code : 'WRITE_FAILED' }
+    } finally {
+      ownFiles = null
     }
   }
 
@@ -959,6 +1041,9 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
                   if (!(await heldElsewhere())) {
                     throw new AppError('WRITE_FAILED', 'the file changed while it was converted')
                   }
+                  // The new file holds other bytes than the backup: undo knows it by these.
+                  const sha256 = await fileOps.sha256Of(temp)
+                  recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path, sha256 })
                 },
                 signal,
                 // On a drive without hard links giving a name is two steps, and
@@ -991,7 +1076,104 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
           }),
 
         replaceContent: (write) =>
-          withTrack(trackId, async () => fileOps.replace(await working(), write, signal))
+          withTrack(trackId, async () => {
+            const target = await working()
+            // Whether this is the first thing the batch does to the track: then a
+            // failure leaves the file as it was, and the backup made for it is of no use.
+            const first = listCreatedFilesOfTrack(db, batch.id, trackId).length === 0
+            const notedBefore = getCreatedFile(db, batch.id, target)
+            // What `write` is about to read: the new content is put in the place of
+            // this very content, and of nothing another program wrote meanwhile.
+            const before = await fileOps.sha256Of(target)
+            if (before === null) {
+              throw new AppError('FILE_UNREADABLE', 'the file of the track is not where it was')
+            }
+            let sha256: string | null = null
+            let noted = false
+            try {
+              await fileOps.replace(
+                target,
+                async (temp, stop) => {
+                  await write(temp, stop)
+                  // Of the temp file, before it has the name: what undo knows the
+                  // batch's own file by is what was written, not what stands under
+                  // the name a moment later.
+                  sha256 = await fileOps.sha256Of(temp)
+                  if (sha256 === null) {
+                    throw new AppError('WRITE_FAILED', 'what was written cannot be read')
+                  }
+                },
+                signal,
+                async (name) => {
+                  if ((await fileOps.sha256Of(target)) !== before) {
+                    throw new AppError('WRITE_FAILED', 'the file changed while it was written')
+                  }
+                  // Written down right before the content gets into place, wherever
+                  // a later step moves the file. Should the app stop between the
+                  // two, the note names content the file does not hold, and undo
+                  // then goes by the backup alone.
+                  recordCreatedFile(db, { batchId: batch.id, trackId, path: target, sha256 })
+                  noted = true
+                  await name()
+                }
+              )
+            } catch (error) {
+              try {
+                // The note says again what is true of the file, which is as it was.
+                if (noted && notedBefore?.trackId === trackId) {
+                  recordCreatedFile(db, {
+                    batchId: batch.id,
+                    trackId,
+                    path: target,
+                    sha256: notedBefore.sha256
+                  })
+                } else if (noted) {
+                  deleteCreatedFile(db, batch.id, target, trackId)
+                }
+                if (first) await retractBackup(target)
+              } catch (cleanupError) {
+                // The failure of the write is the one to report.
+                logger.warn(
+                  `What a failed write left could not be put right: ${describeError(cleanupError)}`
+                )
+              }
+              throw error
+            }
+            // The size a later step knows the file by, should the app stop in it.
+            updateTrack(db, trackId, { fileSizeBytes: await fileOps.sizeOf(target) })
+          })
+      }
+
+      /**
+       * Takes back the backup of a track whose first change failed, so that a batch
+       * that changed nothing does not count as one that wrote, which would cost the
+       * undo of the batch before it. Only on proof: the batch has written down no
+       * file for the track, and the file holds what the backup holds, byte for byte.
+       * A backup that is kept without need costs an undo; one that is taken back
+       * wrongly cannot be made good, so in every doubt it stays.
+       */
+      async function retractBackup(path: string): Promise<void> {
+        try {
+          const backup = getBackup(db, batch.id, trackId)
+          if (backup === undefined) return
+          if (listCreatedFilesOfTrack(db, batch.id, trackId).length > 0) return
+          const { backupFolder } = folders()
+          if (backupFolder === null || !(await fileOps.isInside(backup.backupPath, backupFolder))) {
+            return
+          }
+          if (backup.originalPath !== normalizeTrackPath(path)) return
+          if (!(await fileOps.sameContent(path, backup.backupPath))) return
+          // The record first: a file without a record is only a file too many, a
+          // record without its file would make the track unusable and undo refuse.
+          deleteBackup(db, backup.id)
+          prepared = null
+          await fileOps.remove(backup.backupPath)
+          await fileOps.removeEmptyFolder(dirname(backup.backupPath))
+        } catch (error) {
+          logger.warn(
+            `A backup that was not needed could not be taken back: ${describeError(error)}`
+          )
+        }
       }
 
       /**
@@ -1058,7 +1240,10 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
           if (signal.aborted) throw new AppError('WRITE_FAILED', 'the move was stopped')
           // Written down first: if the app stops right after the rename, undo and
           // the next run still know about the new name.
-          recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path })
+          // What the batch wrote into the file goes with it to its new name.
+          const noted = getCreatedFile(db, batch.id, from)
+          const sha256 = noted?.trackId === trackId ? noted.sha256 : null
+          recordCreatedFile(db, { batchId: batch.id, trackId, path: free.path, sha256 })
           try {
             await fileOps.move(from, free.path)
           } catch (error) {

@@ -481,6 +481,26 @@ describe('a batch that looks for duplicates', () => {
     expect(sha256(pathOf(mp3.id))).toBe(original)
   })
 
+  it('does not delete another file that was put into _Duplicates under the name of the copy, when the batch is undone', async () => {
+    // Arrange: the copy that was set aside is deleted by hand, as the app leaves to
+    // the user, and another file is put there under the same name.
+    const mp3 = addCopy('Inbox/Bicep - Glue.mp3')
+    const aiff = addCopy('Albums/Isles/02 Glue.aiff', { format: 'aiff' })
+    const original = sha256(mp3.path)
+    await approved(await searched([mp3.id, aiff.id]))
+    const aside = pathOf(mp3.id)
+    rmSync(aside)
+    writeFileSync(aside, 'another file the user keeps here')
+
+    // Act
+    const undone = await preview.undoLast()
+
+    // Assert: the original is back in the library, and the user's file is still there.
+    expect(undone).toEqual({ ok: true, value: { restored: 1, removed: 0, left: 1 } })
+    expect(readFileSync(aside, 'utf8')).toBe('another file the user keeps here')
+    expect(sha256(mp3.path)).toBe(original)
+  })
+
   it('does not write over a file of the very same size at the old place either', async () => {
     // Arrange: as above, but the other file is as big as the original, to the byte.
     const mp3 = addCopy('Inbox/Bicep - Glue.mp3')

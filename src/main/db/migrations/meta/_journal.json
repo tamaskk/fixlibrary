@@ -36,6 +36,13 @@
       "when": 1791743828452,
       "tag": "0004_track_locked_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791887637199,
+      "tag": "0005_batch_files_sha256",
+      "breakpoints": true
     }
   ]
 }
