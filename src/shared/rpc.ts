@@ -100,6 +100,39 @@ export const convertResultSchema = z.object({
 
 export type ConvertResult = z.output<typeof convertResultSchema>
 
+const writtenText = z
+  .string()
+  .min(1)
+  .max(300)
+  .refine((text) => !UNSAFE_TAG_TEXT.test(text), { message: 'Tag text must be one clean line' })
+  // As the sidecar reads it back: no space at an end, none doubled, and no half of a
+  // pair of code units, which cannot be written as UTF-16.
+  .refine((text) => text === text.replace(/\s+/gu, ' ').trim() && text.isWellFormed(), {
+    message: 'Tag text must be written as it will read back'
+  })
+
+/**
+ * The tags `tags.write` can write. A field that is not named stays as it is in the
+ * file; none can be taken away. The same rules are in fixlib_py/tag_write.py.
+ */
+export const tagFieldsSchema = z
+  .strictObject({
+    artist: writtenText,
+    /** With the mix in brackets, as a tag holds a title. */
+    title: writtenText,
+    album: writtenText,
+    label: writtenText,
+    year: z.number().int().min(1000).max(9999),
+    bpm: z.number().int().min(20).max(400),
+    /** The musical name of the key, as ID3 writes one: `Am`, `F#m`. */
+    key: z.string().regex(/^[A-G][#b]?m?$/),
+    /** A JPEG the app made, to be the one front cover of the file. */
+    coverPath: z.string().min(1)
+  })
+  .partial()
+
+export type TagFields = z.output<typeof tagFieldsSchema>
+
 export const RPC_SCHEMAS = {
   ping: {
     params: z.object({}),
@@ -123,6 +156,24 @@ export const RPC_SCHEMAS = {
     // One entry per path, in input order. Each entry is checked on its own with
     // `fileTagsSchema` by the caller, so one bad entry cannot reject the others.
     result: z.object({ files: z.array(z.unknown()).max(TAG_BATCH_SIZE) })
+  },
+  /** Whether writing these tags would change the file. Reads the file only. */
+  'tags.would_change': {
+    params: z.object({ path: z.string().min(1), fields: tagFieldsSchema }),
+    result: z.object({ changed: z.boolean() })
+  },
+  /**
+   * Writes the named tags as ID3v2.3 into a copy of `src` at `dst`, a temp file the
+   * file rules of the app named, and reads them back before it answers.
+   */
+  'tags.write': {
+    params: z.object({
+      src: z.string().min(1),
+      dst: z.string().min(1),
+      fields: tagFieldsSchema,
+      jobId: z.string().min(1).max(64)
+    }),
+    result: z.object({ written: z.literal(true) })
   },
   /** Measures tempo and key from the audio of one file. Reads the file only. */
   'analysis.bpm_key': {
