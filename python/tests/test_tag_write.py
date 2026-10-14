@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import shutil
 import struct
 import threading
@@ -12,6 +13,7 @@ import pytest
 from mutagen.aiff import AIFF
 from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TSOP, TXXX
 from mutagen.mp3 import MP3
+from PIL import Image
 
 from fixlib_py import server, tag_write
 from fixlib_py.safe_files import Refused, Stopped
@@ -19,8 +21,7 @@ from fixlib_py.tags import read_file_tags
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "synthetic"
-# The smallest thing that is a JPEG to this module: it only looks at the first bytes.
-JPEG = b"\xff\xd8\xff\xe0" + b"cover of the track" * 20
+COVER = "0123456789abcdef0123456789abcdef01234567.jpg"
 FIELDS = {
     "artist": "Ákos feat. Őze Áron",
     "title": "Ilyenek voltunk (Extended Mix)",
@@ -30,6 +31,22 @@ FIELDS = {
     "bpm": 124,
     "key": "F#m",
 }
+
+
+def jpeg(size: tuple[int, int] = (600, 600)) -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", size, (200, 40, 90)).save(output, format="JPEG", quality=90)
+    return output.getvalue()
+
+
+@pytest.fixture
+def covers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The covers folder of the app, holding one cover the app made."""
+    folder = tmp_path / "covers"
+    folder.mkdir()
+    (folder / COVER).write_bytes(jpeg())
+    monkeypatch.setenv("FIXLIB_COVERS_DIR", str(folder))
+    return folder
 
 
 @pytest.fixture(autouse=True)
@@ -175,7 +192,7 @@ def test_makes_a_real_v2_3_tag_of_one_that_was_v2_4_and_keeps_the_sort_name(
 
 @pytest.mark.parametrize("extension", [".mp3", ".aiff"])
 def test_puts_one_front_cover_in_the_place_of_whatever_pictures_were_there(
-    tmp_path: Path, extension: str
+    tmp_path: Path, extension: str, covers: Path
 ) -> None:
     src = track(tmp_path, extension)
     first = written(src, {"title": "Glue"})
@@ -183,14 +200,12 @@ def test_puts_one_front_cover_in_the_place_of_whatever_pictures_were_there(
     audio.tags.add(APIC(encoding=3, mime="image/png", type=3, desc="front", data=b"\x89PNG old"))
     audio.tags.add(APIC(encoding=3, mime="image/png", type=4, desc="back", data=b"\x89PNG back"))
     audio.save()
-    cover = tmp_path / "cover.jpg"
-    cover.write_bytes(JPEG)
 
-    result = written(first, {"coverPath": str(cover)})
+    result = written(first, {"cover": COVER})
 
     pictures = tags_of(result).getall("APIC")
     assert [(picture.type, picture.mime, bytes(picture.data)) for picture in pictures] == [
-        (3, "image/jpeg", JPEG)
+        (3, "image/jpeg", (covers / COVER).read_bytes())
     ]
     assert read_file_tags(str(result))["hasCover"] is True
     assert read_file_tags(str(result))["title"] == "Glue"
@@ -198,30 +213,42 @@ def test_puts_one_front_cover_in_the_place_of_whatever_pictures_were_there(
 
 @pytest.mark.parametrize(
     ("content", "message"),
-    [(b"\x89PNG not a jpeg", "not a JPEG"), (b"\xff\xd8\xff" + b"x" * (4 * 1024 * 1024), "size")],
+    [
+        (b"\x89PNG not a jpeg", "cannot be read as an image"),
+        (b"\xff\xd8\xff" + b"x" * 100, "cannot be read as an image"),
+        (b"\xff\xd8\xff" + b"x" * (4 * 1024 * 1024), "larger than a cover may be"),
+        (jpeg((300, 300)), "not a JPEG the app made"),
+    ],
 )
-def test_refuses_a_cover_that_is_no_jpeg_or_too_large(
-    tmp_path: Path, content: bytes, message: str
+def test_refuses_a_cover_that_is_not_a_600_pixel_jpeg_as_the_app_makes_one(
+    tmp_path: Path, covers: Path, content: bytes, message: str
 ) -> None:
     src = track(tmp_path, ".mp3")
-    cover = tmp_path / "cover.jpg"
-    cover.write_bytes(content)
+    (covers / COVER).write_bytes(content)
     dst = temp_for(src)
 
     with pytest.raises(Refused, match=message):
-        tag_write.write_tags(str(src), str(dst), {"coverPath": str(cover)}, "job-1")
+        tag_write.write_tags(str(src), str(dst), {"cover": COVER}, "job-1")
 
     assert not dst.exists()
 
 
+def test_refuses_a_cover_when_the_app_named_no_covers_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = track(tmp_path, ".mp3")
+    monkeypatch.delenv("FIXLIB_COVERS_DIR", raising=False)
+
+    with pytest.raises(Refused, match="no covers folder"):
+        tag_write.would_change(str(src), {"cover": COVER})
+
+
 @pytest.mark.parametrize("extension", [".mp3", ".aiff"])
 def test_says_whether_writing_would_change_the_file_without_touching_it(
-    tmp_path: Path, extension: str
+    tmp_path: Path, extension: str, covers: Path
 ) -> None:
     src = track(tmp_path, extension)
-    cover = tmp_path / "cover.jpg"
-    cover.write_bytes(JPEG)
-    fields = {**FIELDS, "coverPath": str(cover)}
+    fields = {**FIELDS, "cover": COVER}
     result = written(src, fields)
     before = sha256(result)
 
@@ -234,7 +261,7 @@ def test_says_whether_writing_would_change_the_file_without_touching_it(
     assert (other_title, other_tempo, untagged) == ({"changed": True},) * 3
     assert sha256(result) == before
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(
-        [src.name, result.name, cover.name]
+        [src.name, result.name, covers.name]
     )
 
 
@@ -265,7 +292,10 @@ def test_does_not_write_tags_into_a_wav(tmp_path: Path) -> None:
         {"bpm": 124.5},
         {"bpm": True},
         {"key": "8A"},
-        {"coverPath": "cover.jpg"},
+        {"cover": "cover.jpg"},
+        {"cover": "/abs/0123456789abcdef0123456789abcdef01234567.jpg"},
+        {"cover": "../0123456789abcdef0123456789abcdef01234567.jpg"},
+        {"coverPath": "/abs/cover.jpg"},
         None,
     ],
 )

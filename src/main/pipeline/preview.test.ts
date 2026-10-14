@@ -44,9 +44,14 @@ const naming: Stage = {
   })
 }
 
-function preview(stages: Stage[] = [naming], now?: () => number): Preview {
+function preview(
+  stages: Stage[] = [naming],
+  now?: () => number,
+  covers?: { thumbnail: (name: string) => Promise<string | null> }
+): Preview {
   return createPreview({
     now,
+    covers,
     db: testDatabase.db,
     stages,
     orchestrator: {
@@ -581,7 +586,8 @@ describe('the state of the preview', () => {
         excluded: 0,
         failed: 0,
         canRefresh: false,
-        findsDuplicates: false
+        findsDuplicates: false,
+        findsCovers: false
       },
       canUndo: true
     })
@@ -1263,5 +1269,89 @@ describe('a page that asks for refreshes in a loop', () => {
     expect(tooSoon).toEqual({ ok: false, code: 'RUN_ACTIVE' })
     expect(later.ok && later.value.cells.title.after).toBe('Answer 2')
     expect(asked).toBe(2)
+  })
+})
+
+describe('the covers of the rows', () => {
+  const STEM = '0123456789abcdef0123456789abcdef01234567'
+  const OLD = 'fedcba9876543210fedcba9876543210fedcba98'
+  const covers = {
+    thumbnail: async (name: string): Promise<string | null> => `data:image/jpeg;base64,${name}`
+  }
+
+  it('gives the old and the new cover of the rows that found one', async () => {
+    // Arrange
+    const [first, second, third] = trackIds as [number, number, number]
+    propose(first, {
+      fields: { cover: { value: `${STEM}.jpg`, source: 'itunes' } },
+      cover: { thumb: `${STEM}.thumb.jpg`, before: null }
+    })
+    propose(second, {
+      fields: { cover: { value: `${STEM}.jpg`, source: 'discogs' } },
+      cover: {
+        thumb: `${STEM}.thumb.jpg`,
+        before: { width: 200, height: 200, thumb: `${OLD}.thumb.jpg` }
+      }
+    })
+    propose(third, { warnings: ['NO_COVER'], cover: null })
+
+    // Act
+    const thumbs = await preview([naming], undefined, covers).coverThumbs({
+      batchId,
+      trackIds: [first, second, third, 9999]
+    })
+
+    // Assert
+    expect(thumbs).toEqual({
+      ok: true,
+      value: [
+        {
+          trackId: first,
+          hadBefore: false,
+          before: null,
+          beforeSize: null,
+          after: `data:image/jpeg;base64,${STEM}.thumb.jpg`
+        },
+        {
+          trackId: second,
+          hadBefore: true,
+          before: `data:image/jpeg;base64,${OLD}.thumb.jpg`,
+          beforeSize: { width: 200, height: 200 },
+          after: `data:image/jpeg;base64,${STEM}.thumb.jpg`
+        }
+      ]
+    })
+    expect(rowOf(first).cells.cover).toMatchObject({
+      before: null,
+      changed: true,
+      source: 'itunes'
+    })
+  })
+
+  it.each([
+    [{ batchId: 999, trackIds: [1] }],
+    [{ batchId: 1, trackIds: [] }],
+    [{ batchId: 1, trackIds: Array.from({ length: 101 }, (_, index) => index + 1) }],
+    [{ batchId: 1, trackIds: ['../x'] }]
+  ])('refuses a request that is not one for rows of the batch that waits', async (request) => {
+    // Act
+    const thumbs = await preview([naming], undefined, covers).coverThumbs(
+      request.batchId === 1 ? { ...request, batchId } : request
+    )
+
+    // Assert
+    expect(thumbs).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+
+  it('says a batch looked for covers once it ran the cover stage', () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    insertJobs(testDatabase.db, [{ batchId, trackId: id, stage: 'cover', phase: 'compute' }])
+
+    // Act
+    const state = preview().state()
+
+    // Assert
+    expect(state.batch?.findsCovers).toBe(true)
   })
 })

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createDemoStages } from './demo'
 import { createStages, selectableStages, validateStages, withDependencies } from './index'
+import type { CoverStore } from '../../services/covers'
 import type { LookupClients } from '../../services/lookup/chain'
+import type { CoverStageDependencies } from './cover'
 import type { Stage } from './stage'
 import type { AppDatabase } from '../../db/connection'
 
@@ -26,7 +28,9 @@ describe('validateStages', () => {
       bpmRange: () => ({ bpmMin: 85, bpmMax: 175 }),
       cache: { get: () => undefined, put: () => {} },
       wanted: () => false,
-      clients: {} as LookupClients
+      clients: {} as LookupClients,
+      covers: {} as CoverStore,
+      coverClients: {} as CoverStageDependencies['coverClients']
     })
 
     // Act
@@ -219,7 +223,8 @@ describe('the demo stages', () => {
         key: null,
         mix: 'Live',
         styleId: null,
-        energy: null
+        energy: null,
+        cover: null
       },
       {}
     )

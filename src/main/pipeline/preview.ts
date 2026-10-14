@@ -20,11 +20,13 @@ import type { AppDatabase } from '../db/connection'
 import { listJobStageNames } from '../db/jobs'
 import { listStyles } from '../db/styles'
 import { getTrackById, updateTrack, type Track, type TrackChanges } from '../db/tracks'
+import type { CoverStore } from '../services/covers'
 import { describeError } from '../services/error-text'
 import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
 import { trackErrorSchema, type Result } from '@shared/errors'
 import {
+  coverThumbsRequestSchema,
   EDITABLE_PREVIEW_FIELDS,
   LOW_CONFIDENCE_BELOW,
   mergeProposal,
@@ -37,6 +39,7 @@ import {
   previewValueSchemas,
   readProposal,
   type ApproveOutcome,
+  type CoverThumbs,
   type PreviewCell,
   type PreviewField,
   type PreviewPage,
@@ -53,6 +56,7 @@ import { keepDuplicate, listDuplicateGroups } from './batch-duplicates'
 import type { BatchFiles } from './batch-files'
 import type { Orchestrator } from './orchestrator'
 import { runStage } from './run-stage'
+import { COVER_STAGE, coverDetailsSchema, EMBED_COVER_STAGE } from './stages/cover'
 import { DUPLICATES_STAGE } from './stages/duplicates'
 import { identifiersSchema } from './stages/lookup'
 import type { Stage } from './stages/stage'
@@ -103,7 +107,9 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     // Shown only as one of the 24 codes; whatever else a row may hold is no key.
     key: track.camelotKey === null ? null : (keyOfCamelot(track.camelotKey)?.camelot ?? null),
     styleId: track.primaryStyleId,
-    energy: track.energy
+    energy: track.energy,
+    // The cover a file holds has no name of the app's: a new one is a change.
+    cover: null
   }
 }
 
@@ -173,8 +179,19 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
     // What the batch wrote into the file's tags is the track's own from then on: the
     // names a lookup found and the naming cleaned. Only then, so that a row never
     // says more than its file.
-    const tagged = listJobStageNames(tx, batchId).includes(WRITE_TAGS_STAGE)
-    if (!tagged && manual.length === 0 && !fields.bpm && !fields.key && !identifiers.success) {
+    const stages = listJobStageNames(tx, batchId)
+    const tagged = stages.includes(WRITE_TAGS_STAGE)
+    // A cover the batch found is in the file once either stage that writes it ran.
+    const covered =
+      typeof fields.cover?.value === 'string' && (tagged || stages.includes(EMBED_COVER_STAGE))
+    if (
+      !tagged &&
+      !covered &&
+      manual.length === 0 &&
+      !fields.bpm &&
+      !fields.key &&
+      !identifiers.success
+    ) {
       return
     }
     const track = getTrackById(tx, trackId, new Set())
@@ -219,6 +236,7 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       if (written.year !== undefined && fields.year && free('year'))
         changes.year = fields.year.value
     }
+    if (covered && takesTags(track.path)) changes.coverStatus = 'embedded'
     if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
     if (fields.title?.source === 'manual') changes.title = fields.title.value
     if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
@@ -254,6 +272,8 @@ export interface PreviewDependencies {
   orchestrator: Pick<Orchestrator, 'applyBatch' | 'undoLast'>
   batchFiles: Pick<BatchFiles, 'checkSpace' | 'lastUndoable'>
   listMountedVolumes: () => ReadonlySet<string>
+  /** Where the thumbnails of covers are read from; without it, no row shows a cover. */
+  covers?: Pick<CoverStore, 'thumbnail'>
   now?: () => number
 }
 
@@ -275,6 +295,8 @@ export interface Preview {
    * afterwards. The copy that was kept before is then one that is set aside.
    */
   keepDuplicate: (request: unknown) => Result<DuplicateGroup[]>
+  /** The old and the new cover of some rows of the batch that waits for approval. */
+  coverThumbs: (request: unknown) => Promise<Result<CoverThumbs[]>>
   /** Takes rows out of the batch, or back in. */
   setExcluded: (request: unknown) => Result<PreviewState>
   /**
@@ -326,7 +348,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
             mode: batch.mode,
             ...countBatchItems(db, batch.id),
             canRefresh: refreshableStages(batch.id).length > 0,
-            findsDuplicates: listJobStageNames(db, batch.id).includes(DUPLICATES_STAGE)
+            findsDuplicates: listJobStageNames(db, batch.id).includes(DUPLICATES_STAGE),
+            findsCovers: listJobStageNames(db, batch.id).includes(COVER_STAGE)
           }
         : null,
       canUndo: batchFiles.lastUndoable() !== null
@@ -502,6 +525,37 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       const batch = findPreviewBatch(db)
       if (!batch || batch.id !== batchId) return { ok: false, code: 'INVALID_INPUT' }
       return { ok: true, value: listDuplicateGroups(db, batchId) }
+    },
+
+    async coverThumbs(request) {
+      const parsed = coverThumbsRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
+      const { batchId, trackIds } = parsed.data
+      const batch = findPreviewBatch(db)
+      if (!batch || batch.id !== batchId) return { ok: false, code: 'INVALID_INPUT' }
+      const covers = dependencies.covers
+      const thumbs: CoverThumbs[] = []
+      for (const trackId of new Set(trackIds)) {
+        const item = getBatchItem(db, batchId, trackId)
+        if (!item) continue
+        // What the cover stage kept for the row; a row it found nothing for has none.
+        const details = coverDetailsSchema.safeParse(
+          z.record(z.string(), z.unknown()).safeParse(item.after).data?.['cover']
+        )
+        if (!details.success || !covers) continue
+        const { before } = details.data
+        thumbs.push({
+          trackId,
+          hadBefore: before !== null,
+          before: before?.thumb ? await covers.thumbnail(before.thumb) : null,
+          beforeSize:
+            before && before.width !== null && before.height !== null
+              ? { width: before.width, height: before.height }
+              : null,
+          after: await covers.thumbnail(details.data.thumb)
+        })
+      }
+      return { ok: true, value: thumbs }
     },
 
     keepDuplicate(request) {

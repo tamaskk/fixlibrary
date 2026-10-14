@@ -1,6 +1,7 @@
 // The batch preview: what a batch proposes for each track, shown to the user for
 // editing and approval before anything is written.
 import { z } from 'zod'
+import { COVER_NAMES } from './covers'
 import type { TrackError } from './errors'
 import { unusableNameReason, UNSAFE_TEXT } from './file-names'
 import { FILE_WARNINGS } from './file-ops'
@@ -18,7 +19,8 @@ export const PREVIEW_FIELDS = [
   'bpm',
   'key',
   'styleId',
-  'energy'
+  'energy',
+  'cover'
 ] as const
 export type PreviewField = (typeof PREVIEW_FIELDS)[number]
 
@@ -38,12 +40,15 @@ export type EditablePreviewField = (typeof EDITABLE_PREVIEW_FIELDS)[number]
  * `musicbrainz` and `discogs` are the online services a lookup took it from;
  * `fileName` is what the name of the file said where no tag and no lookup did;
  * `naming` is a file name the app built from the other fields; `conversion` is the
- * name a file gets when it becomes a file of another format.
+ * name a file gets when it becomes a file of another format; `itunes` and
+ * `coverartarchive` are where a cover was found.
  */
 export const FIELD_SOURCES = [
   'lookup',
   'musicbrainz',
   'discogs',
+  'itunes',
+  'coverartarchive',
   'id3',
   'fileName',
   'naming',
@@ -60,7 +65,8 @@ export const PREVIEW_WARNINGS = [
   ...FILE_WARNINGS,
   'LOW_BITRATE',
   'CANNOT_NORMALIZE',
-  'UNSORTED'
+  'UNSORTED',
+  'NO_COVER'
 ] as const
 export type PreviewWarning = (typeof PREVIEW_WARNINGS)[number]
 
@@ -99,7 +105,9 @@ export const previewValueSchemas = {
   /** The Camelot code; the musical name follows from it (`shared/keys.ts`). */
   key: z.enum(CAMELOT_KEYS).nullable(),
   styleId: z.number().int().positive().nullable(),
-  energy: z.number().int().min(1).max(10).nullable()
+  energy: z.number().int().min(1).max(10).nullable(),
+  /** The name of a cover the app made, to be embedded; a track's own cover has none. */
+  cover: z.string().regex(COVER_NAMES.cover).nullable()
 } as const satisfies Record<PreviewField, z.ZodType>
 
 export type PreviewValue = string | number | null
@@ -123,7 +131,8 @@ const proposedFieldsSchema = z
     bpm: z.object({ value: previewValueSchemas.bpm, ...provenance }),
     key: z.object({ value: previewValueSchemas.key, ...provenance }),
     styleId: z.object({ value: previewValueSchemas.styleId, ...provenance }),
-    energy: z.object({ value: previewValueSchemas.energy, ...provenance })
+    energy: z.object({ value: previewValueSchemas.energy, ...provenance }),
+    cover: z.object({ value: previewValueSchemas.cover, ...provenance })
   })
   .partial()
 
@@ -297,6 +306,30 @@ export interface PreviewBatch {
   canRefresh: boolean
   /** True when the batch looked for duplicates: the "Duplikátumok" tab is shown. */
   findsDuplicates: boolean
+  /** True when the batch looked for covers: the "Borító" column is shown. */
+  findsCovers: boolean
+}
+
+/** How many rows one `preview:coverThumbs` call may ask about: about two screens. */
+export const MAX_COVER_THUMB_TRACKS = 100
+
+export const coverThumbsRequestSchema = z.object({
+  batchId: z.number().int().positive(),
+  trackIds: z.array(z.number().int().positive()).min(1).max(MAX_COVER_THUMB_TRACKS)
+})
+export type CoverThumbsRequest = z.input<typeof coverThumbsRequestSchema>
+
+/** The covers of one row, as small JPEGs in `data:` addresses. */
+export interface CoverThumbs {
+  trackId: number
+  /** True when the file holds a cover now, whether or not it can be shown. */
+  hadBefore: boolean
+  /** The cover the file holds now, when it has one that can be shown. */
+  before: string | null
+  /** Its size in pixels, when it could be read. */
+  beforeSize: { width: number; height: number } | null
+  /** The cover the batch found for it. */
+  after: string | null
 }
 
 export interface PreviewState {

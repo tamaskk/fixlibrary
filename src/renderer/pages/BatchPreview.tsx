@@ -93,7 +93,10 @@ export function BatchPreview(): React.JSX.Element {
     else heading.current?.focus()
   }
 
-  const columns = batch === null || tab === 'errors' ? ERROR_COLUMNS : columnsFor(batch.type)
+  const columns =
+    batch === null || tab === 'errors'
+      ? ERROR_COLUMNS
+      : columnsFor(batch.type, { covers: batch.findsCovers })
 
   return (
     <main className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-6">

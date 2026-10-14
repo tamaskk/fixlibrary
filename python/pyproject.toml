@@ -27,9 +27,10 @@ module-root = ""
 
 [dependency-groups]
 dev = [
-    # Already a dependency of the sidecar; listed here so CI, which installs only this
-    # group, can run the tag tests without torch and Essentia.
+    # Already dependencies of the sidecar; listed here so CI, which installs only this
+    # group, can run the tag and cover tests without torch and Essentia.
     "mutagen>=1.48.1",
+    "pillow>=12.3.0",
     "pytest>=9.1.1",
     "ruff>=0.16.9",
 ]

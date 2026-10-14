@@ -25,6 +25,9 @@ export function registerPreviewIpc(preview: Preview): void {
   handleIpc(IPC_CHANNELS.previewKeepDuplicate, oneUnknown, (_event, request) =>
     preview.keepDuplicate(request)
   )
+  handleIpc(IPC_CHANNELS.previewCoverThumbs, oneUnknown, (_event, request) =>
+    preview.coverThumbs(request)
+  )
   handleIpc(IPC_CHANNELS.previewDiscard, batchId, (_event, id) => preview.discard(id))
 
   // Neither needs a limit of its own: an approval is taken once per batch, an undo

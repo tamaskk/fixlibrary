@@ -12,6 +12,7 @@ const artistCreditSchema = z
   .optional()
 
 const releaseSchema = z.object({
+  id: z.string().optional(),
   title: rawText,
   status: z.string().nullable().optional(),
   date: z.string().nullable().optional(),
@@ -41,7 +42,9 @@ const recordingSchema = z.object({
   durationS: z.number().nullable(),
   year: z.number().int().nullable(),
   /** The release the recording is best known from; null when it names none. */
-  album: z.string().nullable()
+  album: z.string().nullable(),
+  /** The id of that release, which the Cover Art Archive knows its cover by. */
+  releaseId: z.string().regex(UUID).nullable()
 })
 const keptRecordingSchema = recordingSchema.nullable()
 const recordingsSchema = z.array(recordingSchema)
@@ -70,7 +73,10 @@ type Release = z.output<typeof releaseSchema>
  * The release to name as the album: an official one that is not a compilation, the
  * earliest of them. A recording is often on dozens of samplers.
  */
-function albumOf(releases: readonly unknown[]): string | null {
+function bestRelease(releases: readonly unknown[]): {
+  album: string | null
+  releaseId: string | null
+} {
   const known = releases.flatMap((release) => {
     const parsed = releaseSchema.safeParse(release)
     return parsed.success ? [parsed.data] : []
@@ -84,7 +90,11 @@ function albumOf(releases: readonly unknown[]): string | null {
     known.filter((release) => isOfficial(release) && isOwn(release)).sort(byDate)[0] ??
     known.filter(isOfficial).sort(byDate)[0] ??
     known.sort(byDate)[0]
-  return cleanText(best?.title)
+  const id = best?.id
+  return {
+    album: cleanText(best?.title),
+    releaseId: id !== undefined && UUID.test(id) ? id : null
+  }
 }
 
 function toRecording(answer: unknown): MusicBrainzRecording | null {
@@ -101,7 +111,7 @@ function toRecording(answer: unknown): MusicBrainzRecording | null {
     ),
     durationS: typeof data.length === 'number' ? data.length / 1000 : null,
     year: yearOf(data['first-release-date']),
-    album: albumOf(data.releases ?? [])
+    ...bestRelease(data.releases ?? [])
   }
   const checked = recordingSchema.safeParse(recording)
   return checked.success ? checked.data : null

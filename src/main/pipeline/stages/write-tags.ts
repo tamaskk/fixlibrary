@@ -76,7 +76,9 @@ export function tagsFor(track: Track, proposal: Proposal): TagFields {
     label: line(valueOf('label', track.label)),
     year: typeof year === 'number' ? year : undefined,
     bpm: typeof bpm === 'number' ? Math.round(bpm) : undefined,
-    key: typeof camelot === 'string' ? keyOfCamelot(camelot)?.musical : undefined
+    key: typeof camelot === 'string' ? keyOfCamelot(camelot)?.musical : undefined,
+    // The cover the batch found goes in with the tags: one write, one backup.
+    cover: typeof proposed.cover?.value === 'string' ? proposed.cover.value : undefined
   }
   const fields: TagFields = {}
   for (const [name, value] of Object.entries(wanted)) {

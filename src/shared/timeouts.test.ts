@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COVER_RPC_TIMEOUT_MS,
   DEFAULT_RPC_TIMEOUT_MS,
   ENGINE_CHECK_TIMEOUT_MS,
   JOB_CANCEL_TIMEOUT_MS,
@@ -24,8 +25,15 @@ describe('STAGE_TIMEOUTS_MS', () => {
       tags: 120_000,
       writeTags: 360_000,
       convertFile: 360_000,
-      normalize: 120_000
+      normalize: 120_000,
+      cover: 60_000,
+      embedCover: 360_000
     })
+  })
+
+  it('gives one cover call twenty seconds', () => {
+    // Assert
+    expect(COVER_RPC_TIMEOUT_MS).toBe(20_000)
   })
 
   it('gives a plain sidecar call thirty seconds', () => {

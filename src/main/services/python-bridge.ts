@@ -42,6 +42,8 @@ export interface PythonBridgeOptions {
   ffmpegPath?: string
   /** The fpcalc the sidecar fingerprints with. Without it, fingerprinting fails per track. */
   fpcalcPath?: string
+  /** The one folder whose covers the sidecar reads and writes. Without it, covers fail per track. */
+  coversDir?: string
   onProgress?: (progress: RpcProgress) => void
   /** What the bridge itself has to say: crashes, restarts, rejected lines. */
   log?: (message: string) => void
@@ -132,6 +134,7 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
     }
     if (options.ffmpegPath !== undefined) env['FIXLIB_FFMPEG'] = options.ffmpegPath
     if (options.fpcalcPath !== undefined) env['FIXLIB_FPCALC'] = options.fpcalcPath
+    if (options.coversDir !== undefined) env['FIXLIB_COVERS_DIR'] = options.coversDir
     for (const name of INHERITED_ENV) {
       const value = process.env[name]
       if (value !== undefined) env[name] = value

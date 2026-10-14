@@ -27,7 +27,8 @@ function row(trackId: number, overrides: Partial<PreviewRow> = {}): PreviewRow {
       bpm: CELL,
       key: CELL,
       styleId: CELL,
-      energy: CELL
+      energy: CELL,
+      cover: CELL
     },
     warnings: [],
     excluded: false,
@@ -51,7 +52,8 @@ const WAITING: PreviewState = {
     excluded: 1,
     failed: 1,
     canRefresh: true,
-    findsDuplicates: false
+    findsDuplicates: false,
+    findsCovers: false
   },
   canUndo: false
 }

@@ -34,9 +34,11 @@ import { logger, maskSecretsInLog, startFileLogging } from './services/logger'
 import { createAcoustIdClient } from './services/lookup/acoustid'
 import { createDiscogsClient } from './services/lookup/discogs'
 import { createLookupHttp } from './services/lookup/http'
+import { createITunesClient } from './services/lookup/itunes'
 import { createMusicBrainzClient } from './services/lookup/musicbrainz'
 import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
+import { createCoverStore } from './services/covers'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import { createMountedVolumesCache, listMountedVolumes } from './services/volumes'
 import { AppError } from '@shared/errors'
@@ -215,7 +217,8 @@ function startPythonSidecar(): void {
     logDir: app.getPath('logs'),
     // The sidecar decodes and fingerprints with the app's own tools and with nothing else.
     ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command,
-    fpcalcPath: resolveToolCommand('fpcalc', locations)?.command
+    fpcalcPath: resolveToolCommand('fpcalc', locations)?.command,
+    coversDir: coversFolder()
   })
   pythonBridge.start()
   pythonBridge
@@ -238,6 +241,11 @@ function isGeneratedFile(path: string): boolean {
     }
   })
   return roots.some((root) => path.startsWith(root + sep))
+}
+
+/** Where covers are kept between runs: a folder of the app's own, never of the library. */
+function coversFolder(): string {
+  return join(app.getPath('userData'), 'covers')
 }
 
 /**
@@ -273,7 +281,9 @@ function availableStages(db: AppDatabase): Stage[] {
               : undefined
           }
         })
-      }
+      },
+      covers: createCoverStore(coversFolder()),
+      coverClients: { itunes: createITunesClient({ http, cache }), images: http }
     })
   }
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])
@@ -391,7 +401,14 @@ function registerLibraryAndPipeline(): void {
   })
   registerPipelineIpc({ orchestrator: runs, functions })
   registerPreviewIpc(
-    createPreview({ db, stages, orchestrator: runs, batchFiles, listMountedVolumes })
+    createPreview({
+      db,
+      stages,
+      orchestrator: runs,
+      batchFiles,
+      listMountedVolumes,
+      covers: createCoverStore(coversFolder())
+    })
   )
 
   // In this order, so that no two of them work on the drive at the same time: what

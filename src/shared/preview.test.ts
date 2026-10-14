@@ -32,7 +32,8 @@ function row(overrides: Partial<PreviewRow> = {}): PreviewRow {
       bpm: EMPTY_CELL,
       key: EMPTY_CELL,
       styleId: EMPTY_CELL,
-      energy: EMPTY_CELL
+      energy: EMPTY_CELL,
+      cover: EMPTY_CELL
     },
     warnings: [],
     excluded: false,

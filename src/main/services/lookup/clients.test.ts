@@ -57,7 +57,13 @@ const RECORDING_ANSWER = {
       'release-group': { 'secondary-types': ['Compilation'] }
     },
     { title: 'Bootleg Mix', status: 'Bootleg', date: '1996' },
-    { title: 'Homework', status: 'Official', date: '1997-01-20', 'release-group': {} },
+    {
+      id: 'f5ec3e4a-36ff-4a36-8dd0-a1c3a54b8a5b',
+      title: 'Homework',
+      status: 'Official',
+      date: '1997-01-20',
+      'release-group': {}
+    },
     { title: 'Homework (reissue)', status: 'Official', date: '2022', 'release-group': {} },
     { status: 'Official' }
   ]
@@ -267,7 +273,8 @@ describe('the MusicBrainz client', () => {
       artist: 'Daft Punk feat. Somebody',
       durationS: 226.866,
       year: 1997,
-      album: 'Homework'
+      album: 'Homework',
+      releaseId: 'f5ec3e4a-36ff-4a36-8dd0-a1c3a54b8a5b'
     })
     expect(requests[0]?.url).toBe(
       `https://musicbrainz.org/ws/2/recording/${MBID}?inc=artist-credits+releases+release-groups&fmt=json`
@@ -367,20 +374,32 @@ describe('the Discogs client', () => {
     return { requests, discogs }
   }
 
-  it('returns the releases of a search with their label and year', async () => {
+  it('returns the releases of a search with their label, year and picture', async () => {
     // Arrange
+    const image = 'https://i.discogs.com/x/rs:fit/g:sm/q:90/h:600/w:600/R-1.jpeg'
     const { discogs } = client([
       {
         body: {
-          pagination: { items: 3 },
+          pagination: { items: 4 },
           results: [
             {
               id: 1,
               title: 'Daft Punk - Around The World',
               year: '1997',
-              label: ['Virgin', 'EMI']
+              label: ['Virgin', 'EMI'],
+              cover_image: image
             },
-            { id: 2, title: 'Daft Punk - Homework', label: [] },
+            {
+              id: 2,
+              title: 'Daft Punk - Homework',
+              label: [],
+              cover_image: 'https://st.discogs.com/images/spacer.gif'
+            },
+            {
+              id: 4,
+              title: 'Daft Punk - Da Funk',
+              cover_image: 'https://i.discogs.com.example.com/a.jpg'
+            },
             { id: 3, year: '1997' }
           ]
         }
@@ -392,8 +411,9 @@ describe('the Discogs client', () => {
 
     // Assert
     expect(releases).toEqual([
-      { title: 'Daft Punk - Around The World', year: 1997, label: 'Virgin' },
-      { title: 'Daft Punk - Homework', year: null, label: null }
+      { title: 'Daft Punk - Around The World', year: 1997, label: 'Virgin', image },
+      { title: 'Daft Punk - Homework', year: null, label: null, image: null },
+      { title: 'Daft Punk - Da Funk', year: null, label: null, image: null }
     ])
   })
 
