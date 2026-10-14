@@ -47,6 +47,10 @@ export interface LookupResult {
   year?: Found<number>
   acoustId: string | null
   musicbrainzRecordingId: string | null
+  /** The release of a match, which the Cover Art Archive knows its cover by. */
+  musicbrainzReleaseId: string | null
+  /** The picture Discogs has of the release of a match. */
+  discogsImage: string | null
   /** The sources that were asked and gave an answer. */
   answered: LookupSource[]
   /** The sources that could not be asked, with why. */
@@ -68,6 +72,7 @@ interface Candidate extends ArtistTitle {
   year: number | null
   acoustId: string | null
   musicbrainzRecordingId: string | null
+  musicbrainzReleaseId: string | null
 }
 
 // A Discogs release is taken for the same release as the candidate from this on.
@@ -122,7 +127,8 @@ export async function lookupTrack(
     album: recording.album,
     year: recording.year,
     acoustId,
-    musicbrainzRecordingId: recording.id
+    musicbrainzRecordingId: recording.id,
+    musicbrainzReleaseId: recording.releaseId
   })
 
   let candidate: Candidate | null = null
@@ -208,7 +214,8 @@ export async function lookupTrack(
           album: null,
           year: null,
           acoustId: null,
-          musicbrainzRecordingId: null
+          musicbrainzRecordingId: null,
+          musicbrainzReleaseId: null
         }
       }
     }
@@ -219,6 +226,8 @@ export async function lookupTrack(
     matched: false,
     acoustId: null,
     musicbrainzRecordingId: null,
+    musicbrainzReleaseId: null,
+    discogsImage: null,
     answered: [...answered],
     failed
   }
@@ -231,6 +240,8 @@ export async function lookupTrack(
   result.title = { value: candidate.title, source }
   result.acoustId = candidate.acoustId
   result.musicbrainzRecordingId = candidate.musicbrainzRecordingId
+  result.musicbrainzReleaseId = candidate.musicbrainzReleaseId
+  result.discogsImage = release?.image ?? null
   if (candidate.album !== null) result.album = { value: candidate.album, source }
   if (candidate.year !== null) result.year = { value: candidate.year, source }
   if (release?.label != null) result.label = { value: release.label, source: 'discogs' }

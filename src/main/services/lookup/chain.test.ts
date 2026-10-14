@@ -8,6 +8,8 @@ import type { MusicBrainzRecording } from './musicbrainz'
 const ACOUSTID = '9ff43b6a-4f16-427c-93c2-92307ca505e0'
 const MBID = '59d61a60-0a62-4004-b0d5-8c55fa62ddbe'
 const OTHER_MBID = 'cd2e7c47-16f5-46c6-a37c-a1eb7bf599ff'
+const RELEASE_MBID = 'f5ec3e4a-36ff-4a36-8dd0-a1c3a54b8a5b'
+const DISCOGS_IMAGE = 'https://i.discogs.com/abc/rs:fit/g:sm/q:90/h:600/w:600/R-1.jpeg'
 
 const RECORDING: MusicBrainzRecording = {
   id: MBID,
@@ -15,7 +17,8 @@ const RECORDING: MusicBrainzRecording = {
   artist: 'Daft Punk',
   durationS: 227,
   year: 1997,
-  album: 'Homework'
+  album: 'Homework',
+  releaseId: RELEASE_MBID
 }
 const MATCH: AcoustIdMatch = {
   acoustId: ACOUSTID,
@@ -25,7 +28,8 @@ const MATCH: AcoustIdMatch = {
 const RELEASE: DiscogsRelease = {
   title: 'Daft Punk - Around The World',
   year: 1996,
-  label: 'Virgin'
+  label: 'Virgin',
+  image: DISCOGS_IMAGE
 }
 
 const TAGGED: LookupInput = {
@@ -93,6 +97,8 @@ describe('lookupTrack', () => {
       label: { value: 'Virgin', source: 'discogs' },
       acoustId: ACOUSTID,
       musicbrainzRecordingId: MBID,
+      musicbrainzReleaseId: RELEASE_MBID,
+      discogsImage: DISCOGS_IMAGE,
       answered: ['acoustid', 'musicbrainz', 'discogs'],
       failed: []
     })
@@ -285,7 +291,9 @@ describe('lookupTrack', () => {
     const { clients } = clientsWith({
       acoustid: [MATCH],
       recording: RECORDING,
-      discogs: [{ title: 'Various - Summer Hits 97', year: 1997, label: 'Sampler Records' }]
+      discogs: [
+        { title: 'Various - Summer Hits 97', year: 1997, label: 'Sampler Records', image: null }
+      ]
     })
 
     // Act
@@ -301,7 +309,9 @@ describe('lookupTrack', () => {
     const { clients } = clientsWith({
       acoustid: [],
       search: [],
-      discogs: [{ title: 'Daft Punk (2) - Around The World', year: 1997, label: 'Virgin' }]
+      discogs: [
+        { title: 'Daft Punk (2) - Around The World', year: 1997, label: 'Virgin', image: null }
+      ]
     })
 
     // Act

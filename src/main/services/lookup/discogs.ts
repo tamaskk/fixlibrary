@@ -1,7 +1,7 @@
-// Discogs: the label and the year of a release, and a second opinion on its name.
+// Discogs: the label, the year and the cover of a release, and a second opinion on its name.
 import { z } from 'zod'
 import { cachedAnswer, type LookupCache, type LookupOptions } from './cache'
-import { LookupError, type LookupHttp } from './http'
+import { isImageUrl, LookupError, type LookupHttp } from './http'
 import { cleanText, rawText, yearOf } from './text'
 
 const SEARCH_URL = 'https://api.discogs.com/database/search'
@@ -12,14 +12,20 @@ const answerSchema = z.object({ results: z.array(z.unknown()).optional() })
 const resultSchema = z.object({
   title: rawText,
   year: z.union([z.string(), z.number()]).nullable().optional(),
-  label: z.array(rawText).nullable().optional()
+  label: z.array(rawText).nullable().optional(),
+  cover_image: rawText.nullable().optional()
 })
 
 const releaseSchema = z.object({
   /** As Discogs names a release: `Artist - Title`. */
   title: z.string(),
   year: z.number().int().nullable(),
-  label: z.string().nullable()
+  label: z.string().nullable(),
+  /** The primary picture of the release; null when it has none Discogs serves. */
+  image: z
+    .string()
+    .refine((url) => isImageUrl('discogs', url))
+    .nullable()
 })
 const releasesSchema = z.array(releaseSchema)
 
@@ -72,7 +78,14 @@ export function createDiscogsClient(dependencies: DiscogsDependencies): DiscogsC
             const release = result.success && {
               title: cleanText(result.data.title),
               year: yearOf(result.data.year),
-              label: cleanText(result.data.label?.[0])
+              label: cleanText(result.data.label?.[0]),
+              // A release without a picture is answered with a placeholder of
+              // another host, which this leaves out.
+              image:
+                typeof result.data.cover_image === 'string' &&
+                isImageUrl('discogs', result.data.cover_image)
+                  ? result.data.cover_image
+                  : null
             }
             const checked = releaseSchema.safeParse(release)
             return checked.success ? [checked.data] : []
