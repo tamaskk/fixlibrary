@@ -245,7 +245,15 @@ def test_gives_no_size_for_a_picture_that_cannot_be_decoded(covers: Path, tmp_pa
 
     result = cover.inspect_cover(str(path))
 
-    assert result == {"cover": {"width": None, "height": None, "thumb": None}}
+    assert result == {
+        "cover": {
+            "width": None,
+            "height": None,
+            "thumb": None,
+            "placeholder": False,
+            "other": False,
+        }
+    }
     assert list(covers.iterdir()) == []
 
 
@@ -276,3 +284,45 @@ def test_a_downloaded_picture_ends_up_in_the_file_as_a_600_pixel_front_cover(
     pictures = ID3(result).getall("APIC")
     assert [(picture.type, picture.mime) for picture in pictures] == [(3, "image/jpeg")]
     assert bytes(pictures[0].data) == (covers / made["cover"]).read_bytes()
+
+
+def test_takes_a_webp_only_when_the_user_chose_it(covers: Path) -> None:
+    source = downloaded(covers, encoded(Image.new("RGB", (700, 700), BLUE), "WEBP"))
+
+    with pytest.raises(Refused, match="cannot be read as an image"):
+        cover.prepare_cover(source)
+    made = cover.prepare_cover(source, manual=True)
+
+    assert opened(covers / made["cover"]).size == (600, 600)
+
+
+def test_tells_a_cover_the_app_drew_from_one_of_the_track(covers: Path, tmp_path: Path) -> None:
+    from fixlib_py import placeholder
+
+    drawn = placeholder.make_placeholder("Bicep", "Glue", "#3b82f6")
+    data = (covers / drawn["cover"]).read_bytes()
+    real = encoded(Image.new("RGB", (600, 600), RED))
+    first = tagged(tmp_path, APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=data))
+    other = tmp_path / "other"
+    other.mkdir()
+    second = tagged(other, APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=real))
+
+    assert cover.inspect_cover(str(first))["cover"]["placeholder"] is True
+    assert cover.inspect_cover(str(second))["cover"]["placeholder"] is False
+
+
+def test_tells_a_real_cover_it_does_not_decode_from_damaged_bytes(
+    covers: Path, tmp_path: Path
+) -> None:
+    gif = encoded(Image.new("RGB", (500, 500)), "GIF")
+    huge = encoded(Image.new("1", (5000, 5000)), "PNG")
+    first = tagged(tmp_path, APIC(encoding=3, mime="image/gif", type=3, desc="", data=gif))
+    other = tmp_path / "other"
+    other.mkdir()
+    second = tagged(other, APIC(encoding=3, mime="image/png", type=3, desc="", data=huge))
+
+    as_gif = cover.inspect_cover(str(first))["cover"]
+    as_huge = cover.inspect_cover(str(second))["cover"]
+
+    assert (as_gif["other"], as_gif["width"]) == (True, None)
+    assert (as_huge["other"], as_huge["width"], as_huge["height"]) == (True, 5000, 5000)
