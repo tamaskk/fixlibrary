@@ -15,6 +15,7 @@ import re
 import threading
 from typing import Any, BinaryIO
 
+from fixlib_py.cover import is_name, read_app_cover
 from fixlib_py.files import open_regular_file
 from fixlib_py.safe_files import (
     PackedFrame,
@@ -35,12 +36,9 @@ from fixlib_py.tags import MAX_READ_SIZE, _BoundedReader, _clean_text, _first_te
 # Tags are written into these; a WAV becomes an AIFF first (convert.py).
 _FORMATS = {".mp3": "mp3", ".aif": "aiff", ".aiff": "aiff"}
 _TEXT_FRAMES = {"artist": "TPE1", "title": "TIT2", "album": "TALB", "label": "TPUB", "key": "TKEY"}
-_FIELDS = {*_TEXT_FRAMES, "year", "bpm", "coverPath"}
+_FIELDS = {*_TEXT_FRAMES, "year", "bpm", "cover"}
 # A key as ID3 writes one: `Am`, `F#m`, `Db`.
 _KEY = re.compile(r"^[A-G][#b]?m?$")
-# A cover the app made is a 600 x 600 JPEG of a few hundred kilobytes.
-MAX_COVER_BYTES = 4 * 1024 * 1024
-_JPEG = b"\xff\xd8\xff"
 # Frames ID3v2.3 does not have and every player and tagger reads in it all the same:
 # the names a library is sorted by.
 _SORT_FRAMES = ("TSOA", "TSOP", "TSOT")
@@ -84,10 +82,8 @@ def _check_fields(fields: object) -> dict[str, Any]:
         value = fields.get(name, low)
         if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
             raise ValueError(f"{name} is out of range")
-    if "coverPath" in fields and (
-        not isinstance(fields["coverPath"], str) or not os.path.isabs(fields["coverPath"])
-    ):
-        raise ValueError("coverPath must be an absolute path")
+    if "cover" in fields and not is_name(fields["cover"], "cover"):
+        raise ValueError("cover must be the name of a cover the app made")
     return fields
 
 
@@ -186,26 +182,15 @@ def _held(tags: Any) -> dict[str, Any]:
     held["year"] = _year(tags)
     tempo = _first_text(tags, "TBPM")
     held["bpm"] = int(tempo) if tempo is not None and tempo.isascii() and tempo.isdigit() else None
-    held["coverPath"] = _cover_of(tags)
+    held["cover"] = _cover_of(tags)
     return held
-
-
-def _read_cover(path: str) -> bytes:
-    file = open_regular_file(path)
-    if file is None:
-        raise Refused("the cover is not a regular file")
-    with file:
-        data = file.read(MAX_COVER_BYTES + 1)
-    if len(data) > MAX_COVER_BYTES or data[:3] != _JPEG:
-        raise Refused("the cover is not a JPEG of a size a cover may have")
-    return data
 
 
 def _wanted(fields: dict[str, Any]) -> dict[str, Any]:
     """The fields as they are compared with what a tag holds: the cover as its bytes."""
     wanted = dict(fields)
-    if "coverPath" in wanted:
-        wanted["coverPath"] = _read_cover(wanted["coverPath"])
+    if "cover" in wanted:
+        wanted["cover"] = read_app_cover(wanted["cover"])
     return wanted
 
 
@@ -235,9 +220,9 @@ def _apply(tags: Any, wanted: dict[str, Any]) -> None:
     if "bpm" in wanted:
         tags.delall("TBPM")
         tags.add(TBPM(encoding=1, text=[str(wanted["bpm"])]))
-    if "coverPath" in wanted:
+    if "cover" in wanted:
         tags.delall("APIC")
-        tags.add(APIC(encoding=0, mime="image/jpeg", type=3, desc="", data=wanted["coverPath"]))
+        tags.add(APIC(encoding=0, mime="image/jpeg", type=3, desc="", data=wanted["cover"]))
 
 
 def _digest(file: BinaryIO, start: int, end: int, stop: threading.Event | None) -> str:
