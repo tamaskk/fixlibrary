@@ -10,6 +10,8 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
   convertFile: 'WAV fájlok konvertálása',
   duplicates: 'Duplikátumok keresése',
   setAside: 'Duplikátumok félretétele',
+  cover: 'Borító keresése',
+  embedCover: 'Borító beágyazása',
   demoAnalyze: 'Demo elemzés',
   demoLookup: 'Demo lookup',
   demoRename: 'Demo átnevezés'

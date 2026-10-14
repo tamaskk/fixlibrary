@@ -66,6 +66,7 @@ const api: FixLibraryApi = {
     refreshLookup: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewRefreshLookup, request),
     duplicates: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDuplicates, batchId),
     keepDuplicate: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewKeepDuplicate, request),
+    coverThumbs: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewCoverThumbs, request),
     setExcluded: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewSetExcluded, request),
     approve: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewApprove, batchId),
     discard: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDiscard, batchId),

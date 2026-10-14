@@ -6,13 +6,16 @@ export const WARNING_LABELS: Readonly<Record<PreviewWarning, string>> = {
   NAME_COLLISION: 'A név foglalt volt, a fájl sorszámot kapott',
   LOW_BITRATE: 'Alacsony bitrate',
   CANNOT_NORMALIZE: 'Nem normalizálható',
-  UNSORTED: 'Nincs stílusa (Unsorted)'
+  UNSORTED: 'Nincs stílusa (Unsorted)',
+  NO_COVER: 'Nem található borító'
 }
 
 export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {
   lookup: 'Lookup',
   musicbrainz: 'MusicBrainz',
   discogs: 'Discogs',
+  itunes: 'iTunes',
+  coverartarchive: 'Cover Art Archive',
   id3: 'ID3',
   fileName: 'Fájlnév',
   naming: 'Névszabály',

@@ -2,7 +2,10 @@ import { formatPercent } from '@/lib/format'
 import { SOURCE_LABELS } from '@/lib/preview-labels'
 import { PREVIEW_FIELDS, type PreviewRow, type PreviewValue } from '@shared/preview'
 import { formatKey } from '@shared/keys'
+import { useCoverThumbsStore } from '@/stores/cover-thumbs-store'
 import { DiffValue } from './cells'
+import { CoverDiff } from './cover-cell'
+import { coverDescription } from './cover-text'
 import { diffText, EMPTY } from './diff-text'
 import type { PreviewColumn, PreviewColumnContext } from './types'
 
@@ -24,6 +27,23 @@ function provenance(row: PreviewRow): string | null {
   const names = sources.map((source) => SOURCE_LABELS[source]).join(', ')
   // The percent first: it is what must not be cut off in a narrow column.
   return confidences.length === 0 ? names : `${formatPercent(Math.min(...confidences))} · ${names}`
+}
+
+/** What a cover cell says as text, also before its pictures are in. */
+function coverText(row: PreviewRow): string | null {
+  if (!row.cells.cover.changed) return null
+  return coverDescription(row, useCoverThumbsStore.getState().rows[row.trackId])
+}
+
+/** The column of a batch that looked for covers: the old and the new one, side by side. */
+export const COVER_COLUMN: PreviewColumn = {
+  id: 'cover',
+  header: 'Borító',
+  // Two thumbnails of 24px and the gap between them.
+  track: '96px',
+  minWidth: 96,
+  render: (row) => <CoverDiff row={row} />,
+  text: coverText
 }
 
 /**

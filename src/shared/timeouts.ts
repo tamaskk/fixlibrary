@@ -24,10 +24,17 @@ export const STAGE_TIMEOUTS_MS = {
   writeTags: 6 * MINUTE,
   // The backup or the copy of the whole file, and then the conversion of it.
   convertFile: 6 * MINUTE,
-  normalize: 120 * SECOND
+  normalize: 120 * SECOND,
+  // Up to three services asked, a picture downloaded and a cover made of it.
+  cover: 60 * SECOND,
+  // The backup or the copy of the whole file, and then the writing of its cover.
+  embedCover: 6 * MINUTE
 } as const
 
 export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS
+
+/** For one `cover.inspect` or `cover.prepare` call: one picture decoded and resized. */
+export const COVER_RPC_TIMEOUT_MS = 20 * SECOND
 
 /** For a sidecar call that belongs to no stage, such as `ping`. */
 export const DEFAULT_RPC_TIMEOUT_MS = 30 * SECOND

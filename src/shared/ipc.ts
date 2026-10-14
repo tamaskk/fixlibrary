@@ -15,6 +15,8 @@ import type {
 import type { PipelineState, RunProgress } from './pipeline'
 import type {
   ApproveOutcome,
+  CoverThumbs,
+  CoverThumbsRequest,
   PreviewEdit,
   PreviewRefresh,
   PreviewExclude,
@@ -71,6 +73,7 @@ export const IPC_CHANNELS = {
   previewSetExcluded: 'preview:setExcluded',
   previewDuplicates: 'preview:duplicates',
   previewKeepDuplicate: 'preview:keepDuplicate',
+  previewCoverThumbs: 'preview:coverThumbs',
   previewApprove: 'preview:approve',
   previewDiscard: 'preview:discard',
   previewUndoLast: 'preview:undoLast'
@@ -177,6 +180,8 @@ export interface FixLibraryApi {
      * afterwards. The track is named by id only; no file is touched before approval.
      */
     keepDuplicate: (request: KeepDuplicate) => Promise<Result<DuplicateGroup[]>>
+    /** The old and the new cover of some rows of the batch that waits for approval. */
+    coverThumbs: (request: CoverThumbsRequest) => Promise<Result<CoverThumbs[]>>
     /** Takes rows out of the batch, or back in. Tracks are named by id only. */
     setExcluded: (request: PreviewExclude) => Promise<Result<PreviewState>>
     /**

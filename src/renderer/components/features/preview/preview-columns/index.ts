@@ -1,5 +1,5 @@
 import { ERROR_COLUMNS } from './errors'
-import { RUN_COLUMNS } from './run'
+import { COVER_COLUMN, RUN_COLUMNS } from './run'
 import type { PreviewColumn } from './types'
 
 export type { PreviewColumn, PreviewColumnContext, PreviewEditor } from './types'
@@ -11,11 +11,21 @@ const COLUMNS_BY_BATCH_TYPE: Readonly<Record<string, readonly PreviewColumn[]>> 
   run: RUN_COLUMNS
 }
 
-/** The columns of the "Változások" tab for a kind of batch. */
-export function columnsFor(batchType: string): readonly PreviewColumn[] {
+/**
+ * The columns of the "Változások" tab for a kind of batch. A batch that looked for
+ * covers shows them before the source of its values.
+ */
+export function columnsFor(
+  batchType: string,
+  options: { covers?: boolean } = {}
+): readonly PreviewColumn[] {
   // The type is a stored string: only a set of its own is looked up, never what
   // every object has.
-  return Object.hasOwn(COLUMNS_BY_BATCH_TYPE, batchType)
+  const columns = Object.hasOwn(COLUMNS_BY_BATCH_TYPE, batchType)
     ? (COLUMNS_BY_BATCH_TYPE[batchType] ?? RUN_COLUMNS)
     : RUN_COLUMNS
+  if (!options.covers) return columns
+  const source = columns.findIndex((column) => column.id === 'source')
+  const at = source === -1 ? columns.length : source
+  return [...columns.slice(0, at), COVER_COLUMN, ...columns.slice(at)]
 }

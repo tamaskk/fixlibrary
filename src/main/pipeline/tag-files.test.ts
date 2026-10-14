@@ -30,6 +30,7 @@ import type { TagFields } from '@shared/rpc'
 import { createBatchFiles, type BatchFiles } from './batch-files'
 import { createOrchestrator, type Orchestrator } from './orchestrator'
 import { commitApprovedValues, createPreview, type Preview } from './preview'
+import { createEmbedCoverStage } from './stages/cover'
 import { createNamingStage } from './stages/naming'
 import { createRenameStage } from './stages/rename'
 import type { Stage } from './stages/stage'
@@ -55,6 +56,8 @@ let calls: { method: string; path: string; hasSignal: boolean }[]
 let failing: ((dst: string, signal: AbortSignal) => Promise<void>) | null
 /** What the lookup stand-in proposes for every track. */
 let found: ProposedFields
+/** What the cover stand-in proposes for every track. */
+let coverFound: ProposedFields
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -141,9 +144,9 @@ function errorOf(batchId: number, trackId: number): unknown {
   return getBatchItem(testDatabase.db, batchId, trackId)?.error
 }
 
-async function computed(ids: number[]): Promise<number> {
+async function computed(ids: number[], stages: string[] = ['naming']): Promise<number> {
   // Asking for the naming brings the lookup, the analysis and the stages that write.
-  const started = run.start({ trackIds: ids, stages: ['naming'] })
+  const started = run.start({ trackIds: ids, stages })
   if (!started.ok) throw new Error(`the run did not start: ${started.code}`)
   await run.whenFinished()
   return started.value.batchId
@@ -175,6 +178,7 @@ beforeEach(() => {
     album: { value: 'Új törvény', source: 'musicbrainz', confidence: 0.9 },
     year: { value: 1997, source: 'musicbrainz', confidence: 0.9 }
   }
+  coverFound = { cover: { value: COVER, source: 'itunes' } }
   fileOps = createFileOps({ allowedRoots: () => [library, clean, backups] })
   batchFiles = createBatchFiles({
     db: testDatabase.db,
@@ -188,8 +192,10 @@ beforeEach(() => {
       bpm: { value: 124, source: 'analysis' },
       key: { value: '11A', source: 'analysis' }
     })),
+    standIn('cover', () => coverFound),
     createNamingStage(),
     createWriteTagsStage({ python: () => python }),
+    createEmbedCoverStage({ db: testDatabase.db, python: () => python }),
     createRenameStage()
   ]
   run = createOrchestrator({
@@ -217,6 +223,7 @@ afterEach(() => {
 })
 
 const NAMED = 'Ákos - Ilyenek voltunk (Extended Mix) [11A F#m - 124].mp3'
+const COVER = '0123456789abcdef0123456789abcdef01234567.jpg'
 
 describe('a batch that names files and writes their tags', () => {
   it('writes the tags, gives the file its name, and undo brings back the file as it was', async () => {
@@ -646,6 +653,127 @@ describe('a copy that was set aside as a duplicate', () => {
   })
 })
 
+describe('a batch that found covers', () => {
+  it('embeds the cover alone when nothing else was asked for, and undo takes it out again', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.mp3')
+    const original = sha256(track.path)
+    const batchId = await computed([track.id], ['cover'])
+
+    // Act
+    await approved(batchId)
+    const tags = tagsIn(track.path)
+    const row = trackOf(track.id)
+    const undone = await preview.undoLast()
+
+    // Assert
+    expect(tags).toEqual({ cover: COVER })
+    expect(row.coverStatus).toBe('embedded')
+    expect(calls.map((call) => call.method)).toEqual(['tags.would_change', 'tags.write'])
+    expect(undone).toMatchObject({ ok: true, value: { restored: 1 } })
+    expect(sha256(track.path)).toBe(original)
+  })
+
+  it('embeds the cover with the tags in one write when the tags are written too', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.mp3')
+    const batchId = await computed([track.id], ['naming', 'cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(tagsIn(join(library, 'Inbox', NAMED))).toMatchObject({
+      artist: 'Ákos',
+      cover: COVER
+    })
+    // The cover went in with the tags: the file is not asked about again.
+    expect(calls.map((call) => call.method)).toEqual(['tags.would_change', 'tags.write'])
+    expect(filesUnder(backups)).toHaveLength(1)
+  })
+
+  it('in the clean library writes the cover with the tags into the copy once, and leaves the original', async () => {
+    // Arrange
+    mode = 'clean_library'
+    const track = addFile('Inbox/download.mp3')
+    const original = sha256(track.path)
+    const batchId = await computed([track.id], ['naming', 'cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(calls.filter((call) => call.method === 'tags.write')).toHaveLength(1)
+    expect(sha256(track.path)).toBe(original)
+    expect(tagsIn(join(clean, 'Inbox', NAMED))).toMatchObject({ cover: COVER })
+  })
+
+  it('in the clean library embeds a cover alone into the copy, and leaves the original', async () => {
+    // Arrange
+    mode = 'clean_library'
+    const track = addFile('Inbox/download.mp3')
+    const original = sha256(track.path)
+    const batchId = await computed([track.id], ['cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(sha256(track.path)).toBe(original)
+    expect(tagsIn(join(clean, 'Inbox', 'download.mp3'))).toEqual({ cover: COVER })
+    expect(filesUnder(backups)).toEqual([])
+  })
+
+  it('leaves the file as it was when the cover cannot be written, and keeps no backup', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.mp3')
+    const original = sha256(track.path)
+    const batchId = await computed([track.id], ['cover'])
+    failing = async () => {
+      throw new AppError('PYTHON_ERROR', 'tags.write: refused')
+    }
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(sha256(track.path)).toBe(original)
+    expect(errorOf(batchId, track.id)).toMatchObject({ code: 'PYTHON_ERROR' })
+    expect(trackOf(track.id).coverStatus).not.toBe('embedded')
+    expect(filesUnder(backups)).toEqual([])
+  })
+
+  it('touches no file when no cover was found', async () => {
+    // Arrange
+    coverFound = {}
+    const track = addFile('Inbox/download.mp3')
+    const original = sha256(track.path)
+    const batchId = await computed([track.id], ['cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(calls).toEqual([])
+    expect(sha256(track.path)).toBe(original)
+    expect(trackOf(track.id).coverStatus).not.toBe('embedded')
+    expect(filesUnder(backups)).toEqual([])
+  })
+
+  it('embeds no cover into a WAV', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.wav')
+    const batchId = await computed([track.id], ['cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(calls).toEqual([])
+    expect(trackOf(track.id).coverStatus).not.toBe('embedded')
+  })
+})
+
 describe('tagsFor', () => {
   const track = (changes: Partial<Track> = {}): Track =>
     ({ ...trackOf(addFile(`Inbox/${Math.random()}.mp3`).id), ...changes }) as Track
@@ -699,6 +827,16 @@ describe('tagsFor', () => {
 
     // Assert
     expect(fields.title).toBe('Glue (Club Mix)')
+  })
+
+  it('takes the cover the batch found', () => {
+    // Act
+    const fields = tagsFor(track({ artist: 'Bicep' }), {
+      fields: { cover: { value: COVER, source: 'coverartarchive' } }
+    })
+
+    // Assert
+    expect(fields).toEqual({ artist: 'Bicep', cover: COVER })
   })
 
   it('writes nothing for what is not known, and never takes a tag away', () => {

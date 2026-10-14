@@ -1,6 +1,7 @@
 // The main <-> Python sidecar contract: JSON-RPC 2.0, one JSON document per line.
 // python/fixlib_py mirrors these methods by hand; change both sides in the same commit.
 import { z } from 'zod'
+import { COVER_NAMES } from './covers'
 import { CAMELOT_KEYS, KEY_SCALES, keyOf } from './keys'
 
 /** How many files one `tags.read` call may name. The same limit is in fixlib_py/tags.py. */
@@ -126,12 +127,38 @@ export const tagFieldsSchema = z
     bpm: z.number().int().min(20).max(400),
     /** The musical name of the key, as ID3 writes one: `Am`, `F#m`. */
     key: z.string().regex(/^[A-G][#b]?m?$/),
-    /** A JPEG the app made, to be the one front cover of the file. */
-    coverPath: z.string().min(1)
+    /**
+     * The name of a cover the app made in its covers folder, to be the one front
+     * cover of the file. The sidecar reads it as a 600 × 600 JPEG before it writes it.
+     */
+    cover: z.string().regex(COVER_NAMES.cover)
   })
   .partial()
 
 export type TagFields = z.output<typeof tagFieldsSchema>
+
+const pixels = z.number().int().positive().max(1_000_000)
+
+/** The cover a file holds: `null` when it has none, and no size when it cannot be decoded. */
+export const coverInspectResultSchema = z.object({
+  cover: z
+    .object({
+      width: pixels.nullable(),
+      height: pixels.nullable(),
+      thumb: z.string().regex(COVER_NAMES.thumb).nullable()
+    })
+    .nullable()
+})
+
+export type CoverInspectResult = z.output<typeof coverInspectResultSchema>
+
+export const coverPrepareResultSchema = z.object({
+  cover: z.string().regex(COVER_NAMES.cover),
+  thumb: z.string().regex(COVER_NAMES.thumb),
+  /** The size of the picture as it was downloaded. */
+  width: pixels,
+  height: pixels
+})
 
 export const RPC_SCHEMAS = {
   ping: {
@@ -174,6 +201,22 @@ export const RPC_SCHEMAS = {
       jobId: z.string().min(1).max(64)
     }),
     result: z.object({ written: z.literal(true) })
+  },
+  /**
+   * The size of the cover a file holds, and a thumbnail of it in the covers folder.
+   * Reads the file only.
+   */
+  'cover.inspect': {
+    params: z.object({ path: z.string().min(1) }),
+    result: coverInspectResultSchema
+  },
+  /**
+   * Makes the 600 × 600 JPEG and the thumbnail of a downloaded picture in the covers
+   * folder, under the hash of the download. Touches nothing outside that folder.
+   */
+  'cover.prepare': {
+    params: z.object({ source: z.string().regex(COVER_NAMES.download) }),
+    result: coverPrepareResultSchema
   },
   /** Measures tempo and key from the audio of one file. Reads the file only. */
   'analysis.bpm_key': {
