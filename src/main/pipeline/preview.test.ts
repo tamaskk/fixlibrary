@@ -14,6 +14,7 @@ import { batchItems } from '../db/schema'
 import { listStyles, replaceStyles } from '../db/styles'
 import { getTrackById, insertTracks, updateTrack } from '../db/tracks'
 import { logger } from '../services/logger'
+import type { PythonBridge } from '../services/python-bridge'
 import { AppError } from '@shared/errors'
 import type { PreviewRow } from '@shared/preview'
 import { buildPreviewRow, commitApprovedValues, createPreview, type Preview } from './preview'
@@ -44,14 +45,27 @@ const naming: Stage = {
   })
 }
 
+type Covers = NonNullable<Parameters<typeof createPreview>[0]['covers']>
+type Python = NonNullable<Parameters<typeof createPreview>[0]['python']>
+
 function preview(
   stages: Stage[] = [naming],
   now?: () => number,
-  covers?: { thumbnail: (name: string) => Promise<string | null> }
+  covers?: Partial<Covers>,
+  python?: Python
 ): Preview {
   return createPreview({
     now,
-    covers,
+    python,
+    covers: covers && {
+      thumbnail: async () => null,
+      ensure: async () => {},
+      importPicture: async () => {
+        throw new Error('no picture')
+      },
+      remove: async () => {},
+      ...covers
+    },
     db: testDatabase.db,
     stages,
     orchestrator: {
@@ -1353,5 +1367,137 @@ describe('the covers of the rows', () => {
 
     // Assert
     expect(state.batch?.findsCovers).toBe(true)
+  })
+})
+
+describe('a cover the user chooses', () => {
+  const STEM = '0123456789abcdef0123456789abcdef01234567'
+  const CHOSEN = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd'
+  let removed: string[]
+  let prepared: unknown[]
+
+  const covers: Partial<Covers> = {
+    importPicture: async () => `${CHOSEN}.download`,
+    remove: async (name) => void removed.push(name)
+  }
+
+  function sidecar(refuse = false): Python {
+    return () => ({
+      call: (async (method: string, params: unknown) => {
+        if (method === 'cover.inspect') return { cover: null }
+        prepared.push(params)
+        if (refuse) throw new AppError('PYTHON_ERROR', 'cover.prepare: refused')
+        return { cover: `${CHOSEN}.jpg`, thumb: `${CHOSEN}.thumb.jpg`, width: 800, height: 800 }
+      }) as PythonBridge['call']
+    })
+  }
+
+  beforeEach(() => {
+    removed = []
+    prepared = []
+    insertJobs(
+      testDatabase.db,
+      trackIds.map((trackId) => ({ batchId, trackId, stage: 'cover', phase: 'compute' as const }))
+    )
+  })
+
+  it('becomes the cover the row proposes, by hand, in the place of a placeholder and its warning', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: { cover: { value: `${STEM}.jpg`, source: 'placeholder' } },
+      warnings: ['NO_COVER'],
+      cover: {
+        thumb: `${STEM}.thumb.jpg`,
+        before: null,
+        placeholder: { artist: 'A', title: 'T', color: '#111111' }
+      }
+    })
+
+    // Act
+    const result = await preview([naming], undefined, covers, sidecar()).setCover(
+      { batchId, trackId: id },
+      '/Users/me/Pictures/cover.WEBP'
+    )
+
+    // Assert
+    expect(result.ok && result.value.cells.cover).toMatchObject({
+      after: `${CHOSEN}.jpg`,
+      source: 'manual',
+      changed: true
+    })
+    expect(result.ok && result.value.warnings).toEqual([])
+    expect(prepared).toEqual([{ source: `${CHOSEN}.download`, manual: true }])
+    expect(removed).toEqual([`${CHOSEN}.download`])
+    const stored = getBatchItem(testDatabase.db, batchId, id)?.after as Record<string, unknown>
+    expect(stored['cover']).toEqual({ thumb: `${CHOSEN}.thumb.jpg`, before: null })
+  })
+
+  it.each([
+    ['/Users/me/Pictures/cover.gif'],
+    ['/Users/me/Pictures/cover'],
+    ['/Users/me/Music/track.mp3'],
+    ['/net/server/share/cover.png'],
+    ['/Network/Servers/x/cover.jpg'],
+    ['//net/server/cover.png'],
+    ['/NET/server/cover.png'],
+    ['/Users/../net/server/cover.png'],
+    ['relative/cover.png']
+  ])('takes no file that is not a JPG, PNG or WebP on this Mac: %s', async (path) => {
+    // Arrange
+    const [id] = trackIds as [number]
+
+    // Act
+    const result = await preview([naming], undefined, covers, sidecar()).setCover(
+      { batchId, trackId: id },
+      path
+    )
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'COVER_UNUSABLE' })
+    expect(prepared).toEqual([])
+  })
+
+  it('says a picture the sidecar makes no cover of cannot be used, and keeps the row', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    const before = rowOf(id)
+
+    // Act
+    const result = await preview([naming], undefined, covers, sidecar(true)).setCover(
+      { batchId, trackId: id },
+      '/Users/me/Pictures/tiny.png'
+    )
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'COVER_UNUSABLE' })
+    expect(rowOf(id)).toEqual(before)
+    expect(removed).toEqual([`${CHOSEN}.download`])
+  })
+
+  it('takes nothing for a batch that does not write covers, or a track not in it', async () => {
+    // Arrange
+    const [id] = trackIds as [number]
+    const withoutCovers = createBatch(testDatabase.db, {
+      type: 'run',
+      mode: 'in_place',
+      items: [{ trackId: id, before: { ...track(id) } }]
+    })
+
+    // Act
+    const other = await preview([naming], undefined, covers, sidecar()).setCover(
+      { batchId: withoutCovers, trackId: id },
+      '/Users/me/Pictures/cover.png'
+    )
+    const missing = await preview([naming], undefined, covers, sidecar()).setCover(
+      { batchId, trackId: 9999 },
+      '/Users/me/Pictures/cover.png'
+    )
+
+    // Assert
+    expect([other, missing]).toEqual([
+      { ok: false, code: 'INVALID_INPUT' },
+      { ok: false, code: 'INVALID_INPUT' }
+    ])
   })
 })

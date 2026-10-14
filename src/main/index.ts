@@ -407,7 +407,8 @@ function registerLibraryAndPipeline(): void {
       orchestrator: runs,
       batchFiles,
       listMountedVolumes,
-      covers: createCoverStore(coversFolder())
+      covers: createCoverStore(coversFolder()),
+      python: () => pythonBridge
     })
   )
 

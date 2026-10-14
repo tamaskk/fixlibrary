@@ -11,20 +11,28 @@ interface CoverThumbsState {
   rows: Readonly<Record<number, RowCoverThumbs>>
   /** Asks for the covers of a row, once. Rows asked for together go in one call. */
   request: (batchId: number, trackId: number) => void
+  /** Forgets the covers of a row whose cover changed, so they are asked for again. */
+  forget: (trackId: number) => void
 }
 
 // The main process is the authority: the store only ever holds what main returned.
 export const useCoverThumbsStore = create<CoverThumbsState>((set, get) => {
   // The rows asked for since the last call went out, by batch.
   let waiting: { batchId: number; trackIds: Set<number> } | null = null
+  // How often the covers of a row were forgotten: an answer asked for before is old.
+  const generations = new Map<number, number>()
 
   async function send(batchId: number, trackIds: number[]): Promise<void> {
+    const asked = new Map(trackIds.map((id) => [id, generations.get(id) ?? 0]))
     const result = await window.api.preview.coverThumbs({ batchId, trackIds }).catch(() => null)
     if (get().batchId !== batchId) return
+    const current = trackIds.filter((id) => asked.get(id) === (generations.get(id) ?? 0))
     const rows: Record<number, RowCoverThumbs> = { ...get().rows }
-    for (const trackId of trackIds) rows[trackId] = { status: 'failed' }
+    for (const trackId of current) rows[trackId] = { status: 'failed' }
     if (result?.ok) {
-      for (const thumbs of result.value) rows[thumbs.trackId] = { status: 'ready', ...thumbs }
+      for (const thumbs of result.value) {
+        if (current.includes(thumbs.trackId)) rows[thumbs.trackId] = { status: 'ready', ...thumbs }
+      }
     }
     set({ rows })
   }
@@ -42,6 +50,12 @@ export const useCoverThumbsStore = create<CoverThumbsState>((set, get) => {
   return {
     batchId: null,
     rows: {},
+    forget(trackId) {
+      generations.set(trackId, (generations.get(trackId) ?? 0) + 1)
+      const rows = { ...get().rows }
+      delete rows[trackId]
+      set({ rows })
+    },
     request(batchId, trackId) {
       if (get().batchId !== batchId) {
         set({ batchId, rows: {} })

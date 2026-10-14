@@ -145,12 +145,27 @@ export const coverInspectResultSchema = z.object({
     .object({
       width: pixels.nullable(),
       height: pixels.nullable(),
-      thumb: z.string().regex(COVER_NAMES.thumb).nullable()
+      thumb: z.string().regex(COVER_NAMES.thumb).nullable(),
+      /** True for a placeholder the app drew: a later run looks for a real cover again. */
+      placeholder: z.boolean(),
+      /**
+       * True for a real picture the app does not decode (larger than it decodes, or a
+       * GIF, BMP, TIFF or WebP), as opposed to damaged bytes.
+       */
+      other: z.boolean()
     })
     .nullable()
 })
 
 export type CoverInspectResult = z.output<typeof coverInspectResultSchema>
+
+/** What a placeholder shows: the same text on the same colour is the same cover. */
+export const placeholderSpecSchema = z.object({
+  artist: writtenText.nullable(),
+  title: writtenText.nullable(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/)
+})
+export type PlaceholderSpec = z.output<typeof placeholderSpecSchema>
 
 export const coverPrepareResultSchema = z.object({
   cover: z.string().regex(COVER_NAMES.cover),
@@ -215,8 +230,23 @@ export const RPC_SCHEMAS = {
    * folder, under the hash of the download. Touches nothing outside that folder.
    */
   'cover.prepare': {
-    params: z.object({ source: z.string().regex(COVER_NAMES.download) }),
+    params: z.object({
+      source: z.string().regex(COVER_NAMES.download),
+      /** A picture the user chose, which may also be a WebP. */
+      manual: z.boolean().optional()
+    }),
     result: coverPrepareResultSchema
+  },
+  /**
+   * Draws the placeholder cover of a track (its artist and title on a colour) and its
+   * thumbnail into the covers folder. Touches nothing outside that folder.
+   */
+  'cover.placeholder': {
+    params: placeholderSpecSchema,
+    result: z.object({
+      cover: z.string().regex(COVER_NAMES.cover),
+      thumb: z.string().regex(COVER_NAMES.thumb)
+    })
   },
   /** Measures tempo and key from the audio of one file. Reads the file only. */
   'analysis.bpm_key': {

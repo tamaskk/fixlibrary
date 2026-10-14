@@ -17,6 +17,7 @@ import type {
   ApproveOutcome,
   CoverThumbs,
   CoverThumbsRequest,
+  PreviewTrack,
   PreviewEdit,
   PreviewRefresh,
   PreviewExclude,
@@ -74,6 +75,9 @@ export const IPC_CHANNELS = {
   previewDuplicates: 'preview:duplicates',
   previewKeepDuplicate: 'preview:keepDuplicate',
   previewCoverThumbs: 'preview:coverThumbs',
+  previewChooseCover: 'preview:chooseCover',
+  previewSetChosenCover: 'preview:setChosenCover',
+  previewDropCover: 'preview:dropCover',
   previewApprove: 'preview:approve',
   previewDiscard: 'preview:discard',
   previewUndoLast: 'preview:undoLast'
@@ -182,6 +186,18 @@ export interface FixLibraryApi {
     keepDuplicate: (request: KeepDuplicate) => Promise<Result<DuplicateGroup[]>>
     /** The old and the new cover of some rows of the batch that waits for approval. */
     coverThumbs: (request: CoverThumbsRequest) => Promise<Result<CoverThumbs[]>>
+    /**
+     * Asks for a picture for one row in a dialog of the main process. Resolves to true
+     * when one was chosen; main keeps it for `setChosenCover`.
+     */
+    chooseCover: (request: PreviewTrack) => Promise<boolean>
+    /** Makes the picture chosen in the last dialog the cover of that row. */
+    setChosenCover: (request: PreviewTrack) => Promise<Result<PreviewRow>>
+    /**
+     * Makes a picture the user dropped on a row its cover. The page hands over the
+     * dropped file; only the preload learns where it is, and only main reads it.
+     */
+    dropCover: (request: PreviewTrack, file: File) => Promise<Result<PreviewRow>>
     /** Takes rows out of the batch, or back in. Tracks are named by id only. */
     setExcluded: (request: PreviewExclude) => Promise<Result<PreviewState>>
     /**

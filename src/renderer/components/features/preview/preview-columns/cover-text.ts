@@ -3,6 +3,9 @@ import type { RowCoverThumbs } from '@/stores/cover-thumbs-store'
 import type { PreviewRow } from '@shared/preview'
 import { EMPTY } from './diff-text'
 
+/** What the cover cell offers, in words for assistive technology as in its tooltip. */
+export const CHOOSE_HINT = 'Kép választása: Enter, vagy húzz ide egy képet'
+
 /** What the covers of a row are, in words: for the tooltip and for assistive technology. */
 export function coverDescription(row: PreviewRow, thumbs: RowCoverThumbs | undefined): string {
   const cell = row.cells.cover

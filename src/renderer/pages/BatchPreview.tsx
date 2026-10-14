@@ -37,6 +37,8 @@ export function BatchPreview(): React.JSX.Element {
   const busy = usePreviewStore((state) => state.busy)
   const notice = usePreviewStore((state) => state.notice)
   const editNote = usePreviewStore((state) => state.editNote)
+  const settingCover = usePreviewStore((state) => state.settingCover)
+  const chooseCover = usePreviewStore((state) => state.chooseCover)
   const load = usePreviewStore((state) => state.load)
   const setTab = usePreviewStore((state) => state.setTab)
   const setFilter = usePreviewStore((state) => state.setFilter)
@@ -144,6 +146,20 @@ export function BatchPreview(): React.JSX.Element {
         )}
         {editNote === 'busy' && (
           <StatusLine tone="neutral">A batch most nem változtatható.</StatusLine>
+        )}
+        {settingCover !== null && <StatusLine tone="neutral">Borító feldolgozása…</StatusLine>}
+        {editNote === 'coverBusy' && (
+          <StatusLine tone="neutral">Egy borító feldolgozása még tart.</StatusLine>
+        )}
+        {editNote === 'coverSet' && settingCover === null && (
+          <StatusLine tone="success">
+            A borító beállítva. Jóváhagyás után kerül a fájlba.
+          </StatusLine>
+        )}
+        {editNote === 'coverRefused' && (
+          <StatusLine tone="danger">
+            Ez a kép nem használható borítónak. JPG, PNG vagy WebP kell, legalább 300 × 300 pixel.
+          </StatusLine>
         )}
       </div>
 
@@ -365,6 +381,9 @@ export function BatchPreview(): React.JSX.Element {
                       onEdit={edit}
                       onSetExcluded={(trackId, excluded) => void setExcluded([trackId], excluded)}
                       onCursorRowChange={setCursorTrackId}
+                      onActivate={(trackId, columnId) => {
+                        if (columnId === 'cover') void chooseCover(trackId)
+                      }}
                     />
                   )}
                 </TabsContent>

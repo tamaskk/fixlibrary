@@ -1,5 +1,10 @@
 import { createBpmKeyStage, type BpmKeyStageDependencies } from './bpm-key'
-import { createCoverStage, createEmbedCoverStage, type CoverStageDependencies } from './cover'
+import {
+  createCoverStage,
+  createEmbedCoverStage,
+  createRedrawPlaceholderStage,
+  type CoverStageDependencies
+} from './cover'
 import {
   createConvertFileStage,
   createConvertStage,
@@ -32,6 +37,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createDuplicatesStage(dependencies),
     createConvertStage(),
     createConvertFileStage(dependencies),
+    createRedrawPlaceholderStage(dependencies),
     createWriteTagsStage(dependencies),
     createEmbedCoverStage(dependencies),
     createRenameStage(),

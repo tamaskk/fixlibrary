@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, IPC_EVENTS, type FixLibraryApi } from '@shared/ipc'
 
 // The preload runs sandboxed: only `electron` may be required at runtime.
@@ -67,6 +67,15 @@ const api: FixLibraryApi = {
     duplicates: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDuplicates, batchId),
     keepDuplicate: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewKeepDuplicate, request),
     coverThumbs: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewCoverThumbs, request),
+    chooseCover: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewChooseCover, request),
+    setChosenCover: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewSetChosenCover, request),
+    // The sandboxed page cannot learn where a dropped file is; only this can.
+    dropCover: (request, file) => {
+      // A file that was not dropped or chosen by the user has no path: nothing to send.
+      const path = webUtils.getPathForFile(file)
+      if (path === '') return Promise.resolve({ ok: false, code: 'COVER_UNUSABLE' })
+      return ipcRenderer.invoke(IPC_CHANNELS.previewDropCover, request, path)
+    },
     setExcluded: (request) => ipcRenderer.invoke(IPC_CHANNELS.previewSetExcluded, request),
     approve: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewApprove, batchId),
     discard: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDiscard, batchId),

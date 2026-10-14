@@ -5,7 +5,7 @@ import { formatKey } from '@shared/keys'
 import { useCoverThumbsStore } from '@/stores/cover-thumbs-store'
 import { DiffValue } from './cells'
 import { CoverDiff } from './cover-cell'
-import { coverDescription } from './cover-text'
+import { CHOOSE_HINT, coverDescription } from './cover-text'
 import { diffText, EMPTY } from './diff-text'
 import type { PreviewColumn, PreviewColumnContext } from './types'
 
@@ -31,7 +31,7 @@ function provenance(row: PreviewRow): string | null {
 
 /** What a cover cell says as text, also before its pictures are in. */
 function coverText(row: PreviewRow): string | null {
-  if (!row.cells.cover.changed) return null
+  if (!row.cells.cover.changed) return row.error ? null : `Nincs új borító · ${CHOOSE_HINT}`
   return coverDescription(row, useCoverThumbsStore.getState().rows[row.trackId])
 }
 
@@ -42,6 +42,8 @@ export const COVER_COLUMN: PreviewColumn = {
   // Two thumbnails of 24px and the gap between them.
   track: '96px',
   minWidth: 96,
+  // Enter or a double click asks for a picture; one can also be dropped on the cell.
+  activate: true,
   render: (row) => <CoverDiff row={row} />,
   text: coverText
 }
