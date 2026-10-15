@@ -43,6 +43,13 @@
       "when": 1791887637199,
       "tag": "0005_batch_files_sha256",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792056746766,
+      "tag": "0006_track_genre",
+      "breakpoints": true
     }
   ]
 }

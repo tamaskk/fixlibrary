@@ -11,6 +11,7 @@ import { listStyles, replaceStyles } from '../db/styles'
 import { AppError, type Result } from '@shared/errors'
 import {
   DEFAULT_SETTINGS,
+  BACKUP_FOLDER_NAME,
   DEFAULT_STYLES,
   settingsPatchSchema,
   settingsSchema,
@@ -28,8 +29,6 @@ export interface SettingsEnvironment {
   homeDir: string
   cpuCount: number
 }
-
-const BACKUP_FOLDER_NAME = 'FixLibrary Backups'
 
 // Each group is one row of the settings table.
 function readGroup<T>(db: AppDatabase, group: string, schema: z.ZodType<T>, fallback: T): T {

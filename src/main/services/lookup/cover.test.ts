@@ -17,6 +17,8 @@ const MATCHED: LookupResult = {
   musicbrainzRecordingId: null,
   musicbrainzReleaseId: RELEASE_MBID,
   discogsImage: DISCOGS_IMAGE,
+  discogsGenres: [],
+  discogsStyles: [],
   answered: ['musicbrainz', 'discogs'],
   failed: []
 }

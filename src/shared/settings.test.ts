@@ -6,7 +6,10 @@ import {
   settingsPatchSchema,
   settingsSchema,
   styleListSchema,
-  UNSORTED_STYLE_NAME
+  UNSORTED_STYLE_NAME,
+  styleNameSchema,
+  newStyleNameSchema,
+  newStylesTaken
 } from './settings'
 
 describe('DEFAULT_SETTINGS', () => {
@@ -142,5 +145,46 @@ describe('secretInputSchema', () => {
 
     // Assert
     expect(parsed.success).toBe(false)
+  })
+})
+
+describe('the names of styles', () => {
+  it.each([
+    '_Duplicates',
+    'duplicates',
+    'FixLibrary Backups',
+    'Inbox',
+    'Hip*Hop',
+    'R&B?',
+    'Deep.',
+    'a<b'
+  ])('refuses %s as a name a style may have', (name) => {
+    // Act
+    const parsed = styleNameSchema.safeParse(name)
+
+    // Assert
+    expect(parsed.success).toBe(false)
+  })
+
+  it('keeps a new style name to a plain genre name', () => {
+    // Act
+    const taken = ['Hip Hop', 'Drum & Bass', "Rock 'n' Roll", 'UK Garage'].map(
+      (name) => newStyleNameSchema.safeParse(name).success
+    )
+    const refused = ['Тrap', 'Hip/Hop', 'Unsorted', 'One Two Three Four Five', 'x'.repeat(31)].map(
+      (name) => newStyleNameSchema.safeParse(name).success
+    )
+
+    // Assert
+    expect(taken).toEqual([true, true, true, true])
+    expect(refused).toEqual([false, false, false, false, false])
+  })
+
+  it('lets a batch create the first five new styles its rows name, as names are compared', () => {
+    // Act
+    const taken = newStylesTaken(['Trap', 'trap', 'Dubstep', 'Garage', 'Jungle', 'Grime', 'Drill'])
+
+    // Assert
+    expect(taken).toEqual(['Trap', 'Dubstep', 'Garage', 'Jungle', 'Grime'])
   })
 })

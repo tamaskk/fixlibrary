@@ -283,7 +283,8 @@ function availableStages(db: AppDatabase): Stage[] {
         })
       },
       covers: createCoverStore(coversFolder()),
-      coverClients: { itunes: createITunesClient({ http, cache }), images: http }
+      coverClients: { itunes: createITunesClient({ http, cache }), images: http },
+      claude: () => claudeService
     })
   }
   const ms = Number(process.env['FIXLIB_DEMO_STAGE_MS'])

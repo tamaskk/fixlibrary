@@ -476,7 +476,7 @@ export async function testClaude(
     tracks.length === 0
       ? [...SAMPLE_TRACKS]
       : tracks.map(({ artist, title, label, year, bpm }) => ({ artist, title, label, year, bpm }))
-  const task = createStyleTask(listStyles(db).map((style) => style.name))
+  const task = createStyleTask(listStyles(db))
   const startedAt = now()
   const outcome = await claude.askBatch(
     task,

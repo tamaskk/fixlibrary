@@ -5,7 +5,7 @@ import { COVER_NAMES } from './covers'
 import { CAMELOT_KEYS, KEY_SCALES, keyOf } from './keys'
 
 /** How many files one `tags.read` call may name. The same limit is in fixlib_py/tags.py. */
-export const TAG_BATCH_SIZE = 50
+export const TAG_BATCH_SIZE = 40
 
 // Tag text comes out of a file, so it is untrusted. The sidecar cuts it to one line of
 // at most this length without characters that reverse the reading direction; main
@@ -32,6 +32,8 @@ export const fileTagsSchema = z.object({
   album: tagText,
   label: tagText,
   year: z.number().int().min(1000).max(9999).nullable(),
+  /** The first genre of the tag (TCON), an ID3v1 number named; at most 100 UTF-16 units. */
+  genre: tagText.refine((text) => text === null || text.length <= 100),
   hasCover: z.boolean()
 })
 

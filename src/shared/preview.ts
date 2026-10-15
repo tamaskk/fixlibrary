@@ -19,6 +19,8 @@ export const PREVIEW_FIELDS = [
   'bpm',
   'key',
   'styleId',
+  'secondaryStyleId',
+  'genre',
   'energy',
   'cover'
 ] as const
@@ -31,6 +33,7 @@ export const EDITABLE_PREVIEW_FIELDS = [
   'mix',
   'key',
   'styleId',
+  'secondaryStyleId',
   'energy'
 ] as const satisfies readonly PreviewField[]
 export type EditablePreviewField = (typeof EDITABLE_PREVIEW_FIELDS)[number]
@@ -107,6 +110,9 @@ export const previewValueSchemas = {
   /** The Camelot code; the musical name follows from it (`shared/keys.ts`). */
   key: z.enum(CAMELOT_KEYS).nullable(),
   styleId: z.number().int().positive().nullable(),
+  secondaryStyleId: z.number().int().positive().nullable(),
+  /** The genre the file's tag holds; shown, never proposed. */
+  genre: textValue,
   energy: z.number().int().min(1).max(10).nullable(),
   /** The name of a cover the app made, to be embedded; a track's own cover has none. */
   cover: z.string().regex(COVER_NAMES.cover).nullable()
@@ -133,6 +139,8 @@ const proposedFieldsSchema = z
     bpm: z.object({ value: previewValueSchemas.bpm, ...provenance }),
     key: z.object({ value: previewValueSchemas.key, ...provenance }),
     styleId: z.object({ value: previewValueSchemas.styleId, ...provenance }),
+    secondaryStyleId: z.object({ value: previewValueSchemas.secondaryStyleId, ...provenance }),
+    genre: z.object({ value: previewValueSchemas.genre, ...provenance }),
     energy: z.object({ value: previewValueSchemas.energy, ...provenance }),
     cover: z.object({ value: previewValueSchemas.cover, ...provenance })
   })
@@ -224,6 +232,11 @@ export interface PreviewRow {
   excluded: boolean
   /** Why the track was skipped; such a row is never written and cannot be edited. */
   error: TrackError | null
+  /**
+   * A style the classification proposes that the list does not have yet: created when
+   * the batch is approved. Null when the proposed style is one of the list.
+   */
+  newStyle: string | null
 }
 
 export const PREVIEW_FILTERS = ['all', 'warnings', 'lowConfidence', 'duplicates', 'errors'] as const
@@ -274,6 +287,11 @@ export const previewEditSchema = z.discriminatedUnion('field', [
   z.strictObject({ ...editTarget, field: z.literal('mix'), value: editText }),
   z.strictObject({ ...editTarget, field: z.literal('key'), value: z.string().max(3).nullable() }),
   z.strictObject({ ...editTarget, field: z.literal('styleId'), value: z.number().nullable() }),
+  z.strictObject({
+    ...editTarget,
+    field: z.literal('secondaryStyleId'),
+    value: z.number().nullable()
+  }),
   z.strictObject({ ...editTarget, field: z.literal('energy'), value: z.number().nullable() })
 ])
 export type PreviewEdit = z.input<typeof previewEditSchema>

@@ -16,6 +16,7 @@ import { createLookupStage, type LookupStageDependencies } from './lookup'
 import { createNamingStage } from './naming'
 import { createRenameStage } from './rename'
 import { createSetAsideStage } from './set-aside'
+import { createStyleStage, type StyleStageDependencies } from './style'
 import type { Stage } from './stage'
 import { createWriteTagsStage } from './write-tags'
 
@@ -24,7 +25,8 @@ export type StageDependencies = BpmKeyStageDependencies &
   CoverStageDependencies &
   DuplicatesStageDependencies &
   FingerprintStageDependencies &
-  LookupStageDependencies
+  LookupStageDependencies &
+  StyleStageDependencies
 
 /** Every stage the app has, in the order the function chooser lists them. */
 export function createStages(dependencies: StageDependencies): Stage[] {
@@ -32,6 +34,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createFingerprintStage(dependencies),
     createLookupStage(dependencies),
     createBpmKeyStage(dependencies),
+    createStyleStage(dependencies),
     createCoverStage(dependencies),
     createNamingStage(),
     createDuplicatesStage(dependencies),

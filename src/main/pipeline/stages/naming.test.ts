@@ -250,6 +250,8 @@ describe('the naming stage', () => {
       bpm: 124,
       key: '8A',
       styleId: null,
+      secondaryStyleId: null,
+      genre: null,
       energy: null,
       cover: null
     }
@@ -281,6 +283,8 @@ describe('the naming stage', () => {
         bpm: 124,
         key: '8A',
         styleId: null,
+        secondaryStyleId: null,
+        genre: null,
         energy: null,
         cover: null
       },
@@ -368,6 +372,8 @@ describe('the naming stage', () => {
         bpm: 134,
         key: '5A',
         styleId: null,
+        secondaryStyleId: null,
+        genre: null,
         energy: 9,
         cover: null
       },

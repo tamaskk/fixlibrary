@@ -12,6 +12,12 @@ type CellEditorProps = {
   label: string
   value: PreviewValue
   styles: readonly Style[]
+  /** For a style: what "none" is called in this column. */
+  noneLabel?: string
+  /** For a style: a style the classification proposes that the list does not have yet. */
+  newStyle?: string | null
+  /** For a style: one that cannot be chosen here, such as the primary for the secondary. */
+  excludedStyle?: number | null
   /**
    * `byKey` is true when the user saved with a key or a choice, false when the field
    * was simply left: the focus is then already where the user put it.
@@ -19,6 +25,9 @@ type CellEditorProps = {
   onCommit: (value: PreviewValue, byKey: boolean) => void
   onCancel: (byKey: boolean) => void
 }
+
+// The option of a style the list does not have yet; no style id looks like it.
+const NEW_STYLE = 'new'
 
 /** What was typed for an energy: a whole number, or nothing. Anything else is left to main to refuse. */
 function parseEnergy(text: string): PreviewValue {
@@ -36,6 +45,9 @@ export function CellEditor({
   label,
   value,
   styles,
+  noneLabel = 'Nincs stílus',
+  newStyle = null,
+  excludedStyle = null,
   onCommit,
   onCancel
 }: CellEditorProps): React.JSX.Element {
@@ -65,20 +77,25 @@ export function CellEditor({
           labelHidden
           autoFocus
           className="h-7 px-1"
-          value={value === null ? '' : String(value)}
+          value={value === null ? (newStyle !== null ? NEW_STYLE : '') : String(value)}
           onKeyDown={handleKeyDown}
           onBlur={() => settle(() => onCancel(false))}
           onChange={(event) => {
             const chosen = event.target.value
-            settle(() => onCommit(chosen === '' ? null : Number(chosen), true))
+            // Keeping the proposed new style changes nothing.
+            if (chosen === NEW_STYLE) settle(() => onCancel(true))
+            else settle(() => onCommit(chosen === '' ? null : Number(chosen), true))
           }}
         >
-          <option value="">Nincs stílus</option>
-          {styles.map((style) => (
-            <option key={style.id} value={style.id}>
-              {style.name}
-            </option>
-          ))}
+          {newStyle !== null && <option value={NEW_STYLE}>Új stílus: {newStyle}</option>}
+          <option value="">{noneLabel}</option>
+          {styles
+            .filter((style) => style.id !== excludedStyle)
+            .map((style) => (
+              <option key={style.id} value={style.id}>
+                {style.name}
+              </option>
+            ))}
         </Select>
       </div>
     )

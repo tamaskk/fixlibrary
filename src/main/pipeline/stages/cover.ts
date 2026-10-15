@@ -22,6 +22,8 @@ import { COVER_RPC_TIMEOUT_MS, STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { CONVERT_FILE_STAGE } from './convert'
 import { keptFingerprint } from './fingerprint'
 import { LOOKUP_STAGE } from './lookup'
+import { STYLE_STAGE, styleDetailsOf } from './style'
+import { findStyle, newStyleColor } from '../style'
 import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage, StageContext, StageResult } from './stage'
 import { COVER_STAGE, EMBED_COVER_STAGE, REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
@@ -99,6 +101,22 @@ export function placeholderSpec(
         ? proposed.value
         : null
   const styles = listStyles(db)
+  // A style the classification proposes that the list does not have yet gets, on
+  // approval, the color it is shown with here.
+  const details =
+    proposed?.source === 'claude' && proposed.value === null && !locked
+      ? styleDetailsOf(proposal)
+      : null
+  if (details?.newPrimary) {
+    return {
+      artist: tags.artist ?? null,
+      title: tags.title ?? null,
+      color:
+        findStyle(details.newPrimary, styles)?.color ??
+        details.newColor ??
+        newStyleColor(details.newPrimary, styles)
+    }
+  }
   const style =
     styles.find((each) => each.id === styleId) ??
     styles.find((each) => each.name === UNSORTED_STYLE_NAME)
@@ -243,6 +261,7 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
             durationS: track.durationMs === null ? null : track.durationMs / 1000,
             artist: track.artist,
             title: track.title,
+            mix: track.mix,
             fileName: basename(track.path)
           },
           clients,
@@ -302,8 +321,9 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
     resource: 'network',
     dependsOn: [],
     // A lookup in the same run may name the track better, and asks MusicBrainz and
-    // Discogs first: what the cover needs of them is kept by then.
-    after: [LOOKUP_STAGE],
+    // Discogs first: what the cover needs of them is kept by then. A placeholder
+    // takes the color of the style the classification of the same run decided.
+    after: [LOOKUP_STAGE, STYLE_STAGE],
     selectable: true,
     timeoutMs: STAGE_TIMEOUTS_MS.cover,
     warnings: ['NO_COVER'],

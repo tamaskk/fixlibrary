@@ -1,6 +1,6 @@
 // What the lookup clients keep of an answer, so that a request is made once.
 import type { z } from 'zod'
-import type { LookupRequestOptions } from './http'
+import { LookupError, type LookupRequestOptions, type LookupSource } from './http'
 
 /** Kept answers by source and query. The database behind it belongs to the caller. */
 export interface LookupCache {
@@ -12,6 +12,8 @@ export interface LookupCache {
 export interface LookupOptions extends LookupRequestOptions {
   /** Ask the service again, whatever is kept. */
   refresh?: boolean
+  /** Ask no service: what is not kept counts as a service that could not be asked. */
+  keptOnly?: boolean
 }
 
 /**
@@ -30,6 +32,7 @@ export async function cachedAnswer<T>(
     const kept = cache.get(source, queryKey, schema)
     if (kept !== undefined) return kept
   }
+  if (options.keptOnly) throw new LookupError(source as LookupSource, 'unreachable')
   const answer = await ask()
   cache.put(source, queryKey, answer)
   return answer

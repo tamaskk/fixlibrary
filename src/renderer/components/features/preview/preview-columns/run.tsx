@@ -1,6 +1,11 @@
 import { formatPercent } from '@/lib/format'
 import { SOURCE_LABELS } from '@/lib/preview-labels'
-import { PREVIEW_FIELDS, type PreviewRow, type PreviewValue } from '@shared/preview'
+import {
+  PREVIEW_FIELDS,
+  type PreviewCell,
+  type PreviewRow,
+  type PreviewValue
+} from '@shared/preview'
 import { formatKey } from '@shared/keys'
 import { useCoverThumbsStore } from '@/stores/cover-thumbs-store'
 import { DiffValue } from './cells'
@@ -11,6 +16,25 @@ import type { PreviewColumn, PreviewColumnContext } from './types'
 
 function styleName(context: PreviewColumnContext): (value: PreviewValue) => string | null {
   return (value) => (typeof value === 'number' ? (context.styleNames.get(value) ?? null) : null)
+}
+
+// Stands for a style the list does not have yet in the cell of a row: no style has it.
+const NEW_STYLE = -1
+
+/** The style cell, with a style the classification named but the list lacks as its value. */
+function styleCell(row: PreviewRow): PreviewCell {
+  const cell = row.cells.styleId
+  return row.newStyle === null ? cell : { ...cell, after: NEW_STYLE, changed: true }
+}
+
+function styleOrNew(
+  row: PreviewRow,
+  context: PreviewColumnContext
+): (value: PreviewValue) => string | null {
+  return (value) =>
+    value === NEW_STYLE && row.newStyle !== null
+      ? `Új stílus: ${row.newStyle}`
+      : styleName(context)(value)
 }
 
 /** `8A Am`: a key in both notations, as the file name will hold it. */
@@ -137,11 +161,33 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
   {
     id: 'style',
     header: 'Stílus',
+    track: '128px',
+    minWidth: 128,
+    edit: { field: 'styleId', editor: 'style' },
+    render: (row, context) => <DiffValue cell={styleCell(row)} format={styleOrNew(row, context)} />,
+    text: (row, context) => diffText(styleCell(row), styleOrNew(row, context))
+  },
+  {
+    id: 'secondaryStyle',
+    header: '2. stílus',
     track: '96px',
     minWidth: 96,
-    edit: { field: 'styleId', editor: 'style' },
-    render: (row, context) => <DiffValue cell={row.cells.styleId} format={styleName(context)} />,
-    text: (row, context) => diffText(row.cells.styleId, styleName(context))
+    wideOnly: true,
+    edit: { field: 'secondaryStyleId', editor: 'style' },
+    render: (row, context) => (
+      <DiffValue cell={row.cells.secondaryStyleId} format={styleName(context)} />
+    ),
+    text: (row, context) => diffText(row.cells.secondaryStyleId, styleName(context))
+  },
+  {
+    id: 'genre',
+    header: 'Genre',
+    track: '96px',
+    minWidth: 96,
+    wideOnly: true,
+    // What the file's tag says: the classification went by it, nothing changes it here.
+    render: (row) => <DiffValue cell={row.cells.genre} />,
+    text: (row) => diffText(row.cells.genre)
   },
   {
     id: 'energy',

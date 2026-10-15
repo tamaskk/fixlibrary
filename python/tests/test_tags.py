@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from mutagen.aiff import AIFF
-from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TPUB
+from mutagen.id3 import APIC, ID3, TALB, TCON, TDRC, TIT2, TPE1, TPUB
 from mutagen.wave import WAVE
 
 from fixlib_py import server, tags
@@ -31,6 +31,7 @@ def test_reads_tags_and_audio_properties_of_an_mp3(tmp_path: Path) -> None:
     id3.add(TALB(encoding=3, text=["Album"]))
     id3.add(TPUB(encoding=3, text=["Kiadó"]))
     id3.add(TDRC(encoding=3, text=["2024-05-01"]))
+    id3.add(TCON(encoding=3, text=["Afro House"]))
     id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=b"\xff\xd8\xff"))
     id3.save(path, v2_version=3)
 
@@ -47,6 +48,7 @@ def test_reads_tags_and_audio_properties_of_an_mp3(tmp_path: Path) -> None:
         "album": "Album",
         "label": "Kiadó",
         "year": 2024,
+        "genre": "Afro House",
         "hasCover": True,
     }
 
@@ -279,3 +281,43 @@ def test_tags_read_answers_over_the_protocol(tmp_path: Path) -> None:
 
     assert response["id"] == 5
     assert response["result"]["files"][0]["readable"] is True
+
+
+@pytest.mark.parametrize(
+    ("stored", "genre"),
+    [(["(17)"], "Rock"), (["13"], "Pop"), (["House", "Techno"], "House/Techno"), (["  "], None)],
+)
+def test_reads_the_first_genre_by_name(
+    tmp_path: Path, stored: list[str], genre: str | None
+) -> None:
+    path = copy_fixture("sine.mp3", tmp_path)
+    id3 = ID3()
+    id3.add(TCON(encoding=3, text=stored))
+    id3.save(path, v2_version=3)
+
+    assert tags.read_file_tags(str(path))["genre"] == genre
+
+
+@pytest.mark.parametrize("letter", ["Deep ", "\U0001d403"])
+def test_cuts_a_genre_to_a_hundred_utf16_units(tmp_path: Path, letter: str) -> None:
+    path = copy_fixture("sine.mp3", tmp_path)
+    id3 = ID3()
+    id3.add(TCON(encoding=3, text=[letter * 80]))
+    id3.save(path, v2_version=3)
+
+    genre = tags.read_file_tags(str(path))["genre"]
+
+    assert genre is not None
+    assert len(genre.encode("utf-16-le")) // 2 <= 100
+
+
+def test_cuts_tag_text_to_what_the_app_takes_in_utf16_units(tmp_path: Path) -> None:
+    path = copy_fixture("sine.mp3", tmp_path)
+    id3 = ID3()
+    id3.add(TIT2(encoding=3, text=["\U0001f3b5" * 200]))
+    id3.save(path, v2_version=3)
+
+    title = tags.read_file_tags(str(path))["title"]
+
+    assert title is not None
+    assert len(title.encode("utf-16-le")) // 2 <= 300

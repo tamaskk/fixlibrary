@@ -201,6 +201,7 @@ function unreadableTags(path: string): FileTags {
     album: null,
     label: null,
     year: null,
+    genre: null,
     hasCover: false
   }
 }
@@ -277,6 +278,31 @@ async function readBatch(
   return read
 }
 
+// Set for a track whose tags were read by a scan that reads the genre (T-021): the
+// tracks of a library scanned before are read once more for it.
+const GENRE_READ = 'genre'
+
+/** What a scan says of a track it read: how the read went, and that the genre is known. */
+function readStatus(
+  scan: 'done' | 'failed' | 'skipped'
+): Record<string, 'done' | 'failed' | 'skipped'> {
+  return scan === 'done' ? { scan, [GENRE_READ]: 'done' } : { scan }
+}
+
+/**
+ * The stage status of a track after a scan read it: what other stages recorded stays,
+ * and the genre counts as read only while the read went well, so that a file that
+ * cannot be read now is not taken for one whose genre is known.
+ */
+function mergedStatus(
+  known: Record<string, 'pending' | 'done' | 'failed' | 'skipped'>,
+  scan: 'done' | 'failed' | 'skipped'
+): Record<string, 'pending' | 'done' | 'failed' | 'skipped'> {
+  const merged = { ...known, ...readStatus(scan) }
+  if (scan !== 'done') delete merged[GENRE_READ]
+  return merged
+}
+
 function tagFields(tags: FileTags): TrackChanges {
   return {
     durationMs: tags.durationMs,
@@ -287,6 +313,7 @@ function tagFields(tags: FileTags): TrackChanges {
     album: tags.album,
     label: tags.label,
     year: tags.year,
+    genre: tags.genre,
     coverStatus: !tags.readable ? 'unknown' : tags.hasCover ? 'embedded' : 'missing'
   }
 }
@@ -412,7 +439,9 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
         // A file that could not be read is tried again: the cause may have been the
         // drive or the reader, not the file. A file that ran out of time (`skipped`)
         // is not, until it changes: trying it costs minutes on every scan.
-        known.stageStatus.scan !== 'failed'
+        known.stageStatus.scan !== 'failed' &&
+        // A track read before the scan knew the genre is read once more for it.
+        (known.stageStatus.scan !== 'done' || known.stageStatus[GENRE_READ] === 'done')
       if (!same) {
         toRead.push(file)
         continue
@@ -457,13 +486,18 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
             format: file.format,
             ...fileFields(file),
             ...tagFields(fileTags),
-            stageStatus: { scan: scanStatus }
+            stageStatus: readStatus(scanStatus)
           })
           return
         }
         const sameFile =
           known.fileSizeBytes === file.sizeBytes && known.fileMtimeMs === file.mtimeMs
-        if (sameFile && known.stageStatus.scan === scanStatus && !known.fileMissing) {
+        if (
+          sameFile &&
+          known.stageStatus.scan === scanStatus &&
+          known.stageStatus[GENRE_READ] === readStatus(scanStatus)[GENRE_READ] &&
+          !known.fileMissing
+        ) {
           // Tried again and still unreadable: nothing about the track has changed.
           summary.unchanged += 1
           return
@@ -479,8 +513,8 @@ async function runScan(dependencies: ScanDependencies): Promise<Result<ScanSumma
             ...fileFields(file),
             ...fromTags,
             fileMissing: false,
-            // Only the scan's own entry changes; what other stages recorded stays.
-            stageStatus: { ...known.stageStatus, scan: scanStatus }
+            // Only the scan's own entries change; what other stages recorded stays.
+            stageStatus: mergedStatus(known.stageStatus, scanStatus)
           }
         })
       })

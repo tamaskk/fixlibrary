@@ -28,7 +28,10 @@ export const STAGE_TIMEOUTS_MS = {
   // Up to three services asked, a picture downloaded and a cover made of it.
   cover: 60 * SECOND,
   // The backup or the copy of the whole file, and then the writing of its cover.
-  embedCover: 6 * MINUTE
+  embedCover: 6 * MINUTE,
+  // One call of twenty tracks, its second try and one more for an answer left out,
+  // calls going one at a time.
+  style: 7 * MINUTE
 } as const
 
 export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS

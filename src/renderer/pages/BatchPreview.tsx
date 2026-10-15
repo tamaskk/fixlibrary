@@ -17,6 +17,7 @@ import { usePipelineStore } from '@/stores/pipeline-store'
 import { countRows, shownRows, usePreviewStore, type PreviewTab } from '@/stores/preview-store'
 import { DUPLICATES_FOLDER } from '@shared/duplicates'
 import { PREVIEW_FILTERS, type PreviewFilter } from '@shared/preview'
+import { MAX_STYLES, newStylesTaken, styleKey } from '@shared/settings'
 
 function parseFilter(value: string): PreviewFilter {
   return PREVIEW_FILTERS.find((filter) => filter === value) ?? 'all'
@@ -81,6 +82,17 @@ export function BatchPreview(): React.JSX.Element {
     [rows, tab, filter]
   )
   const counts = React.useMemo(() => countRows(rows ?? []), [rows])
+  // The styles an approval creates, by the rule main creates them by: the first five
+  // the rows that are written name, as names are compared.
+  const newStyles = React.useMemo(() => {
+    const named = (rows ?? []).flatMap((row) =>
+      row.newStyle !== null && !row.excluded && row.error === null ? [row.newStyle] : []
+    )
+    const taken = newStylesTaken(named)
+    const takenKeys = new Set(taken.map(styleKey))
+    const left = new Set(named.map(styleKey).filter((key) => !takenKeys.has(key))).size
+    return { taken, left, full: styles.length + taken.length > MAX_STYLES }
+  }, [rows, styles])
   // The copies an approval moves out of the library: not kept, and not taken out.
   const setAside = React.useMemo(() => {
     if (!batch?.findsDuplicates) return 0
@@ -393,6 +405,9 @@ export function BatchPreview(): React.JSX.Element {
                 mode={batch.mode}
                 counts={counts}
                 setAside={setAside}
+                newStyles={newStyles.taken}
+                newStylesLeft={newStyles.left}
+                stylesFull={newStyles.full}
                 busy={busy}
                 onApprove={async () => {
                   // The run panel of the Library page shows the apply phase.
