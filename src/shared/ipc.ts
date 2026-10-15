@@ -38,7 +38,7 @@ import type {
   Style,
   StyleInput
 } from './settings'
-import type { RekordboxXmlWritten } from './rekordbox'
+import type { RekordboxExportCheck, RekordboxXmlWritten } from './rekordbox'
 import type { ToolCheck } from './tools'
 
 export const IPC_CHANNELS = {
@@ -82,7 +82,8 @@ export const IPC_CHANNELS = {
   previewApprove: 'preview:approve',
   previewDiscard: 'preview:discard',
   previewUndoLast: 'preview:undoLast',
-  rekordboxWriteXml: 'rekordbox:writeXml'
+  rekordboxWriteXml: 'rekordbox:writeXml',
+  rekordboxReadExport: 'rekordbox:readExport'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -218,5 +219,10 @@ export interface FixLibraryApi {
      * import. Refused while files are being changed or scanned.
      */
     writeXml: () => Promise<Result<RekordboxXmlWritten>>
+    /**
+     * Reads the newest XML Rekordbox exported into the folder Settings names, keeps
+     * the grids of the library's tracks, and says what is missing or not analysed.
+     */
+    readExport: () => Promise<Result<RekordboxExportCheck>>
   }
 }
