@@ -44,6 +44,12 @@ export interface PythonBridgeOptions {
   fpcalcPath?: string
   /** The one folder whose covers the sidecar reads and writes. Without it, covers fail per track. */
   coversDir?: string
+  /** Where the stem envelopes are kept (T-028). */
+  stemsDir?: string
+  /** Where the model weights are (scripts/fetch-demucs-weights.sh). */
+  modelsDir?: string
+  /** Torch's own cache, under the app's data: never `~/.cache`. */
+  torchHome?: string
   onProgress?: (progress: RpcProgress) => void
   /** What the bridge itself has to say: crashes, restarts, rejected lines. */
   log?: (message: string) => void
@@ -135,6 +141,9 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
     if (options.ffmpegPath !== undefined) env['FIXLIB_FFMPEG'] = options.ffmpegPath
     if (options.fpcalcPath !== undefined) env['FIXLIB_FPCALC'] = options.fpcalcPath
     if (options.coversDir !== undefined) env['FIXLIB_COVERS_DIR'] = options.coversDir
+    if (options.stemsDir !== undefined) env['FIXLIB_STEMS_DIR'] = options.stemsDir
+    if (options.modelsDir !== undefined) env['FIXLIB_MODELS_DIR'] = options.modelsDir
+    if (options.torchHome !== undefined) env['TORCH_HOME'] = options.torchHome
     for (const name of INHERITED_ENV) {
       const value = process.env[name]
       if (value !== undefined) env[name] = value

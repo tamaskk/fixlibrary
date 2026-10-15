@@ -47,6 +47,7 @@ import { createMusicBrainzClient } from './services/lookup/musicbrainz'
 import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
 import { createCoverStore } from './services/covers'
+import { createStemsStore, stemModelInstalled } from './services/stems-store'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import {
   createMountedVolumesCache,
@@ -243,7 +244,12 @@ function startPythonSidecar(): void {
     // The sidecar decodes and fingerprints with the app's own tools and with nothing else.
     ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command,
     fpcalcPath: resolveToolCommand('fpcalc', locations)?.command,
-    coversDir: coversFolder()
+    coversDir: coversFolder(),
+    stemsDir: stemsFolder(),
+    modelsDir: modelsFolder(),
+    // Nothing of the app downloads into it; set so that no part of torch ever writes to
+    // `~/.cache` instead.
+    torchHome: join(app.getPath('userData'), 'torch')
   })
   pythonBridge.start()
   pythonBridge
@@ -271,6 +277,17 @@ function isGeneratedFile(path: string): boolean {
 /** Where covers are kept between runs: a folder of the app's own, never of the library. */
 function coversFolder(): string {
   return join(app.getPath('userData'), 'covers')
+}
+
+function stemsFolder(): string {
+  return join(app.getPath('userData'), 'stems')
+}
+
+/** `resources/models` in development; the packaged app gets its models with T-041. */
+function modelsFolder(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'models')
+    : join(app.getAppPath(), 'resources/models')
 }
 
 /**
@@ -308,6 +325,8 @@ function availableStages(db: AppDatabase): Stage[] {
         })
       },
       covers: createCoverStore(coversFolder()),
+      stems: createStemsStore(stemsFolder()),
+      modelInstalled: () => stemModelInstalled(modelsFolder()),
       coverClients: { itunes: createITunesClient({ http, cache }), images: http },
       claude: () => claudeService
     })

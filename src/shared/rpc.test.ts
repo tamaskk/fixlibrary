@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   BPM_KEY_ANALYZER_VERSION,
+  STEMS_ANALYZER_VERSION,
   bpmKeyResultSchema,
   encodeRpcRequest,
   fileTagsSchema,
@@ -240,5 +241,23 @@ describe('bpmKeyResultSchema', () => {
 
     // Assert
     expect(version).toBe(BPM_KEY_ANALYZER_VERSION)
+  })
+})
+
+describe('analysis.stems', () => {
+  it('names the same analyzer version as the sidecar', async () => {
+    // Arrange
+    const { readFileSync } = await import('fs')
+    const { join } = await import('path')
+    const sidecar = readFileSync(
+      join(__dirname, '../../python/fixlib_py/analysis/stems.py'),
+      'utf8'
+    )
+
+    // Act
+    const version = /^ANALYZER_VERSION = "([^"]+)"$/m.exec(sidecar)?.[1]
+
+    // Assert
+    expect(version).toBe(STEMS_ANALYZER_VERSION)
   })
 })

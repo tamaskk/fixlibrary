@@ -24,6 +24,9 @@ SAMPLE_RATE = 44_100
 # Tempo and key do not change with what comes after this, and it bounds what one
 # job decodes: 53 MB as it leaves ffmpeg, twice that as floats.
 MAX_SECONDS = 10 * 60
+# The longest stretch any caller may ask for; each asks for its own (decode_mono for
+# MAX_SECONDS, the stems for theirs). Twenty minutes of 16 bit stereo are 212 MB.
+MAX_DECODE_SECONDS = 20 * 60 + 1
 DECODE_TIMEOUT_S = 60
 # The most ffmpeg may ask for in one allocation. Decoding needs a fraction of this;
 # a header that claims an absurd sample rate makes the resampler ask for gigabytes.
@@ -126,14 +129,18 @@ def _samples_of_wav(data: bytes) -> memoryview:
 
 
 def decode_wav(
-    path: str, channels: int, seconds: int, stop: threading.Event | None = None
+    path: str,
+    channels: int,
+    seconds: int,
+    stop: threading.Event | None = None,
+    timeout: float = DECODE_TIMEOUT_S,
 ) -> bytes:
     """At most the first `seconds` of a file as a 16 bit WAV stream at SAMPLE_RATE.
 
     The stream is what ffmpeg writes to a pipe: its header cannot hold its sizes.
     ffmpeg is ended when `stop` is set (ToolStopped).
     """
-    if channels not in (1, 2) or not 1 <= seconds <= MAX_SECONDS:
+    if channels not in (1, 2) or not 1 <= seconds <= MAX_DECODE_SECONDS:
         raise ValueError("unsupported decoding request")
     demuxer = _DEMUXERS.get(os.path.splitext(path)[1].lower())
     if demuxer is None:
@@ -176,7 +183,7 @@ def decode_wav(
     if file is None:
         raise DecodeError("not a regular file")
     with file:
-        done = run_tool(command, stdin=file, timeout=DECODE_TIMEOUT_S, stop=stop)
+        done = run_tool(command, stdin=file, timeout=timeout, stop=stop)
     if done.returncode != 0:
         # What ffmpeg says can quote the file; it goes to the log as one clean line.
         said = _CONTROL_CHARACTERS.sub(" ", done.stderr.decode("utf-8", "replace")).strip()
