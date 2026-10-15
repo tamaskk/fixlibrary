@@ -1,0 +1,37 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`writeRekordboxXml > writes the collection, the style playlists and the Playlists folder of five tracks 1`] = `
+"<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <PRODUCT Name="FixLibrary" Version="0.0.1" Company="FixLibrary"/>
+  <COLLECTION Entries="5">
+    <TRACK TrackID="1" Name="Track 1 (Original Mix)" Artist="Bicep" Album="Isles" Genre="Melodic House" Kind="MP3 File" Size="12345678" TotalTime="300" Year="2021" AverageBpm="124.00" BitRate="320" SampleRate="44100" Comments="E7 | Afro House" Label="Ninja Tune" Mix="Original Mix" Tonality="Am" Location="file://localhost/Volumes/DJ/Music/Melodic%20House/Bicep%20-%20Track%201.mp3">
+      <POSITION_MARK Name="Start" Type="0" Start="0.500" Num="0" Red="34" Green="197" Blue="94"/>
+      <POSITION_MARK Name="Drop 1" Type="0" Start="61.938" Num="3" Red="239" Green="68" Blue="68"/>
+    </TRACK>
+    <TRACK TrackID="2" Name="Track 2 (Original Mix)" Artist="Bicep" Album="Isles" Genre="Tech House" Kind="AIFF File" Size="12345678" TotalTime="300" Year="2021" AverageBpm="127.50" BitRate="320" SampleRate="44100" Comments="E7 | Afro House" Label="Ninja Tune" Mix="Original Mix" Tonality="Am" Location="file://localhost/Volumes/DJ/Music/Melodic%20House/Bicep%20-%20Track%202.mp3"/>
+    <TRACK TrackID="3" Name="Árvíztűrő tükörfúrógép" Artist="Ünnep &amp; &quot;Barátok&quot; &lt;live&gt;" Album="Isles" Genre="Melodic House" Kind="MP3 File" Size="12345678" TotalTime="300" Year="2021" AverageBpm="124.00" BitRate="320" SampleRate="44100" Comments="E7 | Afro House" Label="Ninja Tune" Mix="Original Mix" Tonality="Am" Location="file://localhost/Volumes/DJ/Music/Unsorted/%C3%9Cnnep%20-%20%C3%81rv%C3%ADzt%C5%B1r%C5%91%20%231%20100%25.mp3"/>
+    <TRACK TrackID="4" Name="Track 4 (Original Mix)" Genre="Melodic House" Kind="MP3 File" Location="file://localhost/Volumes/DJ/Music/Melodic%20House/Bicep%20-%20Track%204.mp3"/>
+    <TRACK TrackID="5" Name="Track 5 (Original Mix)" Artist="Bicep" Album="Isles" Genre="Melodic House" Kind="WAV File" Size="12345678" TotalTime="300" Year="2021" AverageBpm="124.00" BitRate="320" SampleRate="44100" Comments="E5" Label="Ninja Tune" Mix="Original Mix" Tonality="Am" Location="file://localhost/Volumes/DJ/Music/Melodic%20House/Bicep%20-%20Track%205.mp3"/>
+  </COLLECTION>
+  <PLAYLISTS>
+    <NODE Type="0" Name="ROOT" Count="4">
+      <NODE Name="Melodic House" Type="1" KeyType="0" Entries="2">
+        <TRACK Key="1"/>
+        <TRACK Key="3"/>
+      </NODE>
+      <NODE Name="Tech House" Type="1" KeyType="0" Entries="1">
+        <TRACK Key="2"/>
+      </NODE>
+      <NODE Name="Unsorted" Type="1" KeyType="0" Entries="0"/>
+      <NODE Type="0" Name="Playlists" Count="1">
+        <NODE Name="Friday warm-up" Type="1" KeyType="0" Entries="2">
+          <TRACK Key="5"/>
+          <TRACK Key="1"/>
+        </NODE>
+      </NODE>
+    </NODE>
+  </PLAYLISTS>
+</DJ_PLAYLISTS>
+"
+`;
