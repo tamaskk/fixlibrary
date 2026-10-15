@@ -170,8 +170,15 @@ Icon buttons
 
 Navigation
 
-- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted.
+- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Rekordbox, Beállítások.
 - Current page: surface-hover background, text color and a straight 2px primary left edge, marked with `aria-current="page"`. Focus ring as for buttons.
+
+Rekordbox wizard
+
+- The page "Rekordbox" (H1) has the steps on the left, in a column of 256px (`nav` "A varázsló lépései"): one block per phase ("Egyszeri beállítás", shown until it was done once and while the user is at it again; "A fázis: trackek"; "B fázis: hot cue-k"), its title in the Label role, then the steps as a numbered list of rows of at least 32px, Small, text-muted: a check in success for a step that is done, the only rows that are controls (a button that goes back to it, tooltip "Vissza ehhez a lépéshez", at 50% while the wizard is busy), a dotted circle for the current step, a circle for the steps to come, a lock for a step of a locked phase. The current step is marked with `aria-current="step"`, surface-hover and text color, Small 500; the state is also said in words for assistive technology.
+- On the right, at most 720px, a card for the current step: its title (H2), what to do as a numbered list in Body, the path spelled out in the Data role where the step names one, the XML path or the export folder (with "Útvonal másolása", Secondary, which copies it in the main process), the app's own action as a Secondary button ("XML írása", "Export ellenőrzése"), a caption in Small text-muted, and "Kész" as the page's one Primary button. "Kész" of the XML step is enabled only once the main process sees the XML written since the step was reached, and while it is not, "Előbb írd meg az XML-t." stands next to it in Small text-muted; the check moves on by itself. Under the card a `role="status"` element says what the last action did; the loading text sits in a status element that is in the page from the start.
+- The check shows the line of what was read, then per problem a warning line, the first entries in the Data role (and "és még <n>"), and a Secondary button "Vissza: <step>"; what kept the check from passing otherwise is a warning line too: "Ez az export régebbi, mint az export lépése. Exportáld újra a collectiont, és ellenőrizd újra.", "<n> bejegyzés nem csatlakoztatott lemezen van, ezek nincsenek ellenőrizve. Csatlakoztasd a lemezt, és ellenőrizd újra.", "<n> bejegyzést nem lehetett ellenőrizni (hálózati mappa vagy olvasási hiba).", "<n> bejegyzés nem olvasható.". With no export the danger line says "Nem találok Rekordbox exportot. Exportáld a collectiont az export mappájába, és próbáld újra." Only a clean check ends phase A: then the card "Az A fázis kész" says so, the locked phase B is a neutral line, and "Az A fázis újrakezdése" (Secondary) starts it again.
+- Menu and command names of Rekordbox stay in English, in quotes, as Rekordbox 7.2.7 shows them; the texts are in `pages/rekordbox-wizard-steps.ts`.
 
 Status lines
 

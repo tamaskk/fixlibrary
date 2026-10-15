@@ -278,3 +278,9 @@ export async function saveRekordboxXml(
   }
   return target
 }
+
+/** When the XML the app writes in this folder was last changed, or null when it is not there. */
+export async function xmlModifiedAt(folder: string): Promise<number | null> {
+  const found = await lstat(join(folder, REKORDBOX_XML_FILE_NAME)).catch(() => null)
+  return found?.isFile() ? found.mtimeMs : null
+}

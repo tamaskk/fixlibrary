@@ -83,7 +83,11 @@ const api: FixLibraryApi = {
   },
   rekordbox: {
     writeXml: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWriteXml),
-    readExport: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxReadExport)
+    readExport: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxReadExport),
+    wizardView: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardView),
+    wizardAction: (action) => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardAction, action),
+    wizardCheck: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardCheck),
+    copyPath: (which) => ipcRenderer.invoke(IPC_CHANNELS.rekordboxCopyPath, which)
   }
 }
 

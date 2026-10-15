@@ -39,6 +39,13 @@ import type {
   StyleInput
 } from './settings'
 import type { RekordboxExportCheck, RekordboxXmlWritten } from './rekordbox'
+import type {
+  CopyablePath,
+  WizardAction,
+  WizardCheckResult,
+  WizardState,
+  WizardView
+} from './rekordbox-wizard'
 import type { ToolCheck } from './tools'
 
 export const IPC_CHANNELS = {
@@ -83,7 +90,11 @@ export const IPC_CHANNELS = {
   previewDiscard: 'preview:discard',
   previewUndoLast: 'preview:undoLast',
   rekordboxWriteXml: 'rekordbox:writeXml',
-  rekordboxReadExport: 'rekordbox:readExport'
+  rekordboxReadExport: 'rekordbox:readExport',
+  rekordboxWizardView: 'rekordbox:wizardView',
+  rekordboxWizardAction: 'rekordbox:wizardAction',
+  rekordboxWizardCheck: 'rekordbox:wizardCheck',
+  rekordboxCopyPath: 'rekordbox:copyPath'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -224,5 +235,16 @@ export interface FixLibraryApi {
      * the grids of the library's tracks, and says what is missing or not analysed.
      */
     readExport: () => Promise<Result<RekordboxExportCheck>>
+    /** Where the user is in the wizard, and the paths its steps name. */
+    wizardView: () => Promise<WizardView>
+    /** A step done, back to a step, or phase A again. */
+    wizardAction: (action: WizardAction) => Promise<Result<WizardState>>
+    /** Reads the newest export and judges it; a clean one ends phase A. */
+    wizardCheck: () => Promise<Result<WizardCheckResult>>
+    /**
+     * Copies the app's XML path or the export folder to the clipboard; the page names
+     * which, the main process the path. False when asked again too soon.
+     */
+    copyPath: (which: CopyablePath) => Promise<boolean>
   }
 }
