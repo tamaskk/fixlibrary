@@ -29,6 +29,8 @@ __pycache__
 # Downloaded or built binaries (scripts/fetch-binaries.sh)
 resources/bin/*
 resources/.bin.*
+# Model weights (scripts/fetch-demucs-weights.sh)
+resources/models
 build/python-runtime
 
 # Real music files never enter the repo
