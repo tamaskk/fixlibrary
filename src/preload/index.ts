@@ -80,6 +80,9 @@ const api: FixLibraryApi = {
     approve: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewApprove, batchId),
     discard: (batchId) => ipcRenderer.invoke(IPC_CHANNELS.previewDiscard, batchId),
     undoLast: () => ipcRenderer.invoke(IPC_CHANNELS.previewUndoLast)
+  },
+  rekordbox: {
+    writeXml: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWriteXml)
   }
 }
 

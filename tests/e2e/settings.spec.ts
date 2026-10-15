@@ -145,3 +145,32 @@ test('settings are saved, survive a restart, and the API key is never stored as 
     await second.app.close()
   }
 })
+
+test('writes the Rekordbox XML into the chosen folder and says where it is', async () => {
+  const xmlFolder = join(folder, 'Rekordbox')
+  mkdirSync(xmlFolder)
+  const { app, page } = await openSettings()
+  try {
+    const rekordbox = page.getByRole('region', { name: 'Rekordbox' })
+    // The folder dialog belongs to the OS; answer it from the main process. A chosen
+    // folder keeps the test away from the real ~/Documents.
+    await app.evaluate(({ dialog }, picked) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+    }, xmlFolder)
+    await rekordbox
+      .getByRole('button', { name: 'Az app által írt XML mappája kiválasztása' })
+      .click()
+    await expect(rekordbox.getByTitle(xmlFolder, { exact: true })).toBeVisible()
+
+    await rekordbox.getByRole('button', { name: 'XML írása' }).click()
+
+    await expect(rekordbox.getByText('Az XML elkészült: 0 track.')).toBeVisible()
+    await expect(rekordbox.getByText(join(xmlFolder, 'fixlibrary.xml'))).toBeVisible()
+    const xml = readFileSync(join(xmlFolder, 'fixlibrary.xml'), 'utf8')
+    expect(xml).toContain('<COLLECTION Entries="0"/>')
+    expect(xml).toContain('<NODE Type="0" Name="Playlists" Count="0"/>')
+    expect(readdirSync(xmlFolder)).toEqual(['fixlibrary.xml'])
+  } finally {
+    await app.close()
+  }
+})

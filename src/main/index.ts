@@ -8,6 +8,7 @@ import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
+import { registerRekordboxIpc } from './ipc/rekordbox'
 import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
@@ -19,7 +20,12 @@ import { createLibraryScanner } from './pipeline/scanner'
 import { createLookupCache } from './pipeline/lookup-cache'
 import { createSecretStore, pickSecretEnv, type SecretStore } from './pipeline/secrets'
 import { waitForFileWork, type FileWork } from './pipeline/shutdown'
-import { ensureDefaultStyles, readSettings, resolveEffectiveSettings } from './pipeline/settings'
+import {
+  ensureDefaultStyles,
+  readSettings,
+  resolveEffectiveSettings,
+  type SettingsEnvironment
+} from './pipeline/settings'
 import { createStages, selectableStages, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
 import type { Stage } from './pipeline/stages/stage'
@@ -40,7 +46,11 @@ import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
 import { createCoverStore } from './services/covers'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
-import { createMountedVolumesCache, listMountedVolumes } from './services/volumes'
+import {
+  createMountedVolumesCache,
+  isDocumentsInICloud,
+  listMountedVolumes
+} from './services/volumes'
 import { AppError } from '@shared/errors'
 import { FIXED_RESOURCE_LIMITS } from '@shared/pipeline'
 import { SECRET_NAMES, type SecretName } from '@shared/settings'
@@ -138,6 +148,19 @@ function stopAfterUncaughtException(): void {
   app.exit(1)
 }
 
+/** The facts about this machine the settings go by. */
+function createSettingsEnvironment(): SettingsEnvironment {
+  return {
+    homeDir: homedir(),
+    cpuCount: cpus().length,
+    appDataDir: app.getPath('userData'),
+    // Asked afresh every time: iCloud can be turned on while the app runs.
+    get documentsSynced() {
+      return isDocumentsInICloud(homedir())
+    }
+  }
+}
+
 function registerSettingsAndSystemIpc(): void {
   const db = getDatabase()
   ensureDefaultStyles(db)
@@ -159,7 +182,7 @@ function registerSettingsAndSystemIpc(): void {
   registerSettingsIpc({
     db,
     secrets,
-    environment: { homeDir: homedir(), cpuCount: cpus().length }
+    environment: createSettingsEnvironment()
   })
   const cli = createClaudeCli({
     // The app's own folder; every call runs in a new, empty folder inside it.
@@ -294,7 +317,7 @@ function availableStages(db: AppDatabase): Stage[] {
 
 function registerLibraryAndPipeline(): void {
   const db = getDatabase()
-  const environment = { homeDir: homedir(), cpuCount: cpus().length }
+  const environment = createSettingsEnvironment()
   // Set once the file rules exist, a few lines below.
   let reconcileBeforeScan: (() => Promise<number>) | null = null
   let restoredOriginals: (() => Promise<ReadonlySet<string>>) | null = null
@@ -401,6 +424,14 @@ function registerLibraryAndPipeline(): void {
     listMountedVolumes: createMountedVolumesCache(1000)
   })
   registerPipelineIpc({ orchestrator: runs, functions })
+  registerRekordboxIpc({
+    db,
+    environment,
+    listMountedVolumes,
+    appVersion: app.getVersion(),
+    // The paths in the XML must be where the files are: not while a batch moves them.
+    isBusy: () => runs.changingFiles() || scanner.isRunning()
+  })
   registerPreviewIpc(
     createPreview({
       db,

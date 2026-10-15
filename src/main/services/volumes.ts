@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'fs'
+import { existsSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { logger } from './logger'
 import { createTimedCache } from './timed-cache'
@@ -50,4 +50,14 @@ export function createMountedVolumesCache(
   now: () => number = Date.now
 ): () => ReadonlySet<string> {
   return createTimedCache(list, maxAgeMs, now)
+}
+
+/**
+ * True when iCloud keeps the Desktop and Documents folders: their synced copies are
+ * then in iCloud Drive. A folder that cannot be looked at counts as not synced.
+ */
+export function isDocumentsInICloud(homeDir: string): boolean {
+  return existsSync(
+    join(homeDir, 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'Documents')
+  )
 }

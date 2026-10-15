@@ -147,6 +147,20 @@ export function listTracks(
     .map((row) => toTrack(row, mountedVolumes))
 }
 
+/**
+ * Every track of the library, set-aside copies left out, ordered by path. Unpaged:
+ * for what needs the whole library at once, such as the Rekordbox XML.
+ */
+export function listLibraryTracks(db: AppDatabase, mountedVolumes: ReadonlySet<string>): Track[] {
+  return db
+    .select()
+    .from(tracks)
+    .where(inLibrary)
+    .orderBy(asc(tracks.path))
+    .all()
+    .map((row) => toTrack(row, mountedVolumes))
+}
+
 /** Returns false when no track has this id. */
 export function updateTrack(db: AppDatabase, id: number, changes: TrackChanges): boolean {
   const moved =

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { insertBackup } from '../db/backups'
@@ -18,6 +19,7 @@ import {
   saveStyles,
   setFolder,
   updateSettings,
+  xmlFolderWarning,
   type SettingsEnvironment
 } from './settings'
 
@@ -52,6 +54,7 @@ describe('getSettingsSnapshot', () => {
     expect(snapshot.effective).toEqual({
       backupFolder: null,
       generatedXmlFolder: '/Users/dj/Documents/FixLibrary',
+      generatedXmlWarning: null,
       exportedXmlFolder: '/Users/dj/Documents/FixLibrary',
       workerCount: 7
     })
@@ -768,5 +771,56 @@ describe('the folders of the library while a batch is open', () => {
     // Assert
     expect(whileOpen.ok).toBe(true)
     expect(afterwards.ok).toBe(true)
+  })
+})
+
+describe('xmlFolderWarning', () => {
+  it.each([
+    ['/Users/dj/Documents/FixLibrary', false, null],
+    ['/Users/dj/Documents/FixLibrary', true, 'cloud'],
+    ['/Users/dj/Desktop/XML', true, 'cloud'],
+    ['/Users/dj/Music/FixLibrary', true, null],
+    ['/Volumes/DJ SSD/XML', false, 'external'],
+    ['/Volumes', false, 'external'],
+    ['/Users/dj/Library/Mobile Documents/com~apple~CloudDocs/XML', false, 'cloud'],
+    ['/Users/dj/Library/CloudStorage/Dropbox/XML', false, 'cloud'],
+    ['/Users/dj/Dropbox/XML', false, 'cloud'],
+    ['/Users/dj/Dropboxes/XML', false, null],
+    ['/Users/dj/DocumentsOld', true, null],
+    ['/Volumes/..DJ/XML', false, 'external']
+  ] as const)('says of %s with synced Documents %s: %s', (folder, documentsSynced, warning) => {
+    // Act
+    const said = xmlFolderWarning(folder, { homeDir: '/Users/dj', cpuCount: 8, documentsSynced })
+
+    // Assert
+    expect(said).toBe(warning)
+  })
+})
+
+describe('setFolder for an XML folder', () => {
+  it.each([
+    [
+      'inside the data folder of the app',
+      (root: string) => join(root, 'userData', 'claude-workdir')
+    ],
+    ['the backup folder', (root: string) => join(root, 'Backups')]
+  ])('refuses %s', (_what, folderOf) => {
+    // Arrange
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'fixlibrary-xml-folder-')))
+    const folder = folderOf(root)
+    mkdirSync(folder, { recursive: true })
+    mkdirSync(join(root, 'Backups'), { recursive: true })
+    setSetting(testDatabase.db, 'library', {
+      ...DEFAULT_SETTINGS.library,
+      backupFolder: join(root, 'Backups')
+    })
+    const withAppData = { ...environment, appDataDir: join(root, 'userData') }
+
+    // Act
+    const result = setFolder(testDatabase.db, 'generatedXml', folder, withAppData)
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    rmSync(root, { recursive: true, force: true })
   })
 })

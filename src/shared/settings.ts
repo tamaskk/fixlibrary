@@ -2,6 +2,7 @@
 // The main process validates everything with these schemas; the renderer only displays.
 import { z } from 'zod'
 import { DUPLICATES_FOLDER } from './duplicates'
+import type { XmlFolderWarning } from './rekordbox'
 
 export const LIBRARY_MODES = ['in_place', 'clean_library'] as const
 export const NORMALIZATION_METHODS = ['lossless', 'exact'] as const
@@ -161,6 +162,8 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface EffectiveSettings {
   backupFolder: string | null
   generatedXmlFolder: string
+  /** Why the folder of the generated XML is a poor place for it, or null. */
+  generatedXmlWarning: XmlFolderWarning
   exportedXmlFolder: string
   workerCount: number
 }

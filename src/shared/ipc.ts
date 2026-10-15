@@ -38,6 +38,7 @@ import type {
   Style,
   StyleInput
 } from './settings'
+import type { RekordboxXmlWritten } from './rekordbox'
 import type { ToolCheck } from './tools'
 
 export const IPC_CHANNELS = {
@@ -80,7 +81,8 @@ export const IPC_CHANNELS = {
   previewDropCover: 'preview:dropCover',
   previewApprove: 'preview:approve',
   previewDiscard: 'preview:discard',
-  previewUndoLast: 'preview:undoLast'
+  previewUndoLast: 'preview:undoLast',
+  rekordboxWriteXml: 'rekordbox:writeXml'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -209,5 +211,12 @@ export interface FixLibraryApi {
     discard: (batchId: number) => Promise<Result<PreviewState>>
     /** Puts the files of the last batch that wrote back to what they were. */
     undoLast: () => Promise<Result<UndoOutcome>>
+  }
+  rekordbox: {
+    /**
+     * Writes the XML of the library into the folder Settings names, for Rekordbox to
+     * import. Refused while files are being changed or scanned.
+     */
+    writeXml: () => Promise<Result<RekordboxXmlWritten>>
   }
 }

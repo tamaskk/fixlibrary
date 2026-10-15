@@ -47,7 +47,10 @@ function line(value: PreviewValue | undefined): string | undefined {
  * A tag has no field for the mix: it stands in the title, in brackets. Unless the
  * title says it already, as one the user typed may.
  */
-function titleWithMix(title: string | undefined, mix: string | undefined): string | undefined {
+export function titleWithMix(
+  title: string | undefined,
+  mix: string | undefined
+): string | undefined {
   if (title === undefined || mix === undefined) return title
   return title.toLowerCase().endsWith(`(${mix.toLowerCase()})`) ? title : `${title} (${mix})`
 }

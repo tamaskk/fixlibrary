@@ -92,6 +92,17 @@ export function styleFolderOf(
 }
 
 /**
+ * The comment the app writes: the energy (`E7`) and the secondary style, those of
+ * them there are, joined by ` | `. Empty when there is neither. The tag and the
+ * Rekordbox XML say the same.
+ */
+export function styleComment(energy: number | null, secondary: string | null): string {
+  return [energy === null ? null : `E${energy}`, secondary]
+    .filter((part): part is string => part !== null)
+    .join(' | ')
+}
+
+/**
  * The genre and the comment a track's tag is to hold when the batch organizes it:
  * the primary style as the genre, and as the comment the energy (`E7`) and the
  * secondary style, those of them there are, joined by ` | `. Nothing when the batch
@@ -106,9 +117,7 @@ export function styleTagsFor(
   if (!details) return {}
   const names = styleNamesOf(track, proposal, details)
   const energy = fieldOf(track, proposal, 'energy', track.energy).value
-  const comment = [typeof energy === 'number' ? `E${energy}` : null, names.secondary]
-    .filter((part): part is string => part !== null)
-    .join(' | ')
+  const comment = styleComment(typeof energy === 'number' ? energy : null, names.secondary)
   const fields: Pick<TagFields, 'genre' | 'comment'> = {}
   // Field by field: a value a tag cannot hold must not keep the other out.
   const genre = tagFieldsSchema.safeParse({ genre: names.primary })
