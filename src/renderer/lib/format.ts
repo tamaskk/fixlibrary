@@ -62,3 +62,10 @@ export function formatGigabytes(bytes: number, rounding: 'up' | 'down'): string 
 export function formatPercent(share: number): string {
   return `${Math.floor(share * 100)}%`
 }
+
+const dateTime = new Intl.DateTimeFormat('hu-HU', { dateStyle: 'short', timeStyle: 'short' })
+
+/** A moment in the hu-HU form, such as `2026. 10. 15. 16:52`. */
+export function formatDateTime(ms: number): string {
+  return dateTime.format(new Date(ms))
+}

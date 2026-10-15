@@ -54,6 +54,7 @@ import {
   type UndoOutcome
 } from '@shared/preview'
 import { keyOfCamelot } from '@shared/keys'
+import { isNetworkPath } from '@shared/network-paths'
 import { UNSORTED_STYLE_NAME } from '@shared/settings'
 import { toOneLine } from '@shared/text'
 import { isSetAsidePath, keepDuplicateSchema, type DuplicateGroup } from '@shared/duplicates'
@@ -77,10 +78,6 @@ import { styleDetailsOf } from './stages/style'
 import { newStyleColor } from './style'
 import type { Stage } from './stages/stage'
 import { tagsFor, takesTags, WRITE_TAGS_STAGE } from './stages/write-tags'
-
-// Where macOS mounts network shares on demand, in lower case: the startup disk does
-// not tell case apart.
-const NETWORK_FOLDERS = ['/net/', '/network/']
 
 /** The promise's value, or a rejection once `ms` have passed. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -710,7 +707,7 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       // are the same place. A share mounted under /Volumes is a drive the user mounted.
       const resolved = isAbsolute(path) ? resolve(path) : ''
       const extension = extname(resolved).toLowerCase()
-      const remote = NETWORK_FOLDERS.some((folder) => resolved.toLowerCase().startsWith(folder))
+      const remote = isNetworkPath(resolved)
       if (!MANUAL_COVER_EXTENSIONS.some((allowed) => allowed === extension) || remote) {
         return { ok: false, code: 'COVER_UNUSABLE' }
       }

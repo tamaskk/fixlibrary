@@ -82,7 +82,8 @@ const api: FixLibraryApi = {
     undoLast: () => ipcRenderer.invoke(IPC_CHANNELS.previewUndoLast)
   },
   rekordbox: {
-    writeXml: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWriteXml)
+    writeXml: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWriteXml),
+    readExport: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxReadExport)
   }
 }
 

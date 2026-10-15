@@ -9,6 +9,8 @@ import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
 import { registerRekordboxIpc } from './ipc/rekordbox'
+import { parseExportInWorker } from './services/rekordbox-xml-read'
+import rekordboxXmlWorkerPath from './services/rekordbox-xml-worker?modulePath'
 import { getRendererEntryUrl, isRendererUrl, setRendererEntry } from './ipc/handle'
 import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
@@ -430,7 +432,9 @@ function registerLibraryAndPipeline(): void {
     listMountedVolumes,
     appVersion: app.getVersion(),
     // The paths in the XML must be where the files are: not while a batch moves them.
-    isBusy: () => runs.changingFiles() || scanner.isRunning()
+    isBusy: () => runs.changingFiles() || scanner.isRunning(),
+    // An export is untrusted and may be large: its parse costs a worker, not the app.
+    parseExport: (bytes) => parseExportInWorker(rekordboxXmlWorkerPath, bytes)
   })
   registerPreviewIpc(
     createPreview({
