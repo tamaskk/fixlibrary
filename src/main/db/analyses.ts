@@ -39,3 +39,10 @@ export function getAnalysis<T>(
     .get()
   return row && { result: schema.parse(row.result), analyzerVersion: row.analyzerVersion }
 }
+
+/** Removes a track's result of this type, if it has one. */
+export function deleteAnalysis(db: AppDatabase, trackId: number, type: AnalysisType): void {
+  db.delete(analyses)
+    .where(and(eq(analyses.trackId, trackId), eq(analyses.type, type)))
+    .run()
+}

@@ -19,7 +19,9 @@ export const ANALYSIS_TYPES = [
   'energy_features',
   'stems',
   'structure',
-  'loudness'
+  'loudness',
+  // The beatgrid Rekordbox analysed, read from its XML export (T-026).
+  'rb_grid'
 ] as const
 export const BATCH_MODES = ['in_place', 'clean_library'] as const
 export const BATCH_STATUSES = [

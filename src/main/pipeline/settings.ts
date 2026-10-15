@@ -9,6 +9,7 @@ import type { AppDatabase } from '../db/connection'
 import { getSetting, setSetting } from '../db/settings'
 import { listStyles, replaceStyles } from '../db/styles'
 import { AppError, type Result } from '@shared/errors'
+import type { XmlFolderWarning } from '@shared/rekordbox'
 import {
   DEFAULT_SETTINGS,
   BACKUP_FOLDER_NAME,
@@ -28,6 +29,49 @@ import { logger } from '../services/logger'
 export interface SettingsEnvironment {
   homeDir: string
   cpuCount: number
+  /** True when iCloud keeps Desktop and Documents in sync (`isDocumentsInICloud`). */
+  documentsSynced?: boolean
+  /** The app's own data folder (`userData`), which no folder of Settings may be in. */
+  appDataDir?: string
+}
+
+/** Is `path` the folder `folder` or inside it? Both absolute. */
+function isWithin(path: string, folder: string): boolean {
+  const between = relative(folder, path)
+  // `..x` is a name inside it; only `..` itself, or `..` and a separator, leaves it.
+  return between !== '..' && !between.startsWith(`..${sep}`) && !isAbsolute(between)
+}
+
+/** The folder as the file system spells it, or as given when it is not there. */
+function realFolderOf(folder: string): string {
+  try {
+    return realpathSync.native(folder)
+  } catch {
+    return folder
+  }
+}
+
+/**
+ * Why a folder is a poor place for the XML Rekordbox imports: on a drive that may be
+ * gone when Rekordbox reads it, or where a sync service may change or hold back the
+ * file meanwhile (iCloud Drive, the File Provider folders of Dropbox, Google Drive and
+ * OneDrive, an old Dropbox folder, Desktop and Documents when iCloud keeps them).
+ */
+export function xmlFolderWarning(
+  folder: string,
+  environment: SettingsEnvironment
+): XmlFolderWarning {
+  // A chosen folder is stored as its real path, so the startup disk, which `/Volumes`
+  // also lists as a link to `/`, never reads as `/Volumes/<name>` here.
+  if (isWithin(folder, '/Volumes')) return 'external'
+  const home = environment.homeDir
+  const synced = [
+    join(home, 'Library', 'Mobile Documents'),
+    join(home, 'Library', 'CloudStorage'),
+    join(home, 'Dropbox'),
+    ...(environment.documentsSynced ? [join(home, 'Documents'), join(home, 'Desktop')] : [])
+  ]
+  return synced.some((each) => isWithin(folder, each)) ? 'cloud' : null
 }
 
 // Each group is one row of the settings table.
@@ -74,9 +118,11 @@ export function resolveEffectiveSettings(
   const { rootFolder, backupFolder } = settings.library
   const rekordboxFolder = join(environment.homeDir, 'Documents', 'FixLibrary')
   const automaticWorkers = Math.max(1, environment.cpuCount - 1)
+  const generatedXmlFolder = settings.rekordbox.generatedXmlFolder ?? rekordboxFolder
   return {
     backupFolder: backupFolder ?? defaultBackupFolder(rootFolder),
-    generatedXmlFolder: settings.rekordbox.generatedXmlFolder ?? rekordboxFolder,
+    generatedXmlFolder,
+    generatedXmlWarning: xmlFolderWarning(generatedXmlFolder, environment),
     exportedXmlFolder: settings.rekordbox.exportedXmlFolder ?? rekordboxFolder,
     // A stored count from another machine never asks for more than this one has.
     workerCount: Math.min(
@@ -268,6 +314,16 @@ export function setFolder(
   // The tracks of a clean library in such a folder would all count as set aside.
   if (kind === 'cleanLibrary' && folder !== null && isSetAsidePath(join(folder, 'file'))) {
     return { ok: false, code: 'INVALID_INPUT' }
+  }
+  // An XML folder is never one of the app's own: the app empties some of them.
+  if ((kind === 'generatedXml' || kind === 'exportedXml') && folder !== null) {
+    const own = [
+      environment.appDataDir ? realFolderOf(environment.appDataDir) : null,
+      resolveEffectiveSettings(current, environment).backupFolder
+    ]
+    if (own.some((each) => each !== null && isWithin(folder, each))) {
+      return { ok: false, code: 'INVALID_INPUT' }
+    }
   }
   if (
     LIBRARY_FOLDER_KINDS.includes(kind) &&

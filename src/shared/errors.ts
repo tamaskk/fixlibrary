@@ -32,6 +32,12 @@ export const ERROR_CODES = [
   'BACKUPS_IN_USE',
   // A picture the user chose cannot be made a cover: not a picture, or too small.
   'COVER_UNUSABLE',
+  // The Rekordbox XML is being written, or was just written: one write at a time.
+  'XML_BUSY',
+  // The export folder of Settings holds no XML exported by Rekordbox.
+  'XML_NOT_FOUND',
+  // The export is no Rekordbox XML the app can read, or too large.
+  'XML_UNREADABLE',
   // Something failed that no code above describes; the detail is in the log.
   'UNEXPECTED'
 ] as const
@@ -97,5 +103,8 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   NOTHING_TO_UNDO: 'There is no batch to undo',
   BACKUPS_IN_USE: 'The backup folder is in use',
   COVER_UNUSABLE: 'The picture cannot be made a cover',
+  XML_BUSY: 'The Rekordbox XML is being written or read',
+  XML_NOT_FOUND: 'No Rekordbox export was found',
+  XML_UNREADABLE: 'The Rekordbox export cannot be read',
   UNEXPECTED: 'Unexpected error'
 }

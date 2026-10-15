@@ -5,7 +5,8 @@ import { sql } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from './connection'
 import { createTestDatabase, type TestDatabase } from './database.test-util'
-import { backups, batches, batchItems } from './schema'
+import { saveAnalysis } from './analyses'
+import { analyses, backups, batches, batchItems } from './schema'
 import { getTrackById, insertTracks } from './tracks'
 
 const EXPECTED_TABLES = [
@@ -143,6 +144,48 @@ describe('openDatabase', () => {
     expect(upgraded.select().from(batchItems).all()).toHaveLength(1)
     expect(upgraded.select().from(backups).all()).toHaveLength(1)
     expect(upgraded.get<{ foreign_keys: number }>(sql`pragma foreign_keys`).foreign_keys).toBe(1)
+  })
+
+  it('keeps every analysis when the table is rebuilt for a new type, and takes rb_grid', () => {
+    // Arrange
+    const [trackId] = insertTracks(testDatabase.db, [
+      { path: '/Music/a.mp3', originalPath: '/Music/a.mp3', format: 'mp3' }
+    ])
+    saveAnalysis(testDatabase.db, {
+      trackId: trackId as number,
+      type: 'bpm_key',
+      result: { bpm: 124 },
+      analyzerVersion: '1'
+    })
+    // The rebuild of migration 0007 once more, on a table that holds a row.
+    addMigration(
+      '0099_rebuild_analyses_again',
+      readFileSync(join(testDatabase.migrationsFolder, '0007_analyses_rb_grid.sql'), 'utf8')
+    )
+
+    // Act
+    const upgraded = testDatabase.reopen()
+    saveAnalysis(upgraded, {
+      trackId: trackId as number,
+      type: 'rb_grid',
+      result: { tempos: [] },
+      analyzerVersion: 'rekordbox-xml'
+    })
+    const unknown = (): unknown =>
+      upgraded.run(
+        sql`insert into analyses (track_id, type, result, analyzer_version, created_at) values (${trackId}, 'nonsense', '{}', '1', 0)`
+      )
+
+    // Assert
+    expect(
+      upgraded
+        .select()
+        .from(analyses)
+        .all()
+        .map((row) => row.type)
+        .sort()
+    ).toEqual(['bpm_key', 'rb_grid'])
+    expect(unknown).toThrow()
   })
 
   it('refuses a migration that leaves a broken reference behind', () => {

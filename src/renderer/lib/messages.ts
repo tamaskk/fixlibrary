@@ -21,6 +21,12 @@ export function errorMessage(code: ErrorCode): string {
       return 'A duplikátumcsoportok megváltoztak. Semmi nem változott a fájljaidon. Nézd át újra, és hagyd jóvá még egyszer.'
     case 'BACKUPS_IN_USE':
       return 'A backup mappa most nem változhat: az utolsó batch még innen vonható vissza.'
+    case 'XML_BUSY':
+      return 'Egy XML-művelet már folyamatban van, vagy az imént fejeződött be. Próbáld újra pár másodperc múlva.'
+    case 'XML_NOT_FOUND':
+      return 'Az export mappájában nincs Rekordbox XML. Exportáld a könyvtárat a Rekordboxból ebbe a mappába.'
+    case 'XML_UNREADABLE':
+      return 'Ez az XML nem olvasható Rekordbox exportként.'
     case 'COVER_UNUSABLE':
       return 'Ez a kép nem használható borítónak.'
     case 'FILE_UNREADABLE':

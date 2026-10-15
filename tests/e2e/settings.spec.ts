@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -143,5 +151,67 @@ test('settings are saved, survive a restart, and the API key is never stored as 
     await expect(page.getByLabel('B hot cue színe')).toHaveValue('#123456')
   } finally {
     await second.app.close()
+  }
+})
+
+test('writes the Rekordbox XML into the chosen folder and says where it is', async () => {
+  const xmlFolder = join(folder, 'Rekordbox')
+  mkdirSync(xmlFolder)
+  const { app, page } = await openSettings()
+  try {
+    const rekordbox = page.getByRole('region', { name: 'Rekordbox' })
+    // The folder dialog belongs to the OS; answer it from the main process. A chosen
+    // folder keeps the test away from the real ~/Documents.
+    await app.evaluate(({ dialog }, picked) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+    }, xmlFolder)
+    await rekordbox
+      .getByRole('button', { name: 'Az app által írt XML mappája kiválasztása' })
+      .click()
+    await expect(rekordbox.getByTitle(xmlFolder, { exact: true })).toBeVisible()
+
+    await rekordbox.getByRole('button', { name: 'XML írása' }).click()
+
+    await expect(rekordbox.getByText('Az XML elkészült: 0 track.')).toBeVisible()
+    await expect(rekordbox.getByText(join(xmlFolder, 'fixlibrary.xml'))).toBeVisible()
+    const xml = readFileSync(join(xmlFolder, 'fixlibrary.xml'), 'utf8')
+    expect(xml).toContain('<COLLECTION Entries="0"/>')
+    expect(xml).toContain('<NODE Type="0" Name="Playlists" Count="0"/>')
+    expect(readdirSync(xmlFolder)).toEqual(['fixlibrary.xml'])
+  } finally {
+    await app.close()
+  }
+})
+
+test('reads the newest Rekordbox export of the chosen folder and says what it found', async () => {
+  const exportFolder = join(folder, 'Exports')
+  mkdirSync(exportFolder)
+  writeFileSync(
+    join(exportFolder, 'rekordbox.xml'),
+    '<?xml version="1.0" encoding="UTF-8"?><DJ_PLAYLISTS Version="1.0.0"><COLLECTION Entries="1">' +
+      `<TRACK TrackID="1" Name="Gone" Location="file://localhost${join(folder, 'Gone%20Track.mp3')}"/>` +
+      '</COLLECTION><PLAYLISTS><NODE Type="0" Name="ROOT" Count="0"/></PLAYLISTS></DJ_PLAYLISTS>'
+  )
+  const { app, page } = await openSettings()
+  try {
+    const rekordbox = page.getByRole('region', { name: 'Rekordbox' })
+    await app.evaluate(({ dialog }, picked) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+    }, exportFolder)
+    await rekordbox
+      .getByRole('button', { name: 'A Rekordboxból exportált XML mappája kiválasztása' })
+      .click()
+    await expect(rekordbox.getByTitle(exportFolder, { exact: true })).toBeVisible()
+
+    await rekordbox.getByRole('button', { name: 'Export beolvasása' }).click()
+
+    await expect(
+      rekordbox.getByText(/^Beolvasva: rekordbox\.xml \(.+\), 1 track, ebből 0 a könyvtárból\.$/u)
+    ).toBeVisible()
+    await expect(
+      rekordbox.getByText('1 bejegyzés nem létező fájlra mutat (missing).')
+    ).toBeVisible()
+  } finally {
+    await app.close()
   }
 })
