@@ -1,7 +1,7 @@
 // The batch preview: what the user sees, changes and approves before a batch writes.
 // Builds the rows from the items of the batch, takes the edits, and starts the apply
 // phase. Nothing here changes a file.
-import { basename, extname, isAbsolute, resolve } from 'path'
+import { basename, dirname, extname, isAbsolute, resolve } from 'path'
 import { z } from 'zod'
 import {
   approveBatchItems,
@@ -10,7 +10,6 @@ import {
   findPreviewBatch,
   getBatchItem,
   countApprovedBatchItems,
-  listAllBatchItems,
   listBatchItems,
   mergeBatchItemProposal,
   setBatchItemProposal,
@@ -55,9 +54,9 @@ import {
   type UndoOutcome
 } from '@shared/preview'
 import { keyOfCamelot } from '@shared/keys'
-import { newStylesTaken, styleKey, UNSORTED_STYLE_NAME } from '@shared/settings'
+import { UNSORTED_STYLE_NAME } from '@shared/settings'
 import { toOneLine } from '@shared/text'
-import { keepDuplicateSchema, type DuplicateGroup } from '@shared/duplicates'
+import { isSetAsidePath, keepDuplicateSchema, type DuplicateGroup } from '@shared/duplicates'
 import { keepDuplicate, listDuplicateGroups } from './batch-duplicates'
 import type { BatchFiles } from './batch-files'
 import type { Orchestrator } from './orchestrator'
@@ -70,6 +69,9 @@ import {
   type CoverDetails
 } from './stages/cover'
 import { DUPLICATES_STAGE } from './stages/duplicates'
+import { ORGANIZE_FILE_STAGE, ORGANIZE_STAGE } from './stages/organize'
+import { styleTagsFor } from './stages/style-tags'
+import { createsStyle } from './new-styles'
 import { identifiersSchema } from './stages/lookup'
 import { styleDetailsOf } from './stages/style'
 import { newStyleColor } from './style'
@@ -138,6 +140,8 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     styleId: track.primaryStyleId,
     secondaryStyleId: track.secondaryStyleId,
     genre: track.genre,
+    // The folder the file is in, by its name: for display only, as the file name.
+    folder: track.path === '' ? null : toOneLine(basename(dirname(track.path)), MAX_NAME_LENGTH),
     energy: track.energy,
     // The cover a file holds has no name of the app's: a new one is a change.
     cover: null
@@ -195,32 +199,6 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
   }
 }
 
-// The new styles a batch may create, worked out once: what the rows of an approved
-// batch name does not change while its tracks are written one by one.
-const takenStyles = new WeakMap<AppDatabase, { batchId: number; keys: string[] }>()
-
-/** The keys of the new styles a batch may create: the first five its approved rows name. */
-function newStylesTakenBy(db: AppDatabase, batchId: number): string[] {
-  const kept = takenStyles.get(db)
-  if (kept?.batchId === batchId) return kept.keys
-  const keys = newStylesTaken(newStylesOfBatch(db, batchId)).map(styleKey)
-  takenStyles.set(db, { batchId, keys })
-  return keys
-}
-
-/** The new styles the approved rows of a batch name, in the order of the batch. */
-function newStylesOfBatch(db: AppDatabase, batchId: number): string[] {
-  return listAllBatchItems(db, batchId).flatMap((item) => {
-    if (!item.approved || item.excluded) return []
-    const field = readProposal(item.after).fields?.styleId
-    const name =
-      field?.source === 'claude' && field.value === null
-        ? styleDetailsOf(item.after)?.newPrimary
-        : null
-    return name ? [name] : []
-  })
-}
-
 /**
  * Once a track of a batch is written: what the batch holds for the track's row alone
  * becomes the track's own. That is the tempo and the key, which are measured from the
@@ -255,6 +233,7 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       !fields.key &&
       !fields.styleId &&
       !fields.secondaryStyleId &&
+      !fields.genre &&
       !identifiers.success
     ) {
       return
@@ -301,6 +280,14 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       if (written.year !== undefined && fields.year && free('year'))
         changes.year = fields.year.value
     }
+    // The genre the batch wrote with the style folder: what the file's tag says now. A
+    // copy that was set aside was not organized.
+    const organized = stages.includes(ORGANIZE_FILE_STAGE) && !isSetAsidePath(track.path)
+    if ((tagged || organized) && takesTags(track.path)) {
+      const after = z.record(z.string(), z.unknown()).safeParse(item.after).data ?? {}
+      const genre = styleTagsFor(track, { ...after, ...readProposal(item.after) }).genre
+      if (genre !== undefined) changes.genre = genre
+    }
     if (covered && takesTags(track.path)) {
       changes.coverStatus = fields.cover?.source === 'placeholder' ? 'placeholder' : 'embedded'
       // A picture the user chose is theirs: no later run looks for another.
@@ -330,7 +317,8 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
         // Five new styles a batch at most, the first its rows name; a full list or a
         // name beyond the five leaves the track Unsorted.
         if (details?.newPrimary) {
-          const created = newStylesTakenBy(db, batchId).includes(styleKey(details.newPrimary))
+          // By the outer connection: what the rows name is read once per batch.
+          const created = createsStyle(db, batchId)(details.newPrimary)
             ? addStyle(
                 tx,
                 details.newPrimary,
@@ -475,7 +463,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
             ...countBatchItems(db, batch.id),
             canRefresh: refreshableStages(batch.id).length > 0,
             findsDuplicates: listJobStageNames(db, batch.id).includes(DUPLICATES_STAGE),
-            findsCovers: listJobStageNames(db, batch.id).includes(COVER_STAGE)
+            findsCovers: listJobStageNames(db, batch.id).includes(COVER_STAGE),
+            organizes: listJobStageNames(db, batch.id).includes(ORGANIZE_STAGE)
           }
         : null,
       canUndo: batchFiles.lastUndoable() !== null
@@ -495,7 +484,14 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
     for (const stage of stages) {
       if (!stage.recompute || stage.phase !== 'compute' || !ran.has(stage.name)) continue
       try {
-        const next = stage.recompute(track, valuesAfter(before, proposal), after)
+        // What the item holds, with the fields as they are now: a stage's own
+        // entries next to what the user just changed.
+        const current = {
+          ...z.record(z.string(), z.unknown()).catch({}).parse(after),
+          fields: proposal.fields,
+          warnings: proposal.warnings
+        }
+        const next = stage.recompute(track, valuesAfter(before, proposal), current)
         if (!next) continue
         // The warnings a stage reports are its own to take back: a name that was
         // taken, or a duplicate, may be neither after the edit.
@@ -589,7 +585,11 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       }
       setBatchItemProposal(db, batchId, trackId, recomputed(batchId, track, item, edited))
       // Only a name can make a track a copy of another; the batch may hold thousands.
-      if (field === 'artist' || field === 'title' || field === 'mix') regroup(batchId)
+      // Only a name can make a track a copy of another, and only a first style changes
+      // which new styles the batch creates; the batch may hold thousands.
+      if (field === 'artist' || field === 'title' || field === 'mix' || field === 'styleId') {
+        regroup(batchId)
+      }
       const stored = getBatchItem(db, batchId, trackId)
       if (!stored) return { ok: false, code: 'INVALID_INPUT' }
       return { ok: true, value: buildPreviewRow(stored) }
@@ -782,6 +782,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       const batch = waitingBatch(batchId)
       if (!batch.ok) return batch
       if (!keepDuplicate(db, batchId, trackId)) return { ok: false, code: 'INVALID_INPUT' }
+      // The copy that is set aside goes into no style folder.
+      regroup(batchId)
       return { ok: true, value: listDuplicateGroups(db, batchId) }
     },
 
@@ -791,6 +793,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       const batch = waitingBatch(parsed.data.batchId)
       if (!batch.ok) return batch
       setBatchItemsExcluded(db, batch.value.id, parsed.data.trackIds, parsed.data.excluded)
+      // A row taken out names no new style for the batch to create.
+      regroup(batch.value.id)
       return { ok: true, value: state() }
     },
 

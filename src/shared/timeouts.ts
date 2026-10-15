@@ -31,7 +31,10 @@ export const STAGE_TIMEOUTS_MS = {
   embedCover: 6 * MINUTE,
   // One call of twenty tracks, its second try and one more for an answer left out,
   // calls going one at a time.
-  style: 7 * MINUTE
+  style: 7 * MINUTE,
+  organize: 10 * SECOND,
+  // The backup or the copy of the whole file, its tags, and the move into its folder.
+  organizeFile: 6 * MINUTE
 } as const
 
 export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS

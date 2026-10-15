@@ -21,6 +21,7 @@ export const PREVIEW_FIELDS = [
   'styleId',
   'secondaryStyleId',
   'genre',
+  'folder',
   'energy',
   'cover'
 ] as const
@@ -45,7 +46,7 @@ export type EditablePreviewField = (typeof EDITABLE_PREVIEW_FIELDS)[number]
  * `naming` is a file name the app built from the other fields; `conversion` is the
  * name a file gets when it becomes a file of another format; `itunes` and
  * `coverartarchive` are where a cover was found; `placeholder` is a cover the app
- * drew where none was found.
+ * drew where none was found; `organize` is the style folder a file goes into.
  */
 export const FIELD_SOURCES = [
   'lookup',
@@ -54,6 +55,7 @@ export const FIELD_SOURCES = [
   'itunes',
   'coverartarchive',
   'placeholder',
+  'organize',
   'id3',
   'fileName',
   'naming',
@@ -111,8 +113,10 @@ export const previewValueSchemas = {
   key: z.enum(CAMELOT_KEYS).nullable(),
   styleId: z.number().int().positive().nullable(),
   secondaryStyleId: z.number().int().positive().nullable(),
-  /** The genre the file's tag holds; shown, never proposed. */
+  /** The genre the file's tag holds; proposed only as the style a batch sorts the file by. */
   genre: textValue,
+  /** The folder the file is in, by its name: a style folder once the library is organized. */
+  folder: textValue,
   energy: z.number().int().min(1).max(10).nullable(),
   /** The name of a cover the app made, to be embedded; a track's own cover has none. */
   cover: z.string().regex(COVER_NAMES.cover).nullable()
@@ -141,6 +145,7 @@ const proposedFieldsSchema = z
     styleId: z.object({ value: previewValueSchemas.styleId, ...provenance }),
     secondaryStyleId: z.object({ value: previewValueSchemas.secondaryStyleId, ...provenance }),
     genre: z.object({ value: previewValueSchemas.genre, ...provenance }),
+    folder: z.object({ value: previewValueSchemas.folder, ...provenance }),
     energy: z.object({ value: previewValueSchemas.energy, ...provenance }),
     cover: z.object({ value: previewValueSchemas.cover, ...provenance })
   })
@@ -328,6 +333,8 @@ export interface PreviewBatch {
   findsDuplicates: boolean
   /** True when the batch looked for covers: the "Borító" column is shown. */
   findsCovers: boolean
+  /** True when the batch sorts files into style folders: the "Mappa" column is shown. */
+  organizes: boolean
 }
 
 /** How many rows one `preview:coverThumbs` call may ask about: about two screens. */

@@ -252,6 +252,7 @@ describe('the naming stage', () => {
       styleId: null,
       secondaryStyleId: null,
       genre: null,
+      folder: null,
       energy: null,
       cover: null
     }
@@ -285,6 +286,7 @@ describe('the naming stage', () => {
         styleId: null,
         secondaryStyleId: null,
         genre: null,
+        folder: null,
         energy: null,
         cover: null
       },
@@ -374,6 +376,7 @@ describe('the naming stage', () => {
         styleId: null,
         secondaryStyleId: null,
         genre: null,
+        folder: null,
         energy: 9,
         cover: null
       },
@@ -414,6 +417,9 @@ describe('the rename stage', () => {
       move: async (to) => {
         moves.push(to)
         return { path: to, collided: false }
+      },
+      organize: async () => {
+        throw new Error('a rename organizes nothing')
       },
       convertTo: async () => {
         throw new Error('a rename converts nothing')

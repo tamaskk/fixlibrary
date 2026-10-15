@@ -24,7 +24,7 @@ export const BACKUP_FOLDER_NAME = 'FixLibrary Backups'
 /** Where new downloads arrive (T-034). */
 export const INBOX_FOLDER_NAME = 'Inbox'
 /** The folders of the app's own: no style may be named like one, as styles become folders. */
-const APP_FOLDER_NAMES = [DUPLICATES_FOLDER, BACKUP_FOLDER_NAME, INBOX_FOLDER_NAME]
+export const APP_FOLDER_NAMES = [DUPLICATES_FOLDER, BACKUP_FOLDER_NAME, INBOX_FOLDER_NAME]
 /** How many styles the list may hold. */
 export const MAX_STYLES = 50
 /** How many new styles one batch may create; what it names beyond them stays Unsorted. */

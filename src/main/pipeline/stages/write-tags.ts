@@ -14,6 +14,7 @@ import { CONVERT_FILE_STAGE } from './convert'
 import { REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
 import { NAMING_STAGE } from './naming'
 import { SET_ASIDE_STAGE } from './set-aside'
+import { styleTagsFor } from './style-tags'
 import type { Stage } from './stage'
 
 export const WRITE_TAGS_STAGE = 'writeTags'
@@ -123,7 +124,8 @@ export function createWriteTagsStage(dependencies: WriteTagsStageDependencies): 
         logger.info(`Track ${track.id}: tags are not written into its file`)
         return numbered
       }
-      const fields = tagsFor(track, proposal)
+      // With the genre and the comment where the batch organizes the track: one write.
+      const fields = { ...tagsFor(track, proposal), ...styleTagsFor(track, proposal) }
       if (Object.keys(fields).length === 0) return numbered
       const python = dependencies.python()
       if (!python) throw new AppError('PYTHON_CRASHED', 'the sidecar is not running')

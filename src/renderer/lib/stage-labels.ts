@@ -11,6 +11,8 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
   duplicates: 'Duplikátumok keresése',
   setAside: 'Duplikátumok félretétele',
   style: 'Stílusbesorolás',
+  organize: 'Mappába rendezés',
+  organizeFile: 'Áthelyezés a stílusmappába',
   cover: 'Borító keresése',
   embedCover: 'Borító beágyazása',
   demoAnalyze: 'Demo elemzés',

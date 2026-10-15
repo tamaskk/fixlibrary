@@ -59,6 +59,19 @@ function coverText(row: PreviewRow): string | null {
   return coverDescription(row, useCoverThumbsStore.getState().rows[row.trackId])
 }
 
+/** The column of a batch that sorts files into style folders: the folder, old and new. */
+export const FOLDER_COLUMN: PreviewColumn = {
+  id: 'folder',
+  header: 'Mappa',
+  track: '128px',
+  minWidth: 128,
+  // The minimum window keeps the columns up to the key in view; the folder is the
+  // first of the columns the table shows where it has room.
+  wideOnly: true,
+  render: (row) => <DiffValue cell={row.cells.folder} />,
+  text: (row) => diffText(row.cells.folder)
+}
+
 /** The column of a batch that looked for covers: the old and the new one, side by side. */
 export const COVER_COLUMN: PreviewColumn = {
   id: 'cover',
@@ -185,7 +198,8 @@ export const RUN_COLUMNS: readonly PreviewColumn[] = [
     track: '96px',
     minWidth: 96,
     wideOnly: true,
-    // What the file's tag says: the classification went by it, nothing changes it here.
+    // What the file's tag says: the classification went by it. A batch that sorts files
+    // into style folders proposes the primary style; the user does not edit it here.
     render: (row) => <DiffValue cell={row.cells.genre} />,
     text: (row) => diffText(row.cells.genre)
   },
