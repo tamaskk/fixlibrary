@@ -129,6 +129,13 @@ export const tagFieldsSchema = z
     bpm: z.number().int().min(20).max(400),
     /** The musical name of the key, as ID3 writes one: `Am`, `F#m`. */
     key: z.string().regex(/^[A-G][#b]?m?$/),
+    /** The primary style, as the genre (TCON). */
+    genre: writtenText,
+    /**
+     * The one comment (COMM) of the file, in place of every comment it held: the
+     * energy and the secondary style, `E7 | Melodic House`.
+     */
+    comment: writtenText,
     /**
      * The name of a cover the app made in its covers folder, to be the one front
      * cover of the file. The sidecar reads it as a 600 × 600 JPEG before it writes it.

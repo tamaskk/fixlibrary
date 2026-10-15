@@ -35,8 +35,18 @@ from fixlib_py.tags import MAX_READ_SIZE, _BoundedReader, _clean_text, _first_te
 
 # Tags are written into these; a WAV becomes an AIFF first (convert.py).
 _FORMATS = {".mp3": "mp3", ".aif": "aiff", ".aiff": "aiff"}
-_TEXT_FRAMES = {"artist": "TPE1", "title": "TIT2", "album": "TALB", "label": "TPUB", "key": "TKEY"}
-_FIELDS = {*_TEXT_FRAMES, "year", "bpm", "cover"}
+_TEXT_FRAMES = {
+    "artist": "TPE1",
+    "title": "TIT2",
+    "album": "TALB",
+    "label": "TPUB",
+    "key": "TKEY",
+    # The primary style of the track (T-022).
+    "genre": "TCON",
+}
+# The comment: the energy and the secondary style, `E7 | Melodic House` (T-022).
+_COMMENT_FIELDS = {"comment"}
+_FIELDS = {*_TEXT_FRAMES, *_COMMENT_FIELDS, "year", "bpm", "cover"}
 # A key as ID3 writes one: `Am`, `F#m`, `Db`.
 _KEY = re.compile(r"^[A-G][#b]?m?$")
 # Frames ID3v2.3 does not have and every player and tagger reads in it all the same:
@@ -63,7 +73,7 @@ def _check_fields(fields: object) -> dict[str, Any]:
     """The fields to write, or ValueError. A field that is not named is left as it is."""
     if not isinstance(fields, dict) or not fields or not set(fields) <= _FIELDS:
         raise ValueError("fields must name at least one tag, and only tags this app writes")
-    for name in _TEXT_FRAMES:
+    for name in (*_TEXT_FRAMES, *_COMMENT_FIELDS):
         if name not in fields:
             continue
         value = fields[name]
@@ -183,7 +193,20 @@ def _held(tags: Any) -> dict[str, Any]:
     tempo = _first_text(tags, "TBPM")
     held["bpm"] = int(tempo) if tempo is not None and tempo.isascii() and tempo.isdigit() else None
     held["cover"] = _cover_of(tags)
+    held["comment"] = _comment_of(tags)
     return held
+
+
+def _comment_of(tags: Any) -> str | None:
+    """The comment of a tag that holds exactly one as the app writes it, else None.
+
+    Only comments without a description count: a frame with one (iTunNORM,
+    iTunSMPB) is a player's data, not a comment.
+    """
+    comments = [comment for comment in tags.getall("COMM") if comment.desc == ""]
+    if len(comments) != 1 or comments[0].lang != "eng":
+        return None
+    return _clean_text(comments[0].text[0]) if comments[0].text else None
 
 
 def _wanted(fields: dict[str, Any]) -> dict[str, Any]:
@@ -200,7 +223,7 @@ def _differs(held: dict[str, Any], wanted: dict[str, Any]) -> bool:
 
 def _apply(tags: Any, wanted: dict[str, Any]) -> None:
     """Changes the named frames of a tag, which is then a real ID3v2.3 tag."""
-    from mutagen.id3 import APIC, TBPM, TYER, Frames
+    from mutagen.id3 import APIC, COMM, TBPM, TYER, Frames
 
     sorting = [frame for name in _SORT_FRAMES for frame in tags.getall(name)]
     tags.update_to_v23()
@@ -223,6 +246,16 @@ def _apply(tags: Any, wanted: dict[str, Any]) -> None:
     if "cover" in wanted:
         tags.delall("APIC")
         tags.add(APIC(encoding=0, mime="image/jpeg", type=3, desc="", data=wanted["cover"]))
+    if "comment" in wanted:
+        # The comment is the app's, by design: what other software kept in comments
+        # goes, and is in the backup (T-022).
+        # Every plain comment goes, in any language; a player's data stays: iTunSMPB
+        # holds the gapless playback of the file.
+        kept = [comment for comment in tags.getall("COMM") if comment.desc != ""]
+        tags.delall("COMM")
+        for comment in kept:
+            tags.add(comment)
+        tags.add(COMM(encoding=1, lang="eng", desc="", text=[wanted["comment"]]))
 
 
 def _digest(file: BinaryIO, start: int, end: int, stop: threading.Event | None) -> str:
