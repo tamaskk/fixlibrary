@@ -11,6 +11,7 @@ import type { PreviewField, PreviewValue, Proposal } from '@shared/preview'
 import { tagFieldsSchema, type TagFields } from '@shared/rpc'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { CONVERT_FILE_STAGE } from './convert'
+import { REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
 import { NAMING_STAGE } from './naming'
 import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage } from './stage'
@@ -106,7 +107,8 @@ export function createWriteTagsStage(dependencies: WriteTagsStageDependencies): 
     dependsOn: [NAMING_STAGE],
     // Each of them gives the file another path or other bytes, and their steps
     // must not be mixed. A WAV is an AIFF by the time its tags are written.
-    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE],
+    // A placeholder drawn again for the names of the preview is the one written.
+    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE, REDRAW_PLACEHOLDER_STAGE],
     selectable: false,
     timeoutMs: STAGE_TIMEOUTS_MS.writeTags,
     run: async ({ files, proposal }, track) => {

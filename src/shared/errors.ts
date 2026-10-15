@@ -30,6 +30,8 @@ export const ERROR_CODES = [
   'NOTHING_TO_UNDO',
   // The backup folder would change while the last batch can still be undone from it.
   'BACKUPS_IN_USE',
+  // A picture the user chose cannot be made a cover: not a picture, or too small.
+  'COVER_UNUSABLE',
   // Something failed that no code above describes; the detail is in the log.
   'UNEXPECTED'
 ] as const
@@ -94,5 +96,6 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   NOT_ENOUGH_SPACE: 'There is not enough free space',
   NOTHING_TO_UNDO: 'There is no batch to undo',
   BACKUPS_IN_USE: 'The backup folder is in use',
+  COVER_UNUSABLE: 'The picture cannot be made a cover',
   UNEXPECTED: 'Unexpected error'
 }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DuplicateGroup } from '@shared/duplicates'
 import type { FixLibraryApi } from '@shared/ipc'
 import type { PreviewCell, PreviewRow, PreviewState } from '@shared/preview'
+import { useCoverThumbsStore } from './cover-thumbs-store'
 import { countRows, shownRows, usePreviewStore } from './preview-store'
 
 const CELL: PreviewCell = {
@@ -457,5 +458,171 @@ describe('the duplicates of a batch', () => {
       { trackId: 1, excluded: true },
       { trackId: 2, excluded: false }
     ])
+  })
+})
+
+describe('a cover the user gives a row', () => {
+  const COVER = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd.jpg'
+  const WITH_COVER = row(1, {
+    cells: { ...row(1).cells, cover: { ...CELL, after: COVER, changed: true, source: 'manual' } }
+  })
+
+  beforeEach(() => {
+    useCoverThumbsStore.setState(useCoverThumbsStore.getInitialState())
+  })
+
+  it('replaces the row, says so, and has the thumbnails of the row asked for again', async () => {
+    // Arrange
+    stubApi({
+      chooseCover: async () => true,
+      setChosenCover: async () => ({ ok: true, value: WITH_COVER })
+    })
+    await usePreviewStore.getState().load()
+    useCoverThumbsStore.setState({ batchId: 7, rows: { 1: { status: 'failed' } } })
+
+    // Act
+    await usePreviewStore.getState().chooseCover(1)
+
+    // Assert
+    const { rows, editNote, settingCover } = usePreviewStore.getState()
+    expect(rows.status === 'ready' && rows.rows[0]?.cells.cover.after).toBe(COVER)
+    expect({ editNote, settingCover }).toEqual({ editNote: 'coverSet', settingCover: null })
+    expect(useCoverThumbsStore.getState().rows[1]).toBeUndefined()
+  })
+
+  it('says nothing, and makes nothing, when no picture was chosen', async () => {
+    // Arrange
+    const setChosenCover = vi.fn()
+    stubApi({ chooseCover: async () => false, setChosenCover })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().chooseCover(1)
+
+    // Assert
+    expect(usePreviewStore.getState().editNote).toBeNull()
+    expect(setChosenCover).not.toHaveBeenCalled()
+  })
+
+  it('says a picture is being made a cover only once one was chosen', async () => {
+    // Arrange
+    let whilePicking: number | null = -1
+    let whileMaking: number | null = -1
+    stubApi({
+      chooseCover: async () => {
+        whilePicking = usePreviewStore.getState().settingCover
+        return true
+      },
+      setChosenCover: async () => {
+        whileMaking = usePreviewStore.getState().settingCover
+        return { ok: true, value: WITH_COVER }
+      }
+    })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().chooseCover(1)
+
+    // Assert
+    expect({ whilePicking, whileMaking }).toEqual({ whilePicking: null, whileMaking: 1 })
+  })
+
+  it('keeps the thumbnails of a row given the same picture again', async () => {
+    // Arrange
+    stubApi({ dropCover: async () => ({ ok: true, value: WITH_COVER }) })
+    await usePreviewStore.getState().load()
+    const png = new File(['x'], 'a.png', { type: 'image/png' })
+    await usePreviewStore.getState().dropCover(1, png)
+    const ready = {
+      status: 'ready' as const,
+      trackId: 1,
+      hadBefore: false,
+      before: null,
+      beforeSize: null,
+      after: 'data:image/jpeg;base64,AA'
+    }
+    useCoverThumbsStore.setState({ batchId: 7, rows: { 1: ready } })
+
+    // Act
+    await usePreviewStore.getState().dropCover(1, png)
+
+    // Assert
+    expect(useCoverThumbsStore.getState().rows[1]).toEqual(ready)
+  })
+
+  it('says another picture is still being made a cover, and takes no second one', async () => {
+    // Arrange
+    let answer: (value: { ok: true; value: PreviewRow }) => void = () => {}
+    const dropCover = vi.fn(
+      () => new Promise<{ ok: true; value: PreviewRow }>((resolve) => (answer = resolve))
+    )
+    stubApi({ dropCover })
+    await usePreviewStore.getState().load()
+    const png = new File(['x'], 'a.png', { type: 'image/png' })
+    const first = usePreviewStore.getState().dropCover(1, png)
+
+    // Act
+    await usePreviewStore.getState().dropCover(2, png)
+    const note = usePreviewStore.getState().editNote
+    answer({ ok: true, value: WITH_COVER })
+    await first
+
+    // Assert
+    expect(note).toBe('coverBusy')
+    expect(dropCover).toHaveBeenCalledOnce()
+  })
+
+  it('says a picture cannot be a cover, and keeps the row', async () => {
+    // Arrange
+    stubApi({ dropCover: async () => ({ ok: false, code: 'COVER_UNUSABLE' }) })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().dropCover(1, new File(['x'], 'a.png', { type: 'image/png' }))
+
+    // Assert
+    expect(usePreviewStore.getState().editNote).toBe('coverRefused')
+  })
+
+  it('does not blame the picture for a failure that is not its own', async () => {
+    // Arrange
+    stubApi({
+      chooseCover: async () => true,
+      setChosenCover: async () => ({ ok: false, code: 'PYTHON_CRASHED' })
+    })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().chooseCover(1)
+
+    // Assert
+    expect(usePreviewStore.getState().editNote).toBe('failed')
+  })
+
+  it('takes a dropped WebP that says nothing of its type, by its name', async () => {
+    // Arrange
+    const dropCover = vi.fn(async () => ({ ok: true as const, value: WITH_COVER }))
+    stubApi({ dropCover })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().dropCover(1, new File(['x'], 'cover.WEBP', { type: '' }))
+
+    // Assert
+    expect(dropCover).toHaveBeenCalledOnce()
+  })
+
+  it('does not hand over a dropped file that is no picture of a kind it takes', async () => {
+    // Arrange
+    const dropCover = vi.fn()
+    stubApi({ dropCover })
+    await usePreviewStore.getState().load()
+
+    // Act
+    await usePreviewStore.getState().dropCover(1, new File(['x'], 'a.gif', { type: 'image/gif' }))
+
+    // Assert
+    expect(dropCover).not.toHaveBeenCalled()
+    expect(usePreviewStore.getState().editNote).toBe('coverRefused')
   })
 })

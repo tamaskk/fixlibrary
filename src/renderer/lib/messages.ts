@@ -21,6 +21,8 @@ export function errorMessage(code: ErrorCode): string {
       return 'A duplikátumcsoportok megváltoztak. Semmi nem változott a fájljaidon. Nézd át újra, és hagyd jóvá még egyszer.'
     case 'BACKUPS_IN_USE':
       return 'A backup mappa most nem változhat: az utolsó batch még innen vonható vissza.'
+    case 'COVER_UNUSABLE':
+      return 'Ez a kép nem használható borítónak.'
     case 'FILE_UNREADABLE':
       return 'A fájl nem olvasható.'
     case 'LOOKUP_FAILED':

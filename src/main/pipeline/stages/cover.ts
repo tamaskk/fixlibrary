@@ -3,6 +3,7 @@ import { basename } from 'path'
 import { z } from 'zod'
 import type { AppDatabase } from '../../db/connection'
 import { listJobStageNames } from '../../db/jobs'
+import { listStyles } from '../../db/styles'
 import type { Track } from '../../db/tracks'
 import type { CoverStore } from '../../services/covers'
 import type { LookupCache } from '../../services/lookup/cache'
@@ -14,6 +15,8 @@ import { logger } from '../../services/logger'
 import type { PythonBridge } from '../../services/python-bridge'
 import { COVER_NAMES, MIN_KEPT_COVER_SIZE } from '@shared/covers'
 import { AppError } from '@shared/errors'
+import { placeholderSpecSchema, type PlaceholderSpec } from '@shared/rpc'
+import { NEW_STYLE_COLOR, UNSORTED_STYLE_NAME } from '@shared/settings'
 import type { PreviewField, PreviewValue, Proposal } from '@shared/preview'
 import { COVER_RPC_TIMEOUT_MS, STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { CONVERT_FILE_STAGE } from './convert'
@@ -21,12 +24,13 @@ import { keptFingerprint } from './fingerprint'
 import { LOOKUP_STAGE } from './lookup'
 import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage, StageContext, StageResult } from './stage'
-import { takesTags, WRITE_TAGS_STAGE } from './write-tags'
+import { COVER_STAGE, EMBED_COVER_STAGE, REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
+import { tagsFor, takesTags, WRITE_TAGS_STAGE } from './write-tags'
 
-export const COVER_STAGE = 'cover'
-export const EMBED_COVER_STAGE = 'embedCover'
+export { COVER_STAGE, EMBED_COVER_STAGE, REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
 
 export interface CoverStageDependencies {
+  db: AppDatabase
   /** Null while this installation has no sidecar to ask. */
   python: () => Pick<PythonBridge, 'call'> | null
   covers: CoverStore
@@ -47,9 +51,13 @@ export const coverDetailsSchema = z.object({
     .object({
       width: z.number().int().positive().nullable(),
       height: z.number().int().positive().nullable(),
-      thumb: thumbName.nullable()
+      thumb: thumbName.nullable(),
+      placeholder: z.boolean().optional(),
+      other: z.boolean().optional()
     })
-    .nullable()
+    .nullable(),
+  /** For a cover the app drew: what it shows, so it can be drawn again when that changed. */
+  placeholder: placeholderSpecSchema.optional()
 })
 
 export type CoverDetails = z.output<typeof coverDetailsSchema>
@@ -69,6 +77,49 @@ function queryOf(track: Track, proposal: Proposal): CoverQuery {
     title: textOf(proposal, 'title', track.title),
     mix: textOf(proposal, 'mix', track.mix)
   }
+}
+
+/**
+ * What the placeholder of a track shows, as the batch holds it now: the artist and
+ * the title (with the mix) as its tags would hold them, on the colour of its style,
+ * or of Unsorted where it has none.
+ */
+export function placeholderSpec(
+  db: AppDatabase,
+  track: Track,
+  proposal: Proposal
+): PlaceholderSpec {
+  const tags = tagsFor(track, proposal)
+  const proposed = proposal.fields?.styleId
+  const locked = track.lockedFields.includes('styleId') && proposed?.source !== 'manual'
+  const styleId =
+    proposed === undefined || locked
+      ? track.primaryStyleId
+      : typeof proposed.value === 'number'
+        ? proposed.value
+        : null
+  const styles = listStyles(db)
+  const style =
+    styles.find((each) => each.id === styleId) ??
+    styles.find((each) => each.name === UNSORTED_STYLE_NAME)
+  return {
+    artist: tags.artist ?? null,
+    title: tags.title ?? null,
+    color: style?.color ?? NEW_STYLE_COLOR
+  }
+}
+
+function sameSpec(a: PlaceholderSpec, b: PlaceholderSpec): boolean {
+  return (
+    a.artist === b.artist && a.title === b.title && a.color.toLowerCase() === b.color.toLowerCase()
+  )
+}
+
+/** The cover details a batch item holds, or null. */
+export function coverDetailsOf(after: unknown): CoverDetails | null {
+  const record = z.record(z.string(), z.unknown()).safeParse(after)
+  const parsed = coverDetailsSchema.safeParse(record.data?.['cover'])
+  return parsed.success ? parsed.data : null
 }
 
 function stemOf(url: string): string {
@@ -159,8 +210,9 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
   }
 
   async function run(context: StageContext, track: Track): Promise<StageResult | void> {
-    // A WAV gets its cover once it is an AIFF; a copy set aside gets none.
-    if (!takesTags(track.path)) return
+    // A WAV gets its cover once it is an AIFF; a copy set aside gets none. A cover
+    // the user gave the track is theirs: no run looks for another.
+    if (!takesTags(track.path) || track.lockedFields.includes('cover')) return
     const python = dependencies.python()
     if (!python) throw new AppError('PYTHON_CRASHED', 'the sidecar is not running')
     await covers.ensure()
@@ -169,8 +221,11 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
       { path: track.path },
       { timeoutMs: COVER_RPC_TIMEOUT_MS }
     )
+    // A cover of the track's own of 300 × 300 or more stays; one the app drew where
+    // nothing was found is looked for again.
     if (
       held !== null &&
+      !held.placeholder &&
       held.width !== null &&
       held.height !== null &&
       Math.min(held.width, held.height) >= MIN_KEPT_COVER_SIZE
@@ -213,7 +268,32 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
       // "No cover" is only true when every place was asked; the next run asks again.
       throw new AppError('LOOKUP_FAILED', 'a cover service could not be asked')
     }
-    return { proposal: { warnings: ['NO_COVER'], cover: null } }
+    // Nothing anywhere. A real cover of the track's own, however small, stays, by the
+    // owner's choice: the row says so, and the user can choose a picture. A track
+    // with none, or one that cannot be read, gets a cover the app draws.
+    // A real picture the app does not decode (a GIF, or one larger than it decodes)
+    // is the track's own too; only damaged bytes give way.
+    const ownCover = held !== null && !held.placeholder && (held.width !== null || held.other)
+    const nothing = { proposal: { warnings: ['NO_COVER' as const], cover: null } }
+    if (ownCover) return nothing
+    const spec = placeholderSpec(dependencies.db, track, context.proposal)
+    const drawn = await drawPlaceholder(python, spec)
+    if (!drawn) return nothing
+    // The placeholder the file holds already is this one: nothing to write again.
+    if (
+      held?.placeholder &&
+      held.thumb === `${await covers.digest(drawn.cover, 'cover')}.thumb.jpg`
+    ) {
+      return nothing
+    }
+    const details: CoverDetails = { thumb: drawn.thumb, before: held, placeholder: spec }
+    return {
+      proposal: {
+        fields: { cover: { value: drawn.cover, source: 'placeholder' } },
+        warnings: ['NO_COVER'],
+        cover: details
+      }
+    }
   }
 
   return {
@@ -228,6 +308,64 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
     timeoutMs: STAGE_TIMEOUTS_MS.cover,
     warnings: ['NO_COVER'],
     run
+  }
+}
+
+/** The placeholder drawn, or null when the sidecar would not draw it. */
+async function drawPlaceholder(
+  python: Pick<PythonBridge, 'call'>,
+  spec: PlaceholderSpec
+): Promise<{ cover: string; thumb: string } | null> {
+  try {
+    return await python.call('cover.placeholder', spec, { timeoutMs: COVER_RPC_TIMEOUT_MS })
+  } catch (error) {
+    // Refused, or too slow: the track goes without, and says so.
+    if (error instanceof AppError && (error.code === 'PYTHON_ERROR' || error.code === 'TIMEOUT')) {
+      return null
+    }
+    throw error
+  }
+}
+
+export interface RedrawPlaceholderStageDependencies {
+  db: AppDatabase
+  python: () => Pick<PythonBridge, 'call'> | null
+}
+
+/**
+ * Draws the placeholder of a track again when what it shows changed in the preview:
+ * the artist, the title or the style. It runs after the approval, before the cover
+ * is written, and touches no library file: the new picture goes into the covers
+ * folder, and the batch holds it in the place of the old one.
+ */
+export function createRedrawPlaceholderStage(
+  dependencies: RedrawPlaceholderStageDependencies
+): Stage {
+  return {
+    name: REDRAW_PLACEHOLDER_STAGE,
+    phase: 'apply',
+    resource: 'cpu',
+    dependsOn: [COVER_STAGE],
+    selectable: false,
+    timeoutMs: STAGE_TIMEOUTS_MS.cover,
+    run: async ({ proposal }, track) => {
+      if (proposal.fields?.cover?.source !== 'placeholder') return
+      const details = coverDetailsOf(proposal)
+      if (!details?.placeholder) return
+      const spec = placeholderSpec(dependencies.db, track, proposal)
+      if (sameSpec(spec, details.placeholder)) return
+      const python = dependencies.python()
+      if (!python) throw new AppError('PYTHON_CRASHED', 'the sidecar is not running')
+      // One that cannot be drawn again keeps the one the preview showed.
+      const drawn = await drawPlaceholder(python, spec)
+      if (!drawn) return
+      return {
+        proposal: {
+          fields: { cover: { value: drawn.cover, source: 'placeholder' } },
+          cover: { ...details, thumb: drawn.thumb, placeholder: spec }
+        }
+      }
+    }
   }
 }
 
@@ -254,7 +392,7 @@ export function createEmbedCoverStage(dependencies: EmbedCoverStageDependencies)
     phase: 'apply',
     resource: 'io',
     dependsOn: [COVER_STAGE],
-    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE, WRITE_TAGS_STAGE],
+    after: [CONVERT_FILE_STAGE, SET_ASIDE_STAGE, REDRAW_PLACEHOLDER_STAGE, WRITE_TAGS_STAGE],
     selectable: false,
     timeoutMs: STAGE_TIMEOUTS_MS.embedCover,
     run: async ({ files, proposal, batchId }, track) => {

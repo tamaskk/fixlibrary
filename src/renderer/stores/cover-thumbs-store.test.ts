@@ -122,4 +122,24 @@ describe('the thumbnails of covers', () => {
     expect(Object.keys(useCoverThumbsStore.getState().rows)).toEqual(['2'])
     expect(asked.map((each) => each.batchId)).toEqual([7, 8])
   })
+
+  it('takes no answer asked for before the cover of the row changed', async () => {
+    // Arrange
+    let answer: (value: unknown) => void = () => {}
+    stubApi(() => new Promise((resolve) => (answer = resolve)))
+    const { request, forget } = useCoverThumbsStore.getState()
+    request(7, 1)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Act
+    forget(1)
+    answer({
+      ok: true,
+      value: [{ trackId: 1, hadBefore: false, before: null, beforeSize: null, after: THUMB }]
+    })
+    await settled()
+
+    // Assert
+    expect(useCoverThumbsStore.getState().rows[1]).toBeUndefined()
+  })
 })

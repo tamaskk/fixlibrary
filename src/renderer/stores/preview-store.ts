@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import type { DuplicateGroup } from '@shared/duplicates'
-import type { ErrorCode } from '@shared/errors'
+import type { ErrorCode, Result } from '@shared/errors'
 import {
+  isManualCoverFile,
   matchesPreviewFilter,
   PREVIEW_PAGE_SIZE,
   PREVIEW_WARNINGS,
@@ -15,6 +16,7 @@ import {
   type UndoOutcome
 } from '@shared/preview'
 import type { Style } from '@shared/settings'
+import { useCoverThumbsStore } from './cover-thumbs-store'
 
 export type PreviewTab = 'changes' | 'duplicates' | 'errors'
 
@@ -62,10 +64,25 @@ interface PreviewStoreState {
    * hold the value. `busy`: an approval is on its way. `failed`: anything else; the
    * rows were read again. `lookupFailed`: the services could not be asked again; the
    * row is as it was. `lookupBusy`: a row cannot be asked about just now. `lookupDone`: a row was asked about again and is shown as it is now.
+   * `coverSet`: a picture the user chose is the row's cover now. `coverRefused`: the
+   * picture cannot be a cover; the row is as it was. `coverBusy`: another picture is
+   * still being made a cover.
    */
-  editNote: 'refused' | 'busy' | 'failed' | 'lookupFailed' | 'lookupBusy' | 'lookupDone' | null
+  editNote:
+    | 'refused'
+    | 'busy'
+    | 'failed'
+    | 'lookupFailed'
+    | 'lookupBusy'
+    | 'lookupDone'
+    | 'coverSet'
+    | 'coverRefused'
+    | 'coverBusy'
+    | null
   /** The row the online services are asked about again right now, or null. */
   refreshing: number | null
+  /** The row a chosen picture is being made the cover of, or null. */
+  settingCover: number | null
   load: () => Promise<void>
   setTab: (tab: PreviewTab) => void
   setFilter: (filter: PreviewFilter) => void
@@ -73,6 +90,10 @@ interface PreviewStoreState {
   edit: (trackId: number, field: EditablePreviewField, value: PreviewValue) => Promise<boolean>
   /** Asks the online services again about one row. */
   refreshLookup: (trackId: number) => Promise<void>
+  /** Asks for a picture in a dialog and makes it the cover of a row. */
+  chooseCover: (trackId: number) => Promise<void>
+  /** Makes a picture dropped on a row its cover. */
+  dropCover: (trackId: number, file: File) => Promise<void>
   setExcluded: (trackIds: readonly number[], excluded: boolean) => Promise<void>
   /** Reads the groups of duplicates again. */
   loadDuplicates: () => Promise<void>
@@ -200,6 +221,54 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
     })
   }
 
+  // True while a picture is on its way to becoming a cover, from the dialog onwards.
+  let coverBusy = false
+
+  /** Makes a picture the cover of a row: asks for one when `pick` is given, then sets it. */
+  async function setCover(
+    trackId: number,
+    ask: (request: { batchId: number; trackId: number }) => Promise<Result<PreviewRow>>,
+    pick?: (request: { batchId: number; trackId: number }) => Promise<boolean>
+  ): Promise<void> {
+    const { batch, rows } = get()
+    if (!batch) return
+    if (coverBusy) {
+      set({ editNote: 'coverBusy' })
+      return
+    }
+    coverBusy = true
+    const request = { batchId: batch.id, trackId }
+    const before =
+      rows.status === 'ready' ? rows.rows.find((row) => row.trackId === trackId) : undefined
+    set({ editNote: null })
+    try {
+      // While the user chooses, nothing is being made yet; nothing chosen, nothing to say.
+      if (pick && !(await pick(request))) return
+      set({ settingCover: trackId })
+      const result = await ask(request)
+      if (result.ok) {
+        // The same picture again has the same name: its pictures are shown already.
+        if (before?.cells.cover.after !== result.value.cells.cover.after) {
+          // Forgotten first, so the cell of the new row asks for its new pictures.
+          useCoverThumbsStore.getState().forget(trackId)
+        }
+        replaceRow(result.value)
+        set({ editNote: 'coverSet' })
+      } else if (result.code === 'RUN_ACTIVE') set({ editNote: 'busy' })
+      // The picture is what was refused; anything else is no fault of the picture.
+      else if (result.code === 'COVER_UNUSABLE') set({ editNote: 'coverRefused' })
+      else {
+        await resync()
+        set({ editNote: 'failed' })
+      }
+    } catch {
+      await resync()
+    } finally {
+      coverBusy = false
+      set({ settingCover: null })
+    }
+  }
+
   function replaceRow(next: PreviewRow): void {
     const { rows } = get()
     if (rows.status !== 'ready') return
@@ -226,6 +295,7 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
     duplicates: { status: 'idle' },
     styles: [],
     refreshing: null,
+    settingCover: null,
     tab: 'changes',
     filter: 'all',
     busy: null,
@@ -312,6 +382,23 @@ export const usePreviewStore = create<PreviewStoreState>((set, get) => {
       } finally {
         set({ refreshing: null })
       }
+    },
+
+    async chooseCover(trackId) {
+      await setCover(
+        trackId,
+        (request) => window.api.preview.setChosenCover(request),
+        (request) => window.api.preview.chooseCover(request)
+      )
+    },
+
+    async dropCover(trackId, file) {
+      // Told here, where the page can say so; main checks it again by the file itself.
+      if (!isManualCoverFile(file.name, file.type)) {
+        set({ editNote: 'coverRefused' })
+        return
+      }
+      await setCover(trackId, (request) => window.api.preview.dropCover(request, file))
     },
 
     async setExcluded(trackIds, excluded) {

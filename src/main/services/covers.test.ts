@@ -1,12 +1,15 @@
+import { createHash } from 'crypto'
 import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync
 } from 'fs'
 import { tmpdir } from 'os'
@@ -113,5 +116,64 @@ describe('the covers folder', () => {
     // Assert
     expect(shown).toBe(`data:image/jpeg;base64,${JPEG.toString('base64')}`)
     expect([refused, missing, named]).toEqual([null, null, null])
+  })
+
+  it('copies a chosen picture in as a download named by the SHA-1 of its content', async () => {
+    // Arrange
+    await store.ensure()
+    const picture = join(folder, 'chosen.png')
+    writeFileSync(picture, JPEG)
+    const before = readFileSync(picture)
+
+    // Act
+    const name = await store.importPicture(picture)
+
+    // Assert
+    expect(name).toBe(`${createHash('sha1').update(JPEG).digest('hex')}.download`)
+    expect(readFileSync(join(store.folder, name))).toEqual(JPEG)
+    expect(readFileSync(picture)).toEqual(before)
+  })
+
+  it.each([
+    ['a relative path', (): string => 'chosen.png'],
+    [
+      'a link',
+      (): string => {
+        const target = join(folder, 'target.png')
+        writeFileSync(target, JPEG)
+        const link = join(folder, 'link.png')
+        symlinkSync(target, link)
+        return link
+      }
+    ],
+    [
+      'a folder',
+      (): string => {
+        const named = join(folder, 'folder.png')
+        mkdirSync(named)
+        return named
+      }
+    ],
+    [
+      'a file larger than a picture may be',
+      (): string => {
+        const large = join(folder, 'large.png')
+        writeFileSync(large, '')
+        truncateSync(large, 16 * 1024 * 1024 + 1)
+        return large
+      }
+    ],
+    ['a file that is not there', (): string => join(folder, 'missing.png')]
+  ])('reads nothing of %s', async (_kind, make) => {
+    // Arrange
+    await store.ensure()
+    const path = make()
+
+    // Act
+    const imported = store.importPicture(path)
+
+    // Assert
+    await expect(imported).rejects.toThrow()
+    expect(readdirSync(store.folder)).toEqual([])
   })
 })

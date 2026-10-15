@@ -41,7 +41,8 @@ export type EditablePreviewField = (typeof EDITABLE_PREVIEW_FIELDS)[number]
  * `fileName` is what the name of the file said where no tag and no lookup did;
  * `naming` is a file name the app built from the other fields; `conversion` is the
  * name a file gets when it becomes a file of another format; `itunes` and
- * `coverartarchive` are where a cover was found.
+ * `coverartarchive` are where a cover was found; `placeholder` is a cover the app
+ * drew where none was found.
  */
 export const FIELD_SOURCES = [
   'lookup',
@@ -49,6 +50,7 @@ export const FIELD_SOURCES = [
   'discogs',
   'itunes',
   'coverartarchive',
+  'placeholder',
   'id3',
   'fileName',
   'naming',
@@ -318,6 +320,24 @@ export const coverThumbsRequestSchema = z.object({
   trackIds: z.array(z.number().int().positive()).min(1).max(MAX_COVER_THUMB_TRACKS)
 })
 export type CoverThumbsRequest = z.input<typeof coverThumbsRequestSchema>
+
+/** A row of the batch that waits for approval, named by ids only. */
+export const previewTrackSchema = z.object({
+  batchId: z.number().int().positive(),
+  trackId: z.number().int().positive()
+})
+export type PreviewTrack = z.input<typeof previewTrackSchema>
+
+/** The kinds of picture the user can give a track as its cover. */
+export const MANUAL_COVER_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'] as const
+export const MANUAL_COVER_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+
+/** True for a file that may be a picture of a kind a cover can be made of, by its type or name. */
+export function isManualCoverFile(name: string, type: string): boolean {
+  if (type !== '') return MANUAL_COVER_TYPES.some((allowed) => allowed === type)
+  const lower = name.toLowerCase()
+  return MANUAL_COVER_EXTENSIONS.some((extension) => lower.endsWith(extension))
+}
 
 /** The covers of one row, as small JPEGs in `data:` addresses. */
 export interface CoverThumbs {

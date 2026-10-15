@@ -29,6 +29,11 @@ export interface PreviewColumn {
   wideOnly?: true
   /** Set for a column whose cells the user can change in place. */
   edit?: { field: EditablePreviewField; editor: PreviewEditor }
+  /**
+   * Set for a column whose cells start an action of the page instead, such as the
+   * choice of a file: Enter and a double click ask the page, through `onActivate`.
+   */
+  activate?: true
   render: (row: PreviewRow, context: PreviewColumnContext) => React.ReactNode
   /** The whole content as text, for the tooltip of a cell that is cut short. */
   text: (row: PreviewRow, context: PreviewColumnContext) => string | null

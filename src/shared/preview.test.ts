@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isManualCoverFile,
   matchesPreviewFilter,
   mergeProposal,
   PREVIEW_FILTERS,
@@ -255,5 +256,23 @@ describe('the tempo and key of a proposal', () => {
 
     // Assert
     expect(proposal.fields).toBeUndefined()
+  })
+})
+
+describe('isManualCoverFile', () => {
+  it.each([
+    ['cover.jpg', 'image/jpeg', true],
+    ['cover.PNG', 'image/png', true],
+    ['cover.webp', '', true],
+    ['COVER.JPEG', '', true],
+    ['cover.gif', 'image/gif', false],
+    ['cover.png', 'image/gif', false],
+    ['cover.heic', '', false]
+  ])('takes %s of type "%s": %s', (name, type, taken) => {
+    // Act
+    const result = isManualCoverFile(name, type)
+
+    // Assert
+    expect(result).toBe(taken)
   })
 })

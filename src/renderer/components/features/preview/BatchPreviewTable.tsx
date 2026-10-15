@@ -42,6 +42,8 @@ type BatchPreviewTableProps = {
   onSetExcluded: (trackId: number, excluded: boolean) => void
   /** Told which row the keys act on, or null: for an action of the page on that row. */
   onCursorRowChange?: (trackId: number | null) => void
+  /** Asked when a cell of a column with `activate` is activated by Enter or a double click. */
+  onActivate?: (trackId: number, columnId: string) => void
 }
 
 function rowState(row: PreviewRow): { icon: LucideIcon; label: string; className: string } {
@@ -69,7 +71,8 @@ export function BatchPreviewTable({
   styles,
   onEdit,
   onSetExcluded,
-  onCursorRowChange
+  onCursorRowChange,
+  onActivate
 }: BatchPreviewTableProps): React.JSX.Element {
   const scrollRef = React.useRef<HTMLDivElement>(null)
   // Measured here: the virtualizer only reports a change of the height it scrolls in.
@@ -112,7 +115,8 @@ export function BatchPreviewTable({
     // In the order of the definition, wherever a column joined.
     return allColumns.filter((column) => !column.wideOnly || joined.has(column.id))
   }, [allColumns, tableWidth])
-  const editable = columns.filter((column) => column.edit !== undefined)
+  // The cells the keys move between: those that are edited, and those that start an action.
+  const editable = columns.filter((column) => column.edit !== undefined || column.activate)
   const template = `${LEADING_COLUMNS} ${columns.map((column) => column.track).join(' ')}`
   const minWidth = leastWidthOf(columns)
 
@@ -154,7 +158,13 @@ export function BatchPreviewTable({
 
   function startEditing(row: PreviewRow, column: PreviewColumn): void {
     // A track that was skipped is not written: there is nothing to set for it.
-    if (!column.edit || row.error) return
+    if (row.error) return
+    if (column.activate) {
+      setCursor({ trackId: row.trackId, columnId: column.id })
+      onActivate?.(row.trackId, column.id)
+      return
+    }
+    if (!column.edit) return
     setCursor({ trackId: row.trackId, columnId: column.id })
     setEditing({ trackId: row.trackId, columnId: column.id })
   }
@@ -328,9 +338,11 @@ export function BatchPreviewTable({
                       id={cellId(row.trackId, column.id)}
                       role="gridcell"
                       title={isEditing ? undefined : (column.text(row, context) ?? undefined)}
-                      aria-readonly={column.edit && !row.error ? undefined : true}
+                      aria-readonly={
+                        (column.edit || column.activate) && !row.error ? undefined : true
+                      }
                       onClick={(event) => {
-                        if (!column.edit) return
+                        if (!column.edit && !column.activate) return
                         event.stopPropagation()
                         setCursor({ trackId: row.trackId, columnId: column.id })
                       }}

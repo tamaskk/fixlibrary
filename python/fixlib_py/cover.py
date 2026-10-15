@@ -44,6 +44,10 @@ MAX_PROFILE_BYTES = 1024 * 1024
 # Off by more than this, a picture is cut to a square; less is not seen once resized.
 _SQUARE_TOLERANCE = 0.02
 _FORMATS = ("JPEG", "PNG")
+# A picture the user chose may also be a WebP; one from a service may not.
+_MANUAL_FORMATS = (*_FORMATS, "WEBP")
+# The mark of a cover the app drew (placeholder.py), so a later run looks again.
+PLACEHOLDER_COMMENT = b"FixLibrary placeholder"
 _HASH = "[0-9a-f]{40}"
 _NAMES = {
     "cover": re.compile(rf"^{_HASH}\.jpg$"),
@@ -90,7 +94,27 @@ def _read(path: str, limit: int) -> bytes:
     return data
 
 
-def _image(data: bytes, least: int | None = None) -> tuple[Any, tuple[int, int]]:
+class TooLarge(Refused):
+    """A picture larger than a cover may be: its size is known from its header."""
+
+    def __init__(self, size: tuple[int, int] | None) -> None:
+        super().__init__("the picture is larger than a cover may be")
+        self.size = size
+
+
+# How the formats Pillow is not asked to decode begin: a real picture of the track,
+# not damaged bytes.
+_OTHER_PICTURES = (b"GIF87a", b"GIF89a", b"BM", b"II*\x00", b"MM\x00*")
+
+
+def _is_other_picture(data: bytes) -> bool:
+    is_webp = data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return is_webp or any(data.startswith(magic) for magic in _OTHER_PICTURES)
+
+
+def _image(
+    data: bytes, least: int | None = None, formats: tuple[str, ...] = _FORMATS
+) -> tuple[Any, tuple[int, int]]:
     """The picture in the bytes, decoded, and its size as stored; or Refused.
 
     With `least`, a JPEG is decoded at the smallest scale at which it still has that
@@ -101,10 +125,12 @@ def _image(data: bytes, least: int | None = None) -> tuple[Any, tuple[int, int]]
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            image = Image.open(io.BytesIO(data), formats=_FORMATS)
+            image = Image.open(io.BytesIO(data), formats=formats)
             width, height = image.size
-            if width < 1 or height < 1 or width * height > MAX_PIXELS:
-                raise Refused("the picture is larger than a cover may be")
+            if width < 1 or height < 1:
+                raise Refused("the picture cannot be read as an image")
+            if width * height > MAX_PIXELS:
+                raise TooLarge((width, height))
             if least is not None and image.format == "JPEG":
                 image.draft("RGB", (least, least))
             image.load()
@@ -112,7 +138,7 @@ def _image(data: bytes, least: int | None = None) -> tuple[Any, tuple[int, int]]
     except Refused:
         raise
     except (Image.DecompressionBombWarning, Image.DecompressionBombError):
-        raise Refused("the picture is larger than a cover may be") from None
+        raise TooLarge(None) from None
     except Exception:
         # In fixed words: what a decoder says may quote the bytes.
         raise Refused("the picture cannot be read as an image") from None
@@ -127,7 +153,7 @@ def read_app_cover(name: object) -> bytes:
     return data
 
 
-def _write_new(name: str, kind: str, data: bytes) -> None:
+def write_new(name: str, kind: str, data: bytes) -> None:
     """Puts the bytes in the covers folder under the name, whole or not at all."""
     final = path_of(name, kind)
     temp = os.path.join(os.path.dirname(final), f".{name}.{secrets.token_hex(4)}.tmp")
@@ -144,19 +170,21 @@ def _write_new(name: str, kind: str, data: bytes) -> None:
         raise
 
 
-def _jpeg(image: Any, quality: int) -> bytes:
-    # Nothing of the source rides along: no EXIF, no colour profile, no comment.
+def jpeg_bytes(image: Any, quality: int, comment: bytes | None = None) -> bytes:
+    # Nothing of the source rides along: no EXIF, no colour profile, no comment but
+    # the app's own.
     output = io.BytesIO()
-    image.save(output, format="JPEG", quality=quality, optimize=True)
+    extra = {"comment": comment} if comment is not None else {}
+    image.save(output, format="JPEG", quality=quality, optimize=True, **extra)
     return output.getvalue()
 
 
-def _thumbnail(image: Any) -> bytes:
+def thumbnail_bytes(image: Any) -> bytes:
     from PIL import Image
 
     small = _rgb(image)
     small.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.Resampling.LANCZOS)
-    return _jpeg(small, 80)
+    return jpeg_bytes(small, 80)
 
 
 def _rgb(image: Any) -> Any:
@@ -210,8 +238,10 @@ def _front_picture(tags: Any) -> Any:
 def inspect_cover(path: str) -> dict[str, Any]:
     """What the cover a file holds is: its size in pixels and a thumbnail. Reads the file only.
 
-    A file without a picture answers `{"cover": None}`. A picture that cannot be
-    decoded answers no size and no thumbnail.
+    A file without a picture answers `{"cover": None}`. A picture that is not decoded
+    answers no thumbnail, and `other` when it is a real picture the app does not
+    decode (larger than it decodes, or a GIF, BMP, TIFF or WebP) rather than damaged
+    bytes; the size of one that is too large is read from its header.
     """
     # Imported here: the tag writer reads covers through this module.
     from fixlib_py.tag_write import _format_of, _open
@@ -229,15 +259,47 @@ def inspect_cover(path: str) -> dict[str, Any]:
     data = bytes(picture.data)
     try:
         image, (width, height) = _image(data, THUMB_SIZE)
+    except TooLarge as error:
+        # A real cover, larger than the app decodes: as large as any it would make.
+        width, height = error.size or (None, None)
+        return {
+            "cover": {
+                "width": width,
+                "height": height,
+                "thumb": None,
+                "placeholder": False,
+                "other": True,
+            }
+        }
     except Refused:
-        return {"cover": {"width": None, "height": None, "thumb": None}}
+        # A GIF, BMP, TIFF or WebP is a cover of the track the app does not decode;
+        # anything else is damaged.
+        return {
+            "cover": {
+                "width": None,
+                "height": None,
+                "thumb": None,
+                "placeholder": False,
+                "other": _is_other_picture(data),
+            }
+        }
     thumb = f"{hashlib.sha1(data).hexdigest()}.thumb.jpg"
-    _write_new(thumb, "thumb", _thumbnail(image))
-    return {"cover": {"width": width, "height": height, "thumb": thumb}}
+    write_new(thumb, "thumb", thumbnail_bytes(image))
+    # A cover the app drew where none was found: a later run looks again.
+    drawn = image.format == "JPEG" and image.info.get("comment") == PLACEHOLDER_COMMENT
+    return {
+        "cover": {
+            "width": width,
+            "height": height,
+            "thumb": thumb,
+            "placeholder": drawn,
+            "other": False,
+        }
+    }
 
 
 @rpc("cover.prepare")
-def prepare_cover(source: str) -> dict[str, Any]:
+def prepare_cover(source: str, manual: bool = False) -> dict[str, Any]:
     """Makes the 600 x 600 JPEG of a downloaded picture, and its thumbnail.
 
     `source` names a download in the covers folder; the cover gets the same hash.
@@ -245,9 +307,12 @@ def prepare_cover(source: str) -> dict[str, Any]:
     than 2%, resized with Lanczos, turned into sRGB and saved at quality 90 with
     nothing of the source's metadata. A picture whose shorter side is below 300
     pixels is refused: it would be no better than the cover a file may keep.
+    `manual` is for a picture the user chose, which may also be a WebP.
     """
+    if not isinstance(manual, bool):
+        raise ValueError("manual must be true or false")
     data = _read(path_of(source, "download"), MAX_SOURCE_BYTES)
-    image, (width, height) = _image(data, COVER_SIZE)
+    image, (width, height) = _image(data, COVER_SIZE, _MANUAL_FORMATS if manual else _FORMATS)
     from PIL import Image
 
     # Judged by the picture as it is stored: the square is its shorter side.
@@ -256,8 +321,8 @@ def prepare_cover(source: str) -> dict[str, Any]:
     square = _square(_rgb(image))
     cover = square.resize((COVER_SIZE, COVER_SIZE), Image.Resampling.LANCZOS)
     stem = source.removesuffix(".download")
-    _write_new(f"{stem}.jpg", "cover", _jpeg(cover, 90))
-    _write_new(f"{stem}.thumb.jpg", "thumb", _thumbnail(cover))
+    write_new(f"{stem}.jpg", "cover", jpeg_bytes(cover, 90))
+    write_new(f"{stem}.thumb.jpg", "thumb", thumbnail_bytes(cover))
     return {
         "cover": f"{stem}.jpg",
         "thumb": f"{stem}.thumb.jpg",

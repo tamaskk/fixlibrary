@@ -30,7 +30,7 @@ import type { TagFields } from '@shared/rpc'
 import { createBatchFiles, type BatchFiles } from './batch-files'
 import { createOrchestrator, type Orchestrator } from './orchestrator'
 import { commitApprovedValues, createPreview, type Preview } from './preview'
-import { createEmbedCoverStage } from './stages/cover'
+import { createEmbedCoverStage, createRedrawPlaceholderStage } from './stages/cover'
 import { createNamingStage } from './stages/naming'
 import { createRenameStage } from './stages/rename'
 import type { Stage } from './stages/stage'
@@ -52,12 +52,15 @@ let run: Orchestrator
 let preview: Preview
 /** The calls the stand-in sidecar got, with what they came with. */
 let calls: { method: string; path: string; hasSignal: boolean }[]
+/** What the stand-in sidecar was asked to draw. */
+let placeholders: unknown[]
 /** What the stand-in does instead of writing, when a test says so. */
 let failing: ((dst: string, signal: AbortSignal) => Promise<void>) | null
 /** What the lookup stand-in proposes for every track. */
 let found: ProposedFields
-/** What the cover stand-in proposes for every track. */
+/** What the cover stand-in proposes for every track, and keeps next to it. */
 let coverFound: ProposedFields
+let coverDetails: unknown
 
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -87,6 +90,11 @@ const python: Pick<PythonBridge, 'call'> = {
   ) => {
     const path = params.path ?? params.src ?? ''
     calls.push({ method, path, hasSignal: options?.job?.signal !== undefined })
+    if (method === 'cover.placeholder') {
+      placeholders.push(params)
+      const stem = createHash('sha1').update(JSON.stringify(params)).digest('hex')
+      return { cover: `${stem}.jpg`, thumb: `${stem}.thumb.jpg` }
+    }
     if (method === 'tags.would_change') {
       const held = tagsIn(path) ?? {}
       const changed = Object.entries(params.fields).some(
@@ -179,6 +187,8 @@ beforeEach(() => {
     year: { value: 1997, source: 'musicbrainz', confidence: 0.9 }
   }
   coverFound = { cover: { value: COVER, source: 'itunes' } }
+  coverDetails = { thumb: COVER.replace('.jpg', '.thumb.jpg'), before: null }
+  placeholders = []
   fileOps = createFileOps({ allowedRoots: () => [library, clean, backups] })
   batchFiles = createBatchFiles({
     db: testDatabase.db,
@@ -192,7 +202,11 @@ beforeEach(() => {
       bpm: { value: 124, source: 'analysis' },
       key: { value: '11A', source: 'analysis' }
     })),
-    standIn('cover', () => coverFound),
+    {
+      ...standIn('cover', () => coverFound),
+      run: async () => ({ proposal: { fields: coverFound, cover: coverDetails } })
+    },
+    createRedrawPlaceholderStage({ db: testDatabase.db, python: () => python }),
     createNamingStage(),
     createWriteTagsStage({ python: () => python }),
     createEmbedCoverStage({ db: testDatabase.db, python: () => python }),
@@ -758,6 +772,60 @@ describe('a batch that found covers', () => {
     expect(sha256(track.path)).toBe(original)
     expect(trackOf(track.id).coverStatus).not.toBe('embedded')
     expect(filesUnder(backups)).toEqual([])
+  })
+
+  it('draws the placeholder again for the title the user typed, and embeds that one', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.mp3', { artist: 'Bicep', title: 'Glue' })
+    coverFound = { cover: { value: COVER, source: 'placeholder' } }
+    coverDetails = {
+      thumb: COVER.replace('.jpg', '.thumb.jpg'),
+      before: null,
+      placeholder: { artist: 'Bicep', title: 'Glue', color: '#9a9aa3' }
+    }
+    const batchId = await computed([track.id], ['cover'])
+    await preview.edit({ batchId, trackId: track.id, field: 'title', value: 'Apricots' })
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(placeholders).toEqual([{ artist: 'Bicep', title: 'Apricots', color: '#9a9aa3' }])
+    const drawn = createHash('sha1').update(JSON.stringify(placeholders[0])).digest('hex')
+    expect(tagsIn(track.path)).toEqual({ cover: `${drawn}.jpg` })
+  })
+
+  it('leaves a placeholder that still shows the track as it is', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.mp3', { artist: 'Bicep', title: 'Glue' })
+    coverFound = { cover: { value: COVER, source: 'placeholder' } }
+    coverDetails = {
+      thumb: COVER.replace('.jpg', '.thumb.jpg'),
+      before: null,
+      placeholder: { artist: 'Bicep', title: 'Glue', color: '#9a9aa3' }
+    }
+    const batchId = await computed([track.id], ['cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(placeholders).toEqual([])
+    expect(tagsIn(track.path)).toEqual({ cover: COVER })
+  })
+
+  it('keeps a cover the user chose for the track: the field is locked once it is written', async () => {
+    // Arrange
+    const track = addFile('Inbox/download.mp3')
+    coverFound = { cover: { value: COVER, source: 'manual' } }
+    const batchId = await computed([track.id], ['cover'])
+
+    // Act
+    await approved(batchId)
+
+    // Assert
+    expect(trackOf(track.id).lockedFields).toContain('cover')
+    expect(tagsIn(track.path)).toEqual({ cover: COVER })
   })
 
   it('embeds no cover into a WAV', async () => {

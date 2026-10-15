@@ -3,12 +3,14 @@
 // runs, so a cover is downloaded once; nothing in it is a library file.
 import { constants } from 'fs'
 import { chmod, lstat, mkdir, open, rename, unlink } from 'fs/promises'
-import { randomBytes } from 'crypto'
-import { join } from 'path'
+import { createHash, randomBytes } from 'crypto'
+import { isAbsolute, join } from 'path'
 import { isCoverName, type CoverNameKind } from '@shared/covers'
 
 // A thumbnail is a JPEG of 128 px: a few kilobytes.
 const MAX_THUMB_BYTES = 256 * 1024
+// As large as a picture from a service may be; the same limit is in fixlib_py/cover.py.
+const MAX_PICTURE_BYTES = 16 * 1024 * 1024
 
 export interface CoverStore {
   /** The folder, as the sidecar is told it. */
@@ -21,8 +23,16 @@ export interface CoverStore {
   save: (name: string, kind: CoverNameKind, bytes: Uint8Array) => Promise<void>
   /** Removes a file of the folder; a file that is not there is no error. */
   remove: (name: string, kind: CoverNameKind) => Promise<void>
+  /** The SHA-1 of a file of the folder, or null when it is not there. */
+  digest: (name: string, kind: CoverNameKind) => Promise<string | null>
   /** A thumbnail as the page shows it: a `data:` address, or null. */
   thumbnail: (name: string) => Promise<string | null>
+  /**
+   * Copies a picture the user chose into the folder as a download, named by the
+   * SHA-1 of its content, and returns that name. Reads the file only: it must be a
+   * regular file reached without a link, of at most 16 MiB.
+   */
+  importPicture: (path: string) => Promise<string>
 }
 
 export function createCoverStore(folder: string): CoverStore {
@@ -32,7 +42,7 @@ export function createCoverStore(folder: string): CoverStore {
     return join(folder, name)
   }
 
-  return {
+  const store: CoverStore = {
     folder,
 
     async ensure() {
@@ -74,6 +84,21 @@ export function createCoverStore(folder: string): CoverStore {
       }
     },
 
+    async digest(name, kind) {
+      try {
+        const file = await open(pathOf(name, kind), constants.O_RDONLY | constants.O_NOFOLLOW)
+        try {
+          return createHash('sha1')
+            .update(await file.readFile())
+            .digest('hex')
+        } finally {
+          await file.close()
+        }
+      } catch {
+        return null
+      }
+    },
+
     async remove(name, kind) {
       try {
         await unlink(pathOf(name, kind))
@@ -100,6 +125,38 @@ export function createCoverStore(folder: string): CoverStore {
       // Made by the sidecar, and still checked: the page shows only a JPEG.
       if (bytes.length > MAX_THUMB_BYTES || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
       return `data:image/jpeg;base64,${bytes.toString('base64')}`
+    },
+
+    async importPicture(path) {
+      if (!isAbsolute(path)) throw new Error('the picture must be named by an absolute path')
+      const file = await open(
+        path,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+      )
+      let bytes: Buffer
+      try {
+        const stats = await file.stat()
+        if (!stats.isFile() || stats.size > MAX_PICTURE_BYTES) {
+          throw new Error('the picture is no file of a size a picture may have')
+        }
+        // Read into a buffer of the limit, whatever size the file says it has: a file
+        // that grows, or one of a file system that tells no size, is not read on.
+        const buffer = Buffer.alloc(MAX_PICTURE_BYTES + 1)
+        let filled = 0
+        for (;;) {
+          const { bytesRead } = await file.read(buffer, filled, buffer.length - filled, null)
+          if (bytesRead === 0) break
+          filled += bytesRead
+          if (filled > MAX_PICTURE_BYTES) throw new Error('the picture grew while it was read')
+        }
+        bytes = buffer.subarray(0, filled)
+      } finally {
+        await file.close()
+      }
+      const name = `${createHash('sha1').update(bytes).digest('hex')}.download`
+      await store.save(name, 'download', bytes)
+      return name
     }
   }
+  return store
 }

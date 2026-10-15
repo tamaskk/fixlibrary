@@ -1,7 +1,7 @@
 // The batch preview: what the user sees, changes and approves before a batch writes.
 // Builds the rows from the items of the batch, takes the edits, and starts the apply
 // phase. Nothing here changes a file.
-import { basename } from 'path'
+import { basename, extname, isAbsolute, resolve } from 'path'
 import { z } from 'zod'
 import {
   approveBatchItems,
@@ -21,12 +21,16 @@ import { listJobStageNames } from '../db/jobs'
 import { listStyles } from '../db/styles'
 import { getTrackById, updateTrack, type Track, type TrackChanges } from '../db/tracks'
 import type { CoverStore } from '../services/covers'
+import type { PythonBridge } from '../services/python-bridge'
 import { describeError } from '../services/error-text'
 import { createLogLimiter } from '../services/log-limiter'
 import { logger } from '../services/logger'
-import { trackErrorSchema, type Result } from '@shared/errors'
+import { AppError, trackErrorSchema, type Result } from '@shared/errors'
+import { COVER_RPC_TIMEOUT_MS } from '@shared/timeouts'
 import {
   coverThumbsRequestSchema,
+  MANUAL_COVER_EXTENSIONS,
+  previewTrackSchema,
   EDITABLE_PREVIEW_FIELDS,
   LOW_CONFIDENCE_BELOW,
   mergeProposal,
@@ -56,11 +60,30 @@ import { keepDuplicate, listDuplicateGroups } from './batch-duplicates'
 import type { BatchFiles } from './batch-files'
 import type { Orchestrator } from './orchestrator'
 import { runStage } from './run-stage'
-import { COVER_STAGE, coverDetailsSchema, EMBED_COVER_STAGE } from './stages/cover'
+import {
+  COVER_STAGE,
+  coverDetailsOf,
+  coverDetailsSchema,
+  EMBED_COVER_STAGE,
+  type CoverDetails
+} from './stages/cover'
 import { DUPLICATES_STAGE } from './stages/duplicates'
 import { identifiersSchema } from './stages/lookup'
 import type { Stage } from './stages/stage'
 import { tagsFor, takesTags, WRITE_TAGS_STAGE } from './stages/write-tags'
+
+// Where macOS mounts network shares on demand, in lower case: the startup disk does
+// not tell case apart.
+const NETWORK_FOLDERS = ['/net/', '/network/']
+
+/** The promise's value, or a rejection once `ms` have passed. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timed out')), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
 
 // As long as a file name can be on macOS.
 const MAX_NAME_LENGTH = 255
@@ -236,7 +259,11 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       if (written.year !== undefined && fields.year && free('year'))
         changes.year = fields.year.value
     }
-    if (covered && takesTags(track.path)) changes.coverStatus = 'embedded'
+    if (covered && takesTags(track.path)) {
+      changes.coverStatus = fields.cover?.source === 'placeholder' ? 'placeholder' : 'embedded'
+      // A picture the user chose is theirs: no later run looks for another.
+      if (fields.cover?.source === 'manual') committed.add('cover')
+    }
     if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
     if (fields.title?.source === 'manual') changes.title = fields.title.value
     if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
@@ -273,7 +300,9 @@ export interface PreviewDependencies {
   batchFiles: Pick<BatchFiles, 'checkSpace' | 'lastUndoable'>
   listMountedVolumes: () => ReadonlySet<string>
   /** Where the thumbnails of covers are read from; without it, no row shows a cover. */
-  covers?: Pick<CoverStore, 'thumbnail'>
+  covers?: Pick<CoverStore, 'thumbnail' | 'ensure' | 'importPicture' | 'remove'>
+  /** The sidecar that makes a cover of a picture the user chose; null while there is none. */
+  python?: () => Pick<PythonBridge, 'call'> | null
   now?: () => number
 }
 
@@ -297,6 +326,13 @@ export interface Preview {
   keepDuplicate: (request: unknown) => Result<DuplicateGroup[]>
   /** The old and the new cover of some rows of the batch that waits for approval. */
   coverThumbs: (request: unknown) => Promise<Result<CoverThumbs[]>>
+  /**
+   * Makes a picture the user chose, named by the path the main process got for it
+   * (a dialog of its own, or the file dropped on the page), the cover a row proposes.
+   */
+  setCover: (request: unknown, path: string) => Promise<Result<PreviewRow>>
+  /** True when a picture could become the cover of the row now: asked before a dialog opens. */
+  canSetCover: (request: unknown) => boolean
   /** Takes rows out of the batch, or back in. */
   setExcluded: (request: unknown) => Result<PreviewState>
   /**
@@ -327,6 +363,27 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
     return stages.filter(
       (stage) => stage.refreshable === true && stage.phase === 'compute' && ran.has(stage.name)
     )
+  }
+
+  /** The row a chosen picture can become the cover of: of the batch that waits and writes covers. */
+  function coverRow(
+    request: unknown
+  ): Result<{ batchId: number; trackId: number; item: BatchItem; track: Track }> {
+    const parsed = previewTrackSchema.safeParse(request)
+    if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
+    const { batchId, trackId } = parsed.data
+    const batch = waitingBatch(batchId)
+    if (!batch.ok) return batch
+    // Only a batch that writes covers can write this one.
+    if (!listJobStageNames(db, batchId).includes(COVER_STAGE)) {
+      return { ok: false, code: 'INVALID_INPUT' }
+    }
+    const item = getBatchItem(db, batchId, trackId)
+    const track = getTrackById(db, trackId, listMountedVolumes())
+    if (!item || !track || item.error !== null || !takesTags(track.path)) {
+      return { ok: false, code: 'INVALID_INPUT' }
+    }
+    return { ok: true, value: { batchId, trackId, item, track } }
   }
 
   /** The batch with this id, if it is the one that waits for approval and may change. */
@@ -556,6 +613,83 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
         })
       }
       return { ok: true, value: thumbs }
+    },
+
+    canSetCover(request) {
+      return coverRow(request).ok
+    },
+
+    async setCover(request, path) {
+      const row = coverRow(request)
+      if (!row.ok) return row
+      const { batchId, trackId, item, track } = row.value
+      // Judged as the path resolves: `//net`, `..` and another spelling of the folder
+      // are the same place. A share mounted under /Volumes is a drive the user mounted.
+      const resolved = isAbsolute(path) ? resolve(path) : ''
+      const extension = extname(resolved).toLowerCase()
+      const remote = NETWORK_FOLDERS.some((folder) => resolved.toLowerCase().startsWith(folder))
+      if (!MANUAL_COVER_EXTENSIONS.some((allowed) => allowed === extension) || remote) {
+        return { ok: false, code: 'COVER_UNUSABLE' }
+      }
+      const covers = dependencies.covers
+      const python = dependencies.python?.() ?? null
+      if (!covers || !python) return { ok: false, code: 'PYTHON_CRASHED' }
+
+      refreshing = true
+      try {
+        await covers.ensure()
+        let download: string
+        try {
+          // A drive that does not answer must not hold the preview: the read is given
+          // up, and finishes into nothing.
+          download = await withTimeout(covers.importPicture(resolved), COVER_RPC_TIMEOUT_MS)
+        } catch {
+          // What went wrong names a path of the user's: it is not passed on.
+          logger.warn(`Track ${trackId}: the chosen picture could not be read`)
+          return { ok: false, code: 'COVER_UNUSABLE' }
+        }
+        let made: { cover: string; thumb: string }
+        try {
+          made = await python.call(
+            'cover.prepare',
+            { source: download, manual: true },
+            { timeoutMs: COVER_RPC_TIMEOUT_MS }
+          )
+        } catch (error) {
+          if (error instanceof AppError && error.code === 'PYTHON_ERROR') {
+            return { ok: false, code: 'COVER_UNUSABLE' }
+          }
+          throw error
+        } finally {
+          // A download left behind is only a file of the covers folder.
+          await covers.remove(download, 'download').catch(() => {
+            logger.warn(`Track ${trackId}: a download could not be removed from the covers folder`)
+          })
+        }
+        // What the file holds now, as the cover stage saw it; asked again otherwise,
+        // and shown as nothing when it cannot be told.
+        const before =
+          coverDetailsOf(item.after)?.before ??
+          (await python
+            .call('cover.inspect', { path: track.path }, { timeoutMs: COVER_RPC_TIMEOUT_MS })
+            .then((held) => held.cover)
+            .catch(() => null))
+        const current = readProposal(item.after)
+        const details: CoverDetails = { thumb: made.thumb, before }
+        // The field and what is kept next to it, together or not at all.
+        db.transaction((tx) => {
+          setBatchItemProposal(tx, batchId, trackId, {
+            fields: { ...current.fields, cover: { value: made.cover, source: 'manual' } },
+            warnings: (current.warnings ?? []).filter((warning) => warning !== 'NO_COVER')
+          })
+          mergeBatchItemProposal(tx, batchId, trackId, { cover: details }, [])
+        })
+      } finally {
+        refreshing = false
+      }
+      const stored = getBatchItem(db, batchId, trackId)
+      if (!stored) return { ok: false, code: 'INVALID_INPUT' }
+      return { ok: true, value: buildPreviewRow(stored) }
     },
 
     keepDuplicate(request) {
