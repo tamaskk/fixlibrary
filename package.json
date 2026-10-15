@@ -14,6 +14,7 @@
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "build": "npm run typecheck && electron-vite build",
+    "eval:styles": "ELECTRON_RUN_AS_NODE=1 electron node_modules/tsx/dist/cli.mjs scripts/eval-styles.ts",
     "build:unpack": "./scripts/fetch-binaries.sh --verify && npm run build && electron-builder --dir",
     "build:mac": "./scripts/fetch-binaries.sh --verify && npm run build && electron-builder --mac",
     "lint": "eslint --cache .",
@@ -64,6 +65,7 @@
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "tailwindcss": "^4.3.3",
+    "tsx": "4.23.15",
     "typescript": "^5.9.3",
     "vite": "^7.2.6",
     "vitest": "^5.0.3"

@@ -102,6 +102,7 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
       'Minden funkció',
       'Online lookup',
       'BPM és key elemzés',
+      'Stílusbesorolás',
       'Borító keresése',
       'Fájlnév és névtisztítás',
       'Duplikátumok keresése',

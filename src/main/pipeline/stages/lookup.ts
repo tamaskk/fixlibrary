@@ -68,6 +68,7 @@ export function createLookupStage(dependencies: LookupStageDependencies): Stage 
         durationS: track.durationMs === null ? null : track.durationMs / 1000,
         artist: track.artist,
         title: track.title,
+        mix: track.mix,
         fileName: basename(track.path)
       },
       clients,

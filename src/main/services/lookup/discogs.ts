@@ -1,4 +1,5 @@
-// Discogs: the label, the year and the cover of a release, and a second opinion on its name.
+// Discogs: the label, the year, the genres and the cover of a release, and a second
+// opinion on its name.
 import { z } from 'zod'
 import { cachedAnswer, type LookupCache, type LookupOptions } from './cache'
 import { isImageUrl, LookupError, type LookupHttp } from './http'
@@ -13,14 +14,31 @@ const resultSchema = z.object({
   title: rawText,
   year: z.union([z.string(), z.number()]).nullable().optional(),
   label: z.array(rawText).nullable().optional(),
-  cover_image: rawText.nullable().optional()
+  cover_image: rawText.nullable().optional(),
+  genre: z.array(rawText).nullable().optional(),
+  style: z.array(rawText).nullable().optional()
 })
+
+// As many genres and styles of a release as a decision needs; each a short name.
+const MAX_GENRES = 10
+const MAX_GENRE_LENGTH = 60
+
+function namesOf(list: readonly string[] | null | undefined): string[] {
+  const names = (list ?? []).flatMap((name) => {
+    const clean = cleanText(name)
+    return clean !== null && clean.length <= MAX_GENRE_LENGTH ? [clean] : []
+  })
+  return [...new Set(names)].slice(0, MAX_GENRES)
+}
 
 const releaseSchema = z.object({
   /** As Discogs names a release: `Artist - Title`. */
   title: z.string(),
   year: z.number().int().nullable(),
   label: z.string().nullable(),
+  /** What Discogs files the release under: broad genres (`Electronic`) and styles (`Deep House`). */
+  genres: z.array(z.string().max(MAX_GENRE_LENGTH)).max(MAX_GENRES),
+  styles: z.array(z.string().max(MAX_GENRE_LENGTH)).max(MAX_GENRES),
   /** The primary picture of the release; null when it has none Discogs serves. */
   image: z
     .string()
@@ -79,6 +97,8 @@ export function createDiscogsClient(dependencies: DiscogsDependencies): DiscogsC
               title: cleanText(result.data.title),
               year: yearOf(result.data.year),
               label: cleanText(result.data.label?.[0]),
+              genres: namesOf(result.data.genre),
+              styles: namesOf(result.data.style),
               // A release without a picture is answered with a placeholder of
               // another host, which this leaves out.
               image:

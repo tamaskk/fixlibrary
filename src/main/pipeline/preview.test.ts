@@ -17,6 +17,7 @@ import { logger } from '../services/logger'
 import type { PythonBridge } from '../services/python-bridge'
 import { AppError } from '@shared/errors'
 import type { PreviewRow } from '@shared/preview'
+import { DEFAULT_STYLES } from '@shared/settings'
 import { buildPreviewRow, commitApprovedValues, createPreview, type Preview } from './preview'
 import type { Stage } from './stages/stage'
 
@@ -1499,5 +1500,206 @@ describe('a cover the user chooses', () => {
       { ok: false, code: 'INVALID_INPUT' },
       { ok: false, code: 'INVALID_INPUT' }
     ])
+  })
+})
+
+describe('the styles of a batch', () => {
+  function seed(): Record<string, number> {
+    const stored = replaceStyles(testDatabase.db, DEFAULT_STYLES)
+    return Object.fromEntries(stored.map((style) => [style.name, style.id]))
+  }
+
+  it("become the track's own when the batch is approved, without being locked", () => {
+    // Arrange
+    const ids = seed()
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: {
+        styleId: { value: ids['Tech House'], source: 'claude', confidence: 0.9 },
+        secondaryStyleId: { value: ids['Afro House'], source: 'claude', confidence: 0.9 }
+      },
+      style: { newPrimary: null, sources: ['id3'] }
+    })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id)).toMatchObject({
+      primaryStyleId: ids['Tech House'],
+      secondaryStyleId: ids['Afro House'],
+      lockedFields: []
+    })
+  })
+
+  it('create a new style only when the batch is approved, before Unsorted, with a color of its own', () => {
+    // Arrange
+    seed()
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: { styleId: { value: null, source: 'claude', confidence: 0.9 } },
+      style: { newPrimary: 'Hip Hop', sources: ['discogs'] }
+    })
+    const shown = rowOf(id)
+    const before = listStyles(testDatabase.db).map((style) => style.name)
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(shown.newStyle).toBe('Hip Hop')
+    expect(before).not.toContain('Hip Hop')
+    const styles = listStyles(testDatabase.db)
+    expect(styles.map((style) => style.name).slice(-2)).toEqual(['Hip Hop', 'Unsorted'])
+    const added = styles.find((style) => style.name === 'Hip Hop')
+    expect(added).toMatchObject({ isHouse: false, color: '#22d3ee' })
+    expect(track(id).primaryStyleId).toBe(added?.id)
+  })
+
+  it('take a style the user chose in the place of a new one, and lock it', () => {
+    // Arrange
+    const ids = seed()
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: { styleId: { value: null, source: 'claude', confidence: 0.9 } },
+      style: { newPrimary: 'Hip Hop', sources: ['discogs'] }
+    })
+    void preview().edit({ batchId, trackId: id, field: 'styleId', value: ids['Tech House'] })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(rowOf(id).newStyle).toBeNull()
+    expect(listStyles(testDatabase.db).map((style) => style.name)).not.toContain('Hip Hop')
+    expect(track(id)).toMatchObject({
+      primaryStyleId: ids['Tech House'],
+      lockedFields: ['styleId']
+    })
+  })
+
+  it('leave a style the user locked as it is', () => {
+    // Arrange
+    const ids = seed()
+    const [id] = trackIds as [number]
+    updateTrack(testDatabase.db, id, {
+      primaryStyleId: ids['Afro House'],
+      lockedFields: ['styleId']
+    })
+    propose(id, {
+      fields: { styleId: { value: ids['Tech House'], source: 'claude', confidence: 0.9 } }
+    })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(track(id).primaryStyleId).toBe(ids['Afro House'])
+  })
+
+  it('take a new style whose name the list has already, case and hyphens aside', () => {
+    // Arrange
+    const ids = seed()
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: { styleId: { value: null, source: 'claude', confidence: 0.9 } },
+      style: { newPrimary: 'tech-house', sources: ['discogs'] }
+    })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(listStyles(testDatabase.db)).toHaveLength(DEFAULT_STYLES.length)
+    expect(track(id).primaryStyleId).toBe(ids['Tech House'])
+  })
+
+  it('leave the track Unsorted when the list holds as many styles as it may', () => {
+    // Arrange
+    const extra = Array.from({ length: 44 }, (_, index) => ({
+      name: `Style ${index + 1}`,
+      color: '#123456',
+      isHouse: false
+    }))
+    const stored = replaceStyles(testDatabase.db, [
+      ...DEFAULT_STYLES.slice(0, -1),
+      ...extra,
+      DEFAULT_STYLES[DEFAULT_STYLES.length - 1] as (typeof DEFAULT_STYLES)[number]
+    ])
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: { styleId: { value: null, source: 'claude', confidence: 0.9 } },
+      style: { newPrimary: 'Hip Hop', sources: ['discogs'] }
+    })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    commitApprovedValues(testDatabase.db, batchId, id)
+
+    // Assert
+    expect(stored).toHaveLength(50)
+    expect(listStyles(testDatabase.db)).toHaveLength(50)
+    expect(track(id).primaryStyleId).toBe(stored.find((style) => style.name === 'Unsorted')?.id)
+  })
+
+  it('take the second style away when the first is set to it', async () => {
+    // Arrange
+    const ids = seed()
+    const [id] = trackIds as [number]
+    propose(id, {
+      fields: {
+        styleId: { value: ids['Tech House'], source: 'claude', confidence: 0.9 },
+        secondaryStyleId: { value: ids['Afro House'], source: 'claude', confidence: 0.9 }
+      }
+    })
+
+    // Act
+    const edited = await preview().edit({
+      batchId,
+      trackId: id,
+      field: 'styleId',
+      value: ids['Afro House']
+    })
+
+    // Assert
+    expect(edited.ok && edited.value.cells.styleId.after).toBe(ids['Afro House'])
+    expect(edited.ok && edited.value.cells.secondaryStyleId.after).toBeNull()
+  })
+
+  it('accept an edit of the secondary style only to a style that exists and is not the first', async () => {
+    // Arrange
+    const ids = seed()
+    const [id] = trackIds as [number]
+
+    // Act
+    const known = await preview().edit({
+      batchId,
+      trackId: id,
+      field: 'secondaryStyleId',
+      value: ids['Organic House']
+    })
+    const unknown = await preview().edit({
+      batchId,
+      trackId: id,
+      field: 'secondaryStyleId',
+      value: 9999
+    })
+    await preview().edit({ batchId, trackId: id, field: 'styleId', value: ids['Tech House'] })
+    const same = await preview().edit({
+      batchId,
+      trackId: id,
+      field: 'secondaryStyleId',
+      value: ids['Tech House']
+    })
+
+    // Assert
+    expect(known.ok && known.value.cells.secondaryStyleId.after).toBe(ids['Organic House'])
+    expect(unknown).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(same).toEqual({ ok: false, code: 'INVALID_INPUT' })
   })
 })

@@ -15,8 +15,11 @@ import { logger } from '../services/logger'
 import { AppError } from '@shared/errors'
 import { createClaude, type Claude } from './claude'
 
-const TASK = createStyleTask(['House', 'Techno'])
-const GOOD = { style: 'House', confidence: 0.9 }
+const TASK = createStyleTask([
+  { name: 'House', isHouse: true },
+  { name: 'Techno', isHouse: false }
+])
+const GOOD = { primary: 'House', secondary: null, confidence: 90, isNewStyle: false }
 
 let testDatabase: TestDatabase
 let folder: string
@@ -147,7 +150,7 @@ describe('asking about many items', () => {
     // Assert
     expect(callSizes()).toEqual([20, 20, 5])
     expect(answers).toHaveLength(45)
-    expect(answers.every((answer) => answer.style === 'House' && answer.confidence === 0.9)).toBe(
+    expect(answers.every((answer) => answer.primary === 'House' && answer.confidence === 90)).toBe(
       true
     )
   })
@@ -157,8 +160,8 @@ describe('asking about many items', () => {
     fake.reply({
       stream: answerStream({
         items: [
-          { id: 2, style: 'Techno', confidence: 0.8 },
-          { id: 1, style: 'House', confidence: 0.6 }
+          { id: 2, ...{ primary: 'Techno', secondary: null, confidence: 80, isNewStyle: false } },
+          { id: 1, ...{ primary: 'House', secondary: null, confidence: 60, isNewStyle: false } }
         ]
       })
     })
@@ -170,15 +173,20 @@ describe('asking about many items', () => {
     ])
 
     // Assert
-    expect(first).toEqual({ style: 'House', confidence: 0.6 })
-    expect(second).toEqual({ style: 'Techno', confidence: 0.8 })
+    expect(first).toEqual({ primary: 'House', secondary: null, confidence: 60, isNewStyle: false })
+    expect(second).toEqual({
+      primary: 'Techno',
+      secondary: null,
+      confidence: 80,
+      isNewStyle: false
+    })
   })
 
   it('keeps the items of two tasks in calls of their own', async () => {
     // Arrange
-    const unsorted = { style: 'Unsorted', confidence: 0.5 }
+    const unsorted = { primary: 'Unsorted', secondary: null, confidence: 50, isNewStyle: false }
     fake.reply({ answerEach: unsorted })
-    const other = createStyleTask(['Trance'])
+    const other = createStyleTask([{ name: 'Trance', isHouse: false }])
 
     // Act
     const answers = await Promise.all([claude.ask(TASK, track(1)), claude.ask(other, track(2))])
@@ -186,7 +194,8 @@ describe('asking about many items', () => {
     // Assert
     expect(answers).toEqual([unsorted, unsorted])
     expect(callSizes()).toEqual([1, 1])
-    expect(fake.calls()[0]?.input).toContain('"House","Techno"')
+    expect(fake.calls()[0]?.input).toContain('House styles: ["House"]')
+    expect(fake.calls()[0]?.input).toContain('Other styles: ["Techno"]')
     expect(fake.calls()[1]?.input).toContain('"Trance"')
   })
 })
@@ -195,7 +204,7 @@ describe('an answer that is not valid', () => {
   it('is asked for once more, with what was wrong, and then counts', async () => {
     // Arrange
     fake.reply(
-      { answerEach: GOOD, spoil: [1], spoilWith: { style: 'Polka', confidence: 0.9 } },
+      { answerEach: GOOD, spoil: [1], spoilWith: { primary: 'Polka'.repeat(10) } },
       { answerEach: GOOD }
     )
 
@@ -206,14 +215,18 @@ describe('an answer that is not valid', () => {
     expect(answers).toEqual([GOOD, GOOD])
     expect(fake.calls()).toHaveLength(2)
     expect(fake.calls()[1]?.input).toContain('Your previous answer was not valid')
-    expect(fake.calls()[1]?.input).toContain('the item with id 1 has an invalid "style"')
+    expect(fake.calls()[1]?.input).toContain('the item with id 1 has an invalid "primary"')
     // What Claude wrote is not quoted back.
-    expect(fake.calls()[1]?.input).not.toContain('Polka')
+    expect(fake.calls()[1]?.input).not.toContain('PolkaPolka')
   })
 
   it('fails the track with CLAUDE_FAILED after the second try, and keeps the valid ones', async () => {
     // Arrange
-    fake.reply({ answerEach: GOOD, spoil: [1], spoilWith: { style: 'Polka', confidence: 2 } })
+    fake.reply({
+      answerEach: GOOD,
+      spoil: [1],
+      spoilWith: { primary: 'Polka/Folk', confidence: 200 }
+    })
 
     // Act
     const answers = await settle([claude.ask(TASK, track(1)), claude.ask(TASK, track(2))])
@@ -317,7 +330,7 @@ describe('what the review of the batcher found', () => {
   it('keeps the valid answers of the first try when the second one mends the rest', async () => {
     // Arrange: the second try answers only the id that was wrong.
     fake.reply(
-      { answerEach: GOOD, spoil: [2], spoilWith: { style: 'Polka', confidence: 0.9 } },
+      { answerEach: GOOD, spoil: [2], spoilWith: { primary: 'Polka'.repeat(10) } },
       { answerEach: GOOD, leaveOut: [1, 3] }
     )
 
@@ -337,7 +350,7 @@ describe('what the review of the batcher found', () => {
           { id: 1, ...GOOD },
           { id: 1, ...GOOD },
           { id: 99, ...GOOD },
-          { id: 7, style: 'Polka', confidence: 1 }
+          { id: 7, ...GOOD, primary: 'Polka'.repeat(10) }
         ]
       })
     })

@@ -28,12 +28,15 @@ function row(trackId: number, overrides: Partial<PreviewRow> = {}): PreviewRow {
       bpm: CELL,
       key: CELL,
       styleId: CELL,
+      secondaryStyleId: CELL,
+      genre: CELL,
       energy: CELL,
       cover: CELL
     },
     warnings: [],
     excluded: false,
     error: null,
+    newStyle: null,
     ...overrides
   }
 }

@@ -30,7 +30,8 @@ describe('validateStages', () => {
       wanted: () => false,
       clients: {} as LookupClients,
       covers: {} as CoverStore,
-      coverClients: {} as CoverStageDependencies['coverClients']
+      coverClients: {} as CoverStageDependencies['coverClients'],
+      claude: () => null
     })
 
     // Act
@@ -223,6 +224,8 @@ describe('the demo stages', () => {
         key: null,
         mix: 'Live',
         styleId: null,
+        secondaryStyleId: null,
+        genre: null,
         energy: null,
         cover: null
       },

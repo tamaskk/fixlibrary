@@ -29,6 +29,8 @@ const RELEASE: DiscogsRelease = {
   title: 'Daft Punk - Around The World',
   year: 1996,
   label: 'Virgin',
+  genres: ['Electronic'],
+  styles: ['House', 'Disco'],
   image: DISCOGS_IMAGE
 }
 
@@ -99,6 +101,8 @@ describe('lookupTrack', () => {
       musicbrainzRecordingId: MBID,
       musicbrainzReleaseId: RELEASE_MBID,
       discogsImage: DISCOGS_IMAGE,
+      discogsGenres: ['Electronic'],
+      discogsStyles: ['House', 'Disco'],
       answered: ['acoustid', 'musicbrainz', 'discogs'],
       failed: []
     })
@@ -292,7 +296,14 @@ describe('lookupTrack', () => {
       acoustid: [MATCH],
       recording: RECORDING,
       discogs: [
-        { title: 'Various - Summer Hits 97', year: 1997, label: 'Sampler Records', image: null }
+        {
+          title: 'Various - Summer Hits 97',
+          year: 1997,
+          label: 'Sampler Records',
+          genres: [],
+          styles: [],
+          image: null
+        }
       ]
     })
 
@@ -310,7 +321,14 @@ describe('lookupTrack', () => {
       acoustid: [],
       search: [],
       discogs: [
-        { title: 'Daft Punk (2) - Around The World', year: 1997, label: 'Virgin', image: null }
+        {
+          title: 'Daft Punk (2) - Around The World',
+          year: 1997,
+          label: 'Virgin',
+          genres: [],
+          styles: [],
+          image: null
+        }
       ]
     })
 
@@ -397,5 +415,91 @@ describe('lookupTrack', () => {
 
     // Assert
     await expect(lookup).rejects.toThrow('a bug')
+  })
+})
+
+describe('the lookup of a remix', () => {
+  const REMIX: MusicBrainzRecording = {
+    ...RECORDING,
+    title: 'Around the World (Bicep Remix)',
+    album: 'Around the World (Remixes)'
+  }
+  const REMIX_RELEASE: DiscogsRelease = {
+    ...RELEASE,
+    title: 'Daft Punk - Around The World (Bicep Remix)',
+    styles: ['Deep House']
+  }
+  const INPUT: LookupInput = { ...TAGGED, fingerprint: null, mix: 'Bicep Remix' }
+
+  function remixClients(knowsRemix: boolean): { clients: LookupClients; asked: string[] } {
+    const asked: string[] = []
+    return {
+      asked,
+      clients: {
+        acoustid: { lookup: async () => [] },
+        musicbrainz: {
+          recording: async () => null,
+          search: async (_artist, title) => {
+            asked.push(`search:${title}`)
+            // A search finds the original next to the remix, and names it first.
+            if (title.includes('Remix')) return knowsRemix ? [RECORDING, REMIX] : []
+            return [RECORDING]
+          }
+        },
+        discogs: {
+          search: async (_artist, title) => {
+            asked.push(`discogs:${title}`)
+            if (title.includes('Remix')) return knowsRemix ? [REMIX_RELEASE] : []
+            return [RELEASE]
+          }
+        }
+      }
+    }
+  }
+
+  it('looks for the remix by its mix, and takes the genres of the remix release', async () => {
+    // Arrange
+    const { clients, asked } = remixClients(true)
+
+    // Act
+    const result = await lookupTrack(INPUT, clients)
+
+    // Assert
+    expect(asked).toEqual([
+      'search:Around the World (Bicep Remix)',
+      'discogs:Around the World (Bicep Remix)'
+    ])
+    expect(result.matched).toBe(true)
+    // The remix, not its original that was named first.
+    expect(result.title?.value).toBe('Around the World (Bicep Remix)')
+    expect(result.discogsStyles).toEqual(['Deep House'])
+  })
+
+  it('asks again without the mix where only the original is known', async () => {
+    // Arrange
+    const { clients, asked } = remixClients(false)
+
+    // Act
+    const result = await lookupTrack(INPUT, clients)
+
+    // Assert
+    expect(asked).toEqual([
+      'search:Around the World (Bicep Remix)',
+      'search:Around the World',
+      'discogs:Around the World (Bicep Remix)',
+      'discogs:Around the World'
+    ])
+    expect(result.discogsStyles).toEqual(['House', 'Disco'])
+  })
+
+  it('asks for a track that is no remix as it always did', async () => {
+    // Arrange
+    const { clients, asked } = remixClients(true)
+
+    // Act
+    await lookupTrack({ ...INPUT, mix: 'Extended Mix' }, clients)
+
+    // Assert
+    expect(asked).toEqual(['search:Around the World', 'discogs:Around the World'])
   })
 })

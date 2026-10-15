@@ -16,6 +16,7 @@ import {
 import type { DiscogsClient, DiscogsRelease } from './discogs'
 import { LookupError, type LookupFailure, type LookupSource } from './http'
 import type { MusicBrainzClient, MusicBrainzRecording } from './musicbrainz'
+import { isRemixMix, titleWithRemix } from '@shared/remix'
 
 /** A source whose names can end up in a field. AcoustID only says which recording it is. */
 export type FieldOrigin = 'musicbrainz' | 'discogs'
@@ -32,6 +33,8 @@ export interface LookupInput {
   /** The tags of the file as the last scan read them. */
   artist: string | null
   title: string | null
+  /** The mix of the track; a remix is looked for as the remix, not as its original. */
+  mix?: string | null
   fileName: string
 }
 
@@ -51,6 +54,9 @@ export interface LookupResult {
   musicbrainzReleaseId: string | null
   /** The picture Discogs has of the release of a match. */
   discogsImage: string | null
+  /** What Discogs files the release of a match under: genres and styles. */
+  discogsGenres: string[]
+  discogsStyles: string[]
   /** The sources that were asked and gave an answer. */
   answered: LookupSource[]
   /** The sources that could not be asked, with why. */
@@ -166,12 +172,25 @@ export async function lookupTrack(
   // recording without a length makes of a good fingerprint; the surer of the two stays.
   if ((!candidate || candidate.confidence < MATCH_CONFIDENCE) && known.title !== null) {
     const title = known.title
-    const found = await ask('musicbrainz', () =>
-      clients.musicbrainz.search(known.artist, title, options)
+    // A remix is asked for by its mix as well; a service that knows only the
+    // original is asked again without it.
+    const remix = isRemixMix(input.mix) ? titleWithRemix(title, input.mix) : null
+    const searched = remix === null ? known : { artist: known.artist, title: remix }
+    let found = await ask('musicbrainz', () =>
+      clients.musicbrainz.search(searched.artist, searched.title as string, options)
     )
+    // What a recording is measured against: the remix while the remix is what was
+    // found, so that its original, named alike, cannot win as well.
+    let measured = searched
+    if (remix !== null && remix !== title && found !== null && found.length === 0) {
+      found = await ask('musicbrainz', () =>
+        clients.musicbrainz.search(known.artist, title, options)
+      )
+      measured = known
+    }
     for (const recording of found ?? []) {
       const confidence = textConfidence(
-        textSimilarity(known, recording),
+        textSimilarity(measured, recording),
         lengthMatch(input.durationS, recording.durationS)
       )
       if (!candidate || confidence > candidate.confidence) {
@@ -186,7 +205,13 @@ export async function lookupTrack(
   const asked: ArtistTitle = matchedSoFar ? (candidate as Candidate) : known
   if (asked.artist !== null && asked.title !== null) {
     const { artist, title } = asked
-    const releases = await ask('discogs', () => clients.discogs.search(artist, title, options))
+    const remix = isRemixMix(input.mix) ? titleWithRemix(title, input.mix) : null
+    let releases = await ask('discogs', () =>
+      clients.discogs.search(artist, remix ?? title, options)
+    )
+    if (remix !== null && remix !== title && releases !== null && releases.length === 0) {
+      releases = await ask('discogs', () => clients.discogs.search(artist, title, options))
+    }
     const wanted = `${artist} ${title}`
     const scored = (releases ?? [])
       .map((entry) => {
@@ -228,6 +253,8 @@ export async function lookupTrack(
     musicbrainzRecordingId: null,
     musicbrainzReleaseId: null,
     discogsImage: null,
+    discogsGenres: [],
+    discogsStyles: [],
     answered: [...answered],
     failed
   }
@@ -242,6 +269,8 @@ export async function lookupTrack(
   result.musicbrainzRecordingId = candidate.musicbrainzRecordingId
   result.musicbrainzReleaseId = candidate.musicbrainzReleaseId
   result.discogsImage = release?.image ?? null
+  result.discogsGenres = release?.genres ?? []
+  result.discogsStyles = release?.styles ?? []
   if (candidate.album !== null) result.album = { value: candidate.album, source }
   if (candidate.year !== null) result.year = { value: candidate.year, source }
   if (release?.label != null) result.label = { value: release.label, source: 'discogs' }

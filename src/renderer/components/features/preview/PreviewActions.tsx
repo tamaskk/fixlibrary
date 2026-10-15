@@ -13,6 +13,12 @@ type PreviewActionsProps = {
    * when the batch looked for duplicates and what it found could not be read.
    */
   setAside: number | null
+  /** The styles an approval creates, as the classification named them: five at most. */
+  newStyles: readonly string[]
+  /** How many other new styles the rows name: their tracks stay Unsorted. */
+  newStylesLeft: number
+  /** True when the list of styles cannot take the new ones: their tracks stay Unsorted. */
+  stylesFull: boolean
   /** The action that is on its way, or null. */
   busy: 'approve' | 'discard' | 'undo' | null
   onApprove: () => void
@@ -36,6 +42,9 @@ export function PreviewActions({
   mode,
   counts,
   setAside,
+  newStyles,
+  newStylesLeft,
+  stylesFull,
   busy,
   onApprove,
   onDiscard,
@@ -57,6 +66,19 @@ export function PreviewActions({
       : setAside > 0
         ? ` ${formatCount(setAside)} fájl a ${DUPLICATES_FOLDER} mappába kerül.`
         : ''
+  // Said too: a style is added to the list of Settings, and its name becomes a folder.
+  const stylesNote =
+    newStyles.length === 0
+      ? ''
+      : ` Új stílusok jönnek létre: ${newStyles.join(', ')}.${
+          stylesFull
+            ? ' A stílusok listája megtelik: amelyik nem fér el, annak a trackjei Unsorted maradnak.'
+            : ''
+        }${
+          newStylesLeft > 0
+            ? ` Egy batch legfeljebb 5 új stílust hoz létre: további ${formatCount(newStylesLeft)} stílus trackjei Unsorted maradnak.`
+            : ''
+        }`
 
   return (
     <section aria-label="Jóváhagyás" className="flex items-center gap-4">
@@ -67,22 +89,28 @@ export function PreviewActions({
       >
         <Count value={counts.applied} /> track alkalmazásra vár
         {counts.excluded > 0 && (
-          <>
-            <span aria-hidden="true"> · </span>
+          <span className="whitespace-nowrap">
+            <span aria-hidden="true">· </span>
             <Count value={counts.excluded} /> kizárva
-          </>
+          </span>
         )}
         {setAside !== null && setAside > 0 && (
-          <>
-            <span aria-hidden="true"> · </span>
+          <span className="whitespace-nowrap">
+            <span aria-hidden="true">· </span>
             <Count value={setAside} /> fájl a {DUPLICATES_FOLDER} mappába kerül
-          </>
+          </span>
+        )}
+        {newStyles.length > 0 && (
+          <span className="whitespace-nowrap">
+            <span aria-hidden="true">· </span>
+            <Count value={newStyles.length} /> új stílus
+          </span>
         )}
         {counts.failed > 0 && (
-          <>
-            <span aria-hidden="true"> · </span>
+          <span className="whitespace-nowrap">
+            <span aria-hidden="true">· </span>
             <Count value={counts.failed} /> hibás
-          </>
+          </span>
         )}
       </p>
       <Button
@@ -113,7 +141,7 @@ export function PreviewActions({
             backTo(approveButton.current)
           }}
           title="Jóváhagyod a változásokat?"
-          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote} ${MODE_NOTES[mode]}`}
+          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote}${stylesNote} ${MODE_NOTES[mode]}`}
         >
           <DialogFooter>
             <DialogClose asChild>

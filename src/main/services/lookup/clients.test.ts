@@ -374,7 +374,7 @@ describe('the Discogs client', () => {
     return { requests, discogs }
   }
 
-  it('returns the releases of a search with their label, year and picture', async () => {
+  it('returns the releases of a search with their label, year, genres and picture', async () => {
     // Arrange
     const image = 'https://i.discogs.com/x/rs:fit/g:sm/q:90/h:600/w:600/R-1.jpeg'
     const { discogs } = client([
@@ -387,6 +387,8 @@ describe('the Discogs client', () => {
               title: 'Daft Punk - Around The World',
               year: '1997',
               label: ['Virgin', 'EMI'],
+              genre: ['Electronic', 'Electronic'],
+              style: ['House', 'Disco', 'x'.repeat(61)],
               cover_image: image
             },
             {
@@ -411,9 +413,23 @@ describe('the Discogs client', () => {
 
     // Assert
     expect(releases).toEqual([
-      { title: 'Daft Punk - Around The World', year: 1997, label: 'Virgin', image },
-      { title: 'Daft Punk - Homework', year: null, label: null, image: null },
-      { title: 'Daft Punk - Da Funk', year: null, label: null, image: null }
+      {
+        title: 'Daft Punk - Around The World',
+        year: 1997,
+        label: 'Virgin',
+        genres: ['Electronic'],
+        styles: ['House', 'Disco'],
+        image
+      },
+      {
+        title: 'Daft Punk - Homework',
+        year: null,
+        label: null,
+        genres: [],
+        styles: [],
+        image: null
+      },
+      { title: 'Daft Punk - Da Funk', year: null, label: null, genres: [], styles: [], image: null }
     ])
   })
 
@@ -455,5 +471,24 @@ describe('the Discogs client', () => {
 
     // Assert
     await expect(search).rejects.toMatchObject({ source: 'discogs', failure: 'refused' })
+  })
+})
+
+describe('a lookup that may only take what is kept', () => {
+  it('asks no service, and counts what is not kept as a service that could not be asked', async () => {
+    // Arrange
+    const { http, requests } = httpOver([{ body: { recordings: [] } }])
+    const cache = memoryCache()
+    const musicbrainz = createMusicBrainzClient({ http, cache })
+    await musicbrainz.search('Daft Punk', 'Around the World')
+
+    // Act
+    const kept = await musicbrainz.search('Daft Punk', 'Around the World', { keptOnly: true })
+    const notKept = musicbrainz.search('Daft Punk', 'Da Funk', { keptOnly: true })
+
+    // Assert
+    expect(kept).toEqual([])
+    await expect(notKept).rejects.toMatchObject({ source: 'musicbrainz', failure: 'unreachable' })
+    expect(requests).toHaveLength(1)
   })
 })

@@ -10,6 +10,7 @@ import {
   findPreviewBatch,
   getBatchItem,
   countApprovedBatchItems,
+  listAllBatchItems,
   listBatchItems,
   mergeBatchItemProposal,
   setBatchItemProposal,
@@ -18,7 +19,7 @@ import {
 } from '../db/batches'
 import type { AppDatabase } from '../db/connection'
 import { listJobStageNames } from '../db/jobs'
-import { listStyles } from '../db/styles'
+import { addStyle, listStyles } from '../db/styles'
 import { getTrackById, updateTrack, type Track, type TrackChanges } from '../db/tracks'
 import type { CoverStore } from '../services/covers'
 import type { PythonBridge } from '../services/python-bridge'
@@ -54,6 +55,7 @@ import {
   type UndoOutcome
 } from '@shared/preview'
 import { keyOfCamelot } from '@shared/keys'
+import { newStylesTaken, styleKey, UNSORTED_STYLE_NAME } from '@shared/settings'
 import { toOneLine } from '@shared/text'
 import { keepDuplicateSchema, type DuplicateGroup } from '@shared/duplicates'
 import { keepDuplicate, listDuplicateGroups } from './batch-duplicates'
@@ -69,6 +71,8 @@ import {
 } from './stages/cover'
 import { DUPLICATES_STAGE } from './stages/duplicates'
 import { identifiersSchema } from './stages/lookup'
+import { styleDetailsOf } from './stages/style'
+import { newStyleColor } from './style'
 import type { Stage } from './stages/stage'
 import { tagsFor, takesTags, WRITE_TAGS_STAGE } from './stages/write-tags'
 
@@ -110,6 +114,8 @@ const beforeSchema = z.object({
   bpm: z.number().nullable().catch(null),
   camelotKey: z.string().nullable().catch(null),
   primaryStyleId: z.number().nullable().catch(null),
+  secondaryStyleId: z.number().nullable().catch(null),
+  genre: shownText,
   energy: z.number().nullable().catch(null)
 })
 
@@ -130,6 +136,8 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     // Shown only as one of the 24 codes; whatever else a row may hold is no key.
     key: track.camelotKey === null ? null : (keyOfCamelot(track.camelotKey)?.camelot ?? null),
     styleId: track.primaryStyleId,
+    secondaryStyleId: track.secondaryStyleId,
+    genre: track.genre,
     energy: track.energy,
     // The cover a file holds has no name of the app's: a new one is a change.
     cover: null
@@ -177,8 +185,40 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
         proposal.warnings?.includes(warning) || (warning === 'LOW_CONFIDENCE' && lowConfidence)
     ),
     excluded: item.excluded,
-    error: error.success ? error.data : null
+    error: error.success ? error.data : null,
+    // Named only while the proposal is still Claude's: a style the user chose is one
+    // of the list.
+    newStyle:
+      proposal.fields?.styleId?.source === 'claude' && proposal.fields.styleId.value === null
+        ? (styleDetailsOf(item.after)?.newPrimary ?? null)
+        : null
   }
+}
+
+// The new styles a batch may create, worked out once: what the rows of an approved
+// batch name does not change while its tracks are written one by one.
+const takenStyles = new WeakMap<AppDatabase, { batchId: number; keys: string[] }>()
+
+/** The keys of the new styles a batch may create: the first five its approved rows name. */
+function newStylesTakenBy(db: AppDatabase, batchId: number): string[] {
+  const kept = takenStyles.get(db)
+  if (kept?.batchId === batchId) return kept.keys
+  const keys = newStylesTaken(newStylesOfBatch(db, batchId)).map(styleKey)
+  takenStyles.set(db, { batchId, keys })
+  return keys
+}
+
+/** The new styles the approved rows of a batch name, in the order of the batch. */
+function newStylesOfBatch(db: AppDatabase, batchId: number): string[] {
+  return listAllBatchItems(db, batchId).flatMap((item) => {
+    if (!item.approved || item.excluded) return []
+    const field = readProposal(item.after).fields?.styleId
+    const name =
+      field?.source === 'claude' && field.value === null
+        ? styleDetailsOf(item.after)?.newPrimary
+        : null
+    return name ? [name] : []
+  })
 }
 
 /**
@@ -213,6 +253,8 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       manual.length === 0 &&
       !fields.bpm &&
       !fields.key &&
+      !fields.styleId &&
+      !fields.secondaryStyleId &&
       !identifiers.success
     ) {
       return
@@ -268,13 +310,40 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
     if (fields.title?.source === 'manual') changes.title = fields.title.value
     if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
     if (fields.energy?.source === 'manual') changes.energy = fields.energy.value
-    if (fields.styleId?.source === 'manual') {
-      const styleId = fields.styleId.value
-      const known = styleId === null || listStyles(tx).some((style) => style.id === styleId)
-      // A style that was deleted since the edit cannot be the track's, and a value
-      // the track did not get is not locked either.
-      if (known) changes.primaryStyleId = styleId
-      else committed.delete('styleId')
+    // The styles: what the user chose, or what the classification decided, where the
+    // field is not locked. A style the classification named that the list does not
+    // have is created now, with a color of its own; one the user chose that was
+    // deleted since cannot be the track's, and a value the track did not get is not
+    // locked either.
+    const known = (id: number | null): boolean =>
+      id === null || listStyles(tx).some((style) => style.id === id)
+    for (const [field, column] of [
+      ['styleId', 'primaryStyleId'],
+      ['secondaryStyleId', 'secondaryStyleId']
+    ] as const) {
+      const proposed = fields[field]
+      if (!proposed || !free(field)) continue
+      let id = proposed.value
+      if (field === 'styleId' && id === null && proposed.source === 'claude') {
+        const details = styleDetailsOf(item.after)
+        const unsorted = listStyles(tx).find((style) => style.name === UNSORTED_STYLE_NAME)
+        // Five new styles a batch at most, the first its rows name; a full list or a
+        // name beyond the five leaves the track Unsorted.
+        if (details?.newPrimary) {
+          const created = newStylesTakenBy(db, batchId).includes(styleKey(details.newPrimary))
+            ? addStyle(
+                tx,
+                details.newPrimary,
+                details.newColor ?? newStyleColor(details.newPrimary, listStyles(tx))
+              )
+            : null
+          id = created?.id ?? unsorted?.id ?? null
+        }
+      }
+      // The second style is another style than the first.
+      if (field === 'secondaryStyleId' && id !== null && id === changes.primaryStyleId) id = null
+      if (known(id)) changes[column] = id
+      else committed.delete(field)
     }
     if (committed.size > 0) {
       changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
@@ -494,15 +563,29 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
       const track = getTrackById(db, trackId, listMountedVolumes())
       // A track that a stage failed for is not written, so there is nothing to edit.
       if (!item || !track || item.error !== null) return { ok: false, code: 'INVALID_INPUT' }
-      if (field === 'styleId' && value.data !== null) {
+      if ((field === 'styleId' || field === 'secondaryStyleId') && value.data !== null) {
         const known = listStyles(db).some((style) => style.id === value.data)
         if (!known) return { ok: false, code: 'INVALID_INPUT' }
+      }
+      // A second style is another style than the first.
+      if (field === 'secondaryStyleId' && value.data !== null) {
+        const primary = readProposal(item.after).fields?.styleId?.value ?? track.primaryStyleId
+        if (value.data === primary) return { ok: false, code: 'INVALID_INPUT' }
       }
 
       const current = readProposal(item.after)
       const edited: Proposal = {
         ...current,
         fields: { ...current.fields, [field]: { value: value.data, source: 'manual' } }
+      }
+      // A first style that the second one is takes the second one's place: the second
+      // is then none.
+      if (field === 'styleId' && value.data !== null) {
+        const second = current.fields?.secondaryStyleId
+        const secondId = second === undefined ? track.secondaryStyleId : second.value
+        if (secondId === value.data && edited.fields) {
+          edited.fields.secondaryStyleId = { value: null, source: 'manual' }
+        }
       }
       setBatchItemProposal(db, batchId, trackId, recomputed(batchId, track, item, edited))
       // Only a name can make a track a copy of another; the batch may hold thousands.

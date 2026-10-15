@@ -362,11 +362,26 @@ export function BatchPreviewTable({
                           label={`${row.currentFileName}: ${column.header}`}
                           value={row.cells[column.edit.field].after}
                           styles={styles}
+                          noneLabel={
+                            column.edit.field === 'secondaryStyleId'
+                              ? 'Nincs 2. stílus'
+                              : 'Nincs stílus'
+                          }
+                          newStyle={column.edit.field === 'styleId' ? row.newStyle : null}
+                          excludedStyle={
+                            column.edit.field === 'secondaryStyleId'
+                              ? (row.cells.styleId.after as number | null)
+                              : null
+                          }
                           onCancel={stopEditing}
                           onCommit={(value, byKey) => {
                             const { field } = column.edit as NonNullable<PreviewColumn['edit']>
                             stopEditing(byKey)
-                            if (value !== row.cells[field].after) {
+                            // "No style" over a proposed new style is a change, though
+                            // both are empty underneath.
+                            const rejectsNew =
+                              field === 'styleId' && row.newStyle !== null && value === null
+                            if (value !== row.cells[field].after || rejectsNew) {
                               void onEdit(row.trackId, field, value)
                             }
                           }}

@@ -20,7 +20,9 @@ test.afterEach(() => {
 test('a claude command chosen by hand is checked, tested, and given up again', async () => {
   // A stand-in for the command: the test never calls the real Claude.
   const fake = createFakeClaude(folder)
-  fake.reply({ answerEach: { style: 'Unsorted', confidence: 0.5 } })
+  fake.reply({
+    answerEach: { primary: 'Unsorted', secondary: null, confidence: 50, isNewStyle: false }
+  })
   // IDE terminals (VS Code) export ELECTRON_RUN_AS_NODE=1, which makes Electron start as plain Node.
   const env = { ...process.env } as Record<string, string>
   delete env.ELECTRON_RUN_AS_NODE

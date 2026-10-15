@@ -1,6 +1,14 @@
 import { asc, eq, inArray, or } from 'drizzle-orm'
 import { AppError } from '@shared/errors'
-import { UNSORTED_STYLE_NAME, type Style, type StyleInput } from '@shared/settings'
+import {
+  MAX_STYLES,
+  newStyleNameSchema,
+  styleInputSchema,
+  styleKey,
+  UNSORTED_STYLE_NAME,
+  type Style,
+  type StyleInput
+} from '@shared/settings'
 import type { AppDatabase } from './connection'
 import { styles, tracks } from './schema'
 
@@ -69,5 +77,44 @@ export function replaceStyles(db: AppDatabase, list: readonly StyleInput[]): Sty
       }
     })
     return listStyles(tx)
+  })
+}
+
+/**
+ * Adds one style, as the last before Unsorted, and returns it; or returns the style
+ * that has the name already, case, spaces and hyphens aside. For a style the app
+ * names (a new style of the classification), never a house style. Null when the
+ * list holds as many styles as it may.
+ */
+export function addStyle(db: AppDatabase, name: string, color: string): Style | null {
+  const checked = styleInputSchema.parse({
+    name: newStyleNameSchema.parse(name),
+    color,
+    isHouse: false
+  })
+  return db.transaction((tx) => {
+    const stored = listStyles(tx)
+    const same = stored.find((style) => styleKey(style.name) === styleKey(checked.name))
+    if (same) return same
+    // The list is full: the track stays without, rather than the list outgrow what
+    // Settings can save.
+    if (stored.length >= MAX_STYLES) return null
+    const orders = tx.select({ name: styles.name, sortOrder: styles.sortOrder }).from(styles).all()
+    const unsorted = orders.find((style) => style.name === UNSORTED_STYLE_NAME)
+    const last = Math.max(-1, ...orders.map((style) => style.sortOrder))
+    const sortOrder = unsorted ? unsorted.sortOrder : last + 1
+    // Unsorted stays the last of the list.
+    if (unsorted) {
+      tx.update(styles)
+        .set({ sortOrder: last + 1 })
+        .where(eq(styles.name, UNSORTED_STYLE_NAME))
+        .run()
+    }
+    tx.insert(styles)
+      .values({ ...checked, sortOrder })
+      .run()
+    const added = listStyles(tx).find((style) => style.name === checked.name)
+    if (!added) throw new Error('the style was not added')
+    return added
   })
 }
