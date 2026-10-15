@@ -46,6 +46,33 @@ export type FileTags = z.output<typeof fileTagsSchema>
  */
 export const BPM_KEY_ANALYZER_VERSION = 'essentia-2.1b6-multifeature-edma-1'
 
+/**
+ * Names the model and the envelopes behind `analysis.stems`. It is stored with every
+ * result, and a track is separated again only when it changes. The same text is
+ * ANALYZER_VERSION in fixlib_py/analysis/stems.py.
+ */
+export const STEMS_ANALYZER_VERSION = 'htdemucs-8726e21a-rms100ms-1'
+
+export const stemsResultSchema = z.object({
+  /** The name of the envelopes in the stems folder: the track's id. */
+  file: z.string().regex(/^[1-9][0-9]{0,15}\.npz$/u),
+  /** How many 100 ms windows: 20 minutes at most. */
+  frames: z.number().int().positive().max(12_000),
+  bytes: z.number().int().positive(),
+  /** How long the separation took, for the estimate of what is left. */
+  seconds: z.number().nonnegative(),
+  /** How much of the track was separated: 20 minutes at most. */
+  durationSeconds: z
+    .number()
+    .positive()
+    .max(20 * 60),
+  /** True when the track is longer, and only its first 20 minutes have envelopes. */
+  truncated: z.boolean(),
+  analyzerVersion: z.literal(STEMS_ANALYZER_VERSION)
+})
+
+export type StemsResult = z.output<typeof stemsResultSchema>
+
 export const bpmKeyResultSchema = z
   .object({
     /** The tempo inside the range that was asked for, moved there by octaves. */
@@ -278,6 +305,18 @@ export const RPC_SCHEMAS = {
       jobId: z.string().min(1).max(64)
     }),
     result: convertResultSchema
+  },
+  /**
+   * Separates one file into stems and keeps them as envelopes in the stems folder, under
+   * the track's id. Reads the file, writes only that file of the stems folder.
+   */
+  'analysis.stems': {
+    params: z.object({
+      path: z.string().min(1),
+      trackId: z.number().int().positive(),
+      jobId: z.string().min(1).max(64)
+    }),
+    result: stemsResultSchema
   },
   /** The AcoustID fingerprint of one file. Reads the file only. */
   'fingerprint.compute': {

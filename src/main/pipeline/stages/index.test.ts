@@ -30,6 +30,8 @@ describe('validateStages', () => {
       wanted: () => false,
       clients: {} as LookupClients,
       covers: {} as CoverStore,
+      stems: { ensure: async () => {}, has: async () => false },
+      modelInstalled: async () => false,
       coverClients: {} as CoverStageDependencies['coverClients'],
       claude: () => null
     })
