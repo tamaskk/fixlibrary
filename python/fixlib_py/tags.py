@@ -21,11 +21,16 @@ from fixlib_py.server import rpc
 
 logger = logging.getLogger(__name__)
 
-# One scan batch. The same limit is in src/shared/rpc.ts.
-MAX_PATHS = 50
+# One scan batch. The same limit is in src/shared/rpc.ts. With six text fields and a
+# path to a file, 40 keep the answer below the line limit of the bridge.
+MAX_PATHS = 40
 # With this limit the largest possible answer for one batch stays below the 1 MiB
 # line limit of the bridge, also when every character is written as an escape.
+# Counted in UTF-16 units, as the main process counts the length of a text.
 MAX_TEXT_LENGTH = 300
+# A genre is a word or two; kept short so the answer of a batch stays as it was sized.
+# Counted in UTF-16 units, as the main process counts the length of a text.
+MAX_GENRE_LENGTH = 100
 # The most a parser may read in one go. A tag is read into memory whole, covers
 # included, and so is a WAV or AIFF chunk; a file that asks for more than this was
 # not written by a DJ tool, and is reported as unreadable.
@@ -51,7 +56,8 @@ def _clean_text(value: object) -> str | None:
     """One line of tag text, or None when nothing usable is left."""
     visible = _DIRECTION_MARKS.sub("", _CONTROL_CHARACTERS.sub(" ", str(value)))
     text = _WHITESPACE.sub(" ", visible).strip()
-    return text[:MAX_TEXT_LENGTH] or None
+    # Counted as the main process counts the length of a text: in UTF-16 units.
+    return _cut_utf16(text, MAX_TEXT_LENGTH)
 
 
 def _first_text(tags: Any, frame_id: str) -> str | None:
@@ -103,6 +109,32 @@ class _BoundedReader:
         return self._file.tell()
 
 
+def _cut_utf16(text: str, limit: int) -> str | None:
+    """As much of the text as `limit` UTF-16 units hold, never half a character."""
+    units = 0
+    for index, letter in enumerate(text):
+        units += 2 if ord(letter) > 0xFFFF else 1
+        if units > limit:
+            text = text[:index]
+            break
+    return text.rstrip() or None
+
+
+def _genre(tags: Any) -> str | None:
+    """The first genre of the tag, by name: an ID3v1 number such as `(17)` is named."""
+    for frame in tags.getall("TCON"):
+        try:
+            genres = frame.genres
+        except Exception:
+            # A genre that cannot be read is no reason to lose the other tags.
+            continue
+        for genre in genres:
+            text = _clean_text(genre)
+            if text is not None:
+                return _cut_utf16(text, MAX_GENRE_LENGTH)
+    return None
+
+
 def _unreadable(path: str) -> dict[str, Any]:
     return {
         "path": path,
@@ -115,6 +147,7 @@ def _unreadable(path: str) -> dict[str, Any]:
         "album": None,
         "label": None,
         "year": None,
+        "genre": None,
         "hasCover": False,
     }
 
@@ -143,6 +176,7 @@ def _parse(path: str) -> dict[str, Any]:
             result["album"] = _first_text(tags, "TALB")
             result["label"] = _first_text(tags, "TPUB")
             result["year"] = _year(tags)
+            result["genre"] = _genre(tags)
             result["hasCover"] = len(tags.getall("APIC")) > 0
         return result
 

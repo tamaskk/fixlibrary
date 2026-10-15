@@ -86,6 +86,8 @@ export const tracks = sqliteTable(
     album: text('album'),
     label: text('label'),
     year: integer('year'),
+    /** The genre the file's tag holds, as the last scan read it. */
+    genre: text('genre'),
     bpm: real('bpm'),
     camelotKey: text('camelot_key'),
     musicalKey: text('musical_key'),

@@ -113,6 +113,7 @@ describe('RPC_SCHEMAS', () => {
       album: null,
       label: null,
       year: null,
+      genre: null,
       hasCover: false
     }
     const result = {
@@ -127,6 +128,7 @@ describe('RPC_SCHEMAS', () => {
           artist: 'Előadó',
           title: 'Tűz',
           year: 2024,
+          genre: null,
           hasCover: true
         },
         { ...empty, path: '/Music/b.mp3', readable: false }
@@ -161,6 +163,7 @@ describe('RPC_SCHEMAS', () => {
       album: null,
       label: null,
       year: null,
+      genre: null,
       hasCover: false,
       ...change
     }

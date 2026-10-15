@@ -50,6 +50,7 @@ async function fakeReadTags(paths: string[]): Promise<FileTags[]> {
     album: null,
     label: null,
     year: 2024,
+    genre: basename(path).startsWith('afro') ? 'Afro House' : null,
     hasCover: false
   }))
 }
@@ -324,9 +325,21 @@ describe('scanning a library for the first time', () => {
       artist: 'Artist',
       title: 'a.mp3',
       year: 2024,
+      genre: null,
       coverStatus: 'missing',
       stageStatus: { scan: 'done' }
     })
+  })
+
+  it('stores the genre the tag of a file holds', async () => {
+    // Arrange
+    addFile('afro.mp3')
+
+    // Act
+    await scanner().scan()
+
+    // Assert
+    expect(storedTracks()[0]?.genre).toBe('Afro House')
   })
 
   it('leaves out hidden files, AppleDouble files and the system folders of a drive', async () => {
@@ -365,7 +378,7 @@ describe('scanning a library for the first time', () => {
     expect(storedNames()).toEqual(['real.mp3'])
   })
 
-  it('asks for the tags in batches of fifty', async () => {
+  it('asks for the tags in batches of forty', async () => {
     // Arrange
     for (let index = 0; index < 120; index += 1) addFile(`${index}.mp3`)
 
@@ -373,7 +386,7 @@ describe('scanning a library for the first time', () => {
     const result = await scanner().scan()
 
     // Assert
-    expect(readCalls.map((paths) => paths.length)).toEqual([50, 50, 20])
+    expect(readCalls.map((paths) => paths.length)).toEqual([40, 40, 40])
     expect(result).toMatchObject({ ok: true, value: { found: 120, added: 120 } })
   })
 
@@ -420,7 +433,7 @@ describe('scanning a library for the first time', () => {
     expect(progress).toEqual([
       { phase: 'walking', found: 0 },
       { phase: 'reading', done: 0, total: 60 },
-      { phase: 'reading', done: 50, total: 60 },
+      { phase: 'reading', done: 40, total: 60 },
       { phase: 'reading', done: 60, total: 60 }
     ])
   })
@@ -534,9 +547,50 @@ describe('scanning again', () => {
     expect(readCalls).toEqual([[join(library, 'flaky.mp3')]])
     expect(result).toMatchObject({ ok: true, value: { updated: 1, unchanged: 1, unreadable: 0 } })
     expect(storedTracks().map((track) => track.stageStatus)).toEqual([
-      { scan: 'done' },
-      { scan: 'done' }
+      { scan: 'done', genre: 'done' },
+      { scan: 'done', genre: 'done' }
     ])
+  })
+
+  it('reads a track scanned before the genre was read once more, and then no more', async () => {
+    // Arrange: a track as a scan before T-021 left it, without its genre.
+    const path = addFile('afro.mp3')
+    await scanner().scan()
+    const [stored] = storedTracks()
+    updateTrack(testDatabase.db, stored?.id ?? 0, { genre: null, stageStatus: { scan: 'done' } })
+    readCalls = []
+
+    // Act
+    await scanner().scan()
+    const first = readCalls
+    readCalls = []
+    await scanner().scan()
+
+    // Assert
+    expect(first).toEqual([[path]])
+    expect(readCalls).toEqual([])
+    expect(storedTracks()[0]).toMatchObject({
+      genre: 'Afro House',
+      stageStatus: { scan: 'done', genre: 'done' }
+    })
+  })
+
+  it('does not write a track again on every scan once a file it read well cannot be read', async () => {
+    // Arrange
+    addFile('flaky.mp3')
+    await scanner().scan()
+    const failing = async (paths: string[]): Promise<FileTags[]> =>
+      (await fakeReadTags(paths)).map((tags) => ({ ...tags, readable: false }))
+    // The file changes and cannot be read any more.
+    utimesSync(join(library, 'flaky.mp3'), 1_790_000_000, 1_790_000_000)
+    await scanner({ readTags: failing }).scan()
+
+    // Act
+    const again = await scanner({ readTags: failing }).scan()
+
+    // Assert
+    expect(storedTracks()[0]?.stageStatus).toEqual({ scan: 'failed' })
+    expect(again).toMatchObject({ ok: true, value: { updated: 0, unchanged: 1 } })
   })
 
   it('does not report a file as changed that is tried again and still cannot be read', async () => {
@@ -645,7 +699,7 @@ describe('a scan that cannot run or has to stop', () => {
 
     // Assert
     expect(result).toEqual({ ok: false, code: 'LIBRARY_UNAVAILABLE' })
-    expect(storedTracks()).toHaveLength(50)
+    expect(storedTracks()).toHaveLength(40)
     expect(storedTracks().some((track) => track.fileMissing)).toBe(false)
   })
 

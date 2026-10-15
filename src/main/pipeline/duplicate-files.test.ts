@@ -591,6 +591,7 @@ describe('a batch that looks for duplicates', () => {
           album: null,
           label: null,
           year: null,
+          genre: null,
           hasCover: false
         })),
       isEngineAlive: async () => true,
