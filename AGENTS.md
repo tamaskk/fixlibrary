@@ -78,6 +78,7 @@ npm run format         format the codebase
 npm run format:check   check formatting without writing
 npx drizzle-kit generate --name <what_changed>   new migration after a schema change
 ./scripts/fetch-binaries.sh   build ffmpeg and mp3gain, download fpcalc, into resources/bin/ (about 2 minutes)
+./scripts/fetch-demucs-weights.sh   download and convert the htdemucs weights into resources/models/ (stem analysis)
 
 uv run pytest          Python tests, from python/
 uv run ruff check .    Python lint, from python/
