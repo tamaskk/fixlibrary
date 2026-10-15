@@ -55,6 +55,7 @@ import { extensionOf, UNSAFE_TEXT } from '@shared/file-names'
 import { logger } from '../services/logger'
 import { AppError, type Result } from '@shared/errors'
 import type { SpaceCheck } from '@shared/file-ops'
+import { APP_FOLDER_NAMES, styleKey } from '@shared/settings'
 
 // Kept free beyond what the copies need: a volume that is full to the last byte
 // fails in other places.
@@ -118,6 +119,19 @@ export interface TrackFiles {
   setAside: (
     folderName: string,
     keeperTrackId: number
+  ) => Promise<{ path: string; collided: boolean }>
+  /**
+   * Moves the file, under the name it has, into the named folder right under the
+   * folder the work happens in (a style folder): the library in place, the clean
+   * library otherwise. A file right in that folder already stays. If the name is
+   * taken there, the file gets ` (2)`, ` (3)`, …. Afterwards the folders it left that
+   * hold nothing but what Finder keeps there (`.DS_Store`) are deleted, from its old
+   * folder upward, up to a folder right under the root whose name is in `kept` (the
+   * style folders, the app's own folders), and never the root itself.
+   */
+  organize: (
+    folderName: string,
+    kept: readonly string[]
   ) => Promise<{ path: string; collided: boolean }>
   /**
    * Makes the file a file of another format, under its name with the new extension,
@@ -535,14 +549,44 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
   }
 
   /**
-   * Removes the folders a deleted file leaves empty, from its own upward. Stops at
-   * the first one that holds anything; the folders of the library themselves stay.
+   * Removes the folders a deleted file leaves empty, or holding only what Finder keeps
+   * there, from its own upward. Stops at the first one that holds anything else; the
+   * folders of the library themselves stay.
    */
   async function removeEmptyFoldersAbove(path: string): Promise<void> {
     let folder = dirname(path)
     for (let depth = 0; depth < 64; depth += 1) {
-      await fileOps.removeEmptyFolder(folder)
-      if (await fileOps.exists(folder)) return
+      // A folder the batch made, such as a style folder, that Finder has shown since
+      // holds its `.DS_Store`: that is no reason to leave it behind. A folder of the
+      // app's own goes only when it is empty, as before.
+      const own = APP_FOLDER_NAMES.some((name) => styleKey(name) === styleKey(basename(folder)))
+      if (own) {
+        await fileOps.removeEmptyFolder(folder)
+        if (await fileOps.exists(folder)) return
+      } else if (!(await fileOps.removeFolderOfFinderData(folder))) {
+        return
+      }
+      folder = dirname(folder)
+    }
+  }
+
+  /**
+   * Deletes the folders a moved file left with nothing in them but what Finder keeps
+   * there, from `folder` upward. Stops at the first one that holds anything else, at
+   * the root, and at a folder right under the root whose name is in `kept`: a style
+   * folder, or a folder of the app's own, stays even when it is empty.
+   */
+  async function removeFolderOfFinderDataAbove(
+    folder: string,
+    root: string,
+    kept: readonly string[]
+  ): Promise<void> {
+    const keptKeys = new Set(kept.map(styleKey))
+    for (let depth = 0; depth < 64; depth += 1) {
+      const relative = await fileOps.relativeTo(root, folder)
+      if (relative === null || relative === '' || folder === root) return
+      if (!relative.includes(sep) && keptKeys.has(styleKey(relative))) return
+      if (!(await fileOps.removeFolderOfFinderData(folder))) return
       folder = dirname(folder)
     }
   }
@@ -991,6 +1035,54 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
             const to = join(folder, basename(from))
             await assertUsableTarget(root, to, from)
             return moveTo(from, to)
+          }),
+
+        organize: (folderName, kept) =>
+          withTrack(trackId, async () => {
+            // A name, never a path: the folder is always right under the root. Never a
+            // folder of the app's own: what goes into `_Duplicates` leaves the library.
+            if (
+              unusableNameReason(folderName, 'folder') !== null ||
+              APP_FOLDER_NAMES.some((folder) => styleKey(folder) === styleKey(folderName))
+            ) {
+              throw new AppError('INVALID_INPUT', 'the name cannot be given to a style folder')
+            }
+            // Before the file is asked for, which makes its backup or its copy: a
+            // track that cannot be moved must not cost one.
+            const track = await reconcile(batch.id, readTrack(trackId))
+            const target = join(
+              batch.mode === 'clean_library'
+                ? needFolder(folders().cleanLibraryFolder, 'clean library')
+                : await workingRoot(track.path),
+              folderName
+            )
+            await assertFolderOrNone(target)
+            // Right in its folder already, and in the folder the work happens in: nothing
+            // to move, and no backup or copy to make for it.
+            if ((await fileOps.relativeTo(target, track.path)) === basename(track.path)) {
+              return { path: track.path, collided: false }
+            }
+            if (unusableNameReason(basename(track.path), 'file') !== null) {
+              throw new AppError('INVALID_INPUT', 'the file has a name that cannot be given anew')
+            }
+            const from = await working()
+            const root = await workingRoot(from)
+            const folder = join(root, folderName)
+            await assertFolderOrNone(folder)
+            // Right in its folder already: nothing to move.
+            if ((await fileOps.relativeTo(folder, from)) === basename(from)) {
+              return { path: from, collided: false }
+            }
+            const to = join(folder, basename(from))
+            await assertUsableTarget(root, to, from)
+            const moved = await moveTo(from, to)
+            // Tidying up after the move is best effort: the file is where it belongs.
+            await removeFolderOfFinderDataAbove(dirname(from), root, kept).catch((error) => {
+              logger.warn(
+                `Track ${trackId}: a folder it left was not tidied: ${describeError(error)}`
+              )
+            })
+            return moved
           }),
 
         convertTo: (target, write) =>

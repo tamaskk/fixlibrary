@@ -19,6 +19,8 @@ type PreviewActionsProps = {
   newStylesLeft: number
   /** True when the list of styles cannot take the new ones: their tracks stay Unsorted. */
   stylesFull: boolean
+  /** True when the batch sorts files into style folders: their genre and comment are replaced. */
+  organizes: boolean
   /** The action that is on its way, or null. */
   busy: 'approve' | 'discard' | 'undo' | null
   onApprove: () => void
@@ -45,6 +47,7 @@ export function PreviewActions({
   newStyles,
   newStylesLeft,
   stylesFull,
+  organizes,
   busy,
   onApprove,
   onDiscard,
@@ -79,6 +82,11 @@ export function PreviewActions({
             ? ` Egy batch legfeljebb 5 új stílust hoz létre: további ${formatCount(newStylesLeft)} stílus trackjei Unsorted maradnak.`
             : ''
         }`
+
+  // Said too: what the file's genre and comment held is gone after the approval.
+  const organizeNote = organizes
+    ? ' A fájlok a stílusmappájukba kerülnek, a genre és a comment tag felülíródik.'
+    : ''
 
   return (
     <section aria-label="Jóváhagyás" className="flex items-center gap-4">
@@ -141,7 +149,7 @@ export function PreviewActions({
             backTo(approveButton.current)
           }}
           title="Jóváhagyod a változásokat?"
-          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote}${stylesNote} ${MODE_NOTES[mode]}`}
+          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote}${stylesNote}${organizeNote} ${MODE_NOTES[mode]}`}
         >
           <DialogFooter>
             <DialogClose asChild>

@@ -28,7 +28,9 @@ describe('STAGE_TIMEOUTS_MS', () => {
       normalize: 120_000,
       cover: 60_000,
       embedCover: 360_000,
-      style: 420_000
+      style: 420_000,
+      organize: 10_000,
+      organizeFile: 360_000
     })
   })
 

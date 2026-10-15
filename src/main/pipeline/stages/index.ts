@@ -14,6 +14,7 @@ import { createDuplicatesStage, type DuplicatesStageDependencies } from './dupli
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
 import { createNamingStage } from './naming'
+import { createOrganizeFileStage, createOrganizeStage } from './organize'
 import { createRenameStage } from './rename'
 import { createSetAsideStage } from './set-aside'
 import { createStyleStage, type StyleStageDependencies } from './style'
@@ -38,12 +39,15 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createCoverStage(dependencies),
     createNamingStage(),
     createDuplicatesStage(dependencies),
+    // After the duplicates: a copy that is set aside goes into no style folder.
+    createOrganizeStage(dependencies),
     createConvertStage(),
     createConvertFileStage(dependencies),
     createRedrawPlaceholderStage(dependencies),
     createWriteTagsStage(dependencies),
     createEmbedCoverStage(dependencies),
     createRenameStage(),
+    createOrganizeFileStage(dependencies),
     createSetAsideStage()
   ]
 }

@@ -106,6 +106,7 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
       'Borító keresése',
       'Fájlnév és névtisztítás',
       'Duplikátumok keresése',
+      'Mappába rendezés',
       'WAV → AIFF konverzió'
     ])
     await expect(run.getByRole('button', { name: 'Futtatás a kijelölteken' })).toBeEnabled()

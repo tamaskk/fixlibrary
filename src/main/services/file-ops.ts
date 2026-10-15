@@ -12,6 +12,7 @@ import {
   mkdir,
   open,
   opendir,
+  readdir,
   realpath,
   rename,
   rm,
@@ -28,6 +29,9 @@ import { AppError } from '@shared/errors'
 export { unusableNameReason } from '@shared/file-names'
 import { describeError } from './error-text'
 import { logger } from './logger'
+
+// What Finder keeps in a folder it has shown: no file of the user's.
+const FINDER_DATA = '.DS_Store'
 
 /** A file that is still being written carries a name like `.<name>.<random>.fixlib-tmp`. */
 const TEMP_SUFFIX = '.fixlib-tmp'
@@ -102,6 +106,12 @@ export interface FileOps {
   remove: (path: string) => Promise<boolean>
   /** Deletes a folder if it is empty and is not one of the allowed folders themselves. */
   removeEmptyFolder: (path: string) => Promise<void>
+  /**
+   * Deletes a folder that holds nothing but what Finder keeps there (`.DS_Store`), and
+   * that file, if the folder is not one of the allowed folders themselves. Says
+   * whether it was deleted; a folder that holds anything else stays as it is.
+   */
+  removeFolderOfFinderData: (path: string) => Promise<boolean>
   /** Creates one of the allowed folders if it is not there. Refuses a link in its place. */
   createRoot: (path: string) => Promise<void>
   exists: (path: string) => Promise<boolean>
@@ -413,6 +423,40 @@ export function createFileOps(options: FileOpsOptions): FileOps {
       if (identity === null || (await rootIdentities()).has(identity)) return
       // Fails for a folder that holds anything, which is the point.
       await rmdir(path).catch(() => {})
+    },
+
+    async removeFolderOfFinderData(path) {
+      await assertAllowed(join(path, 'x'))
+      // Never a link to a folder: what is deleted is in the folder the path names.
+      const folderIdentity = async (): Promise<string | null> => {
+        try {
+          const found = await lstat(path, { bigint: true })
+          return found.isDirectory() ? `${found.dev}:${found.ino}` : null
+        } catch {
+          return null
+        }
+      }
+      const identity = await folderIdentity()
+      if (identity === null || (await rootIdentities()).has(identity)) return false
+      // Best effort to the end: a file Finder took away meanwhile, one that is locked
+      // or another user's, leaves the folder as it is, and is no failure of anything.
+      try {
+        const entries = await readdir(path)
+        if (entries.some((entry) => entry !== FINDER_DATA)) return false
+        if (entries.includes(FINDER_DATA)) {
+          const data = join(path, FINDER_DATA)
+          // Only the plain file Finder writes: never a folder or a link of that name,
+          // and only while the folder is still the one that was looked at.
+          if (!(await lstat(data)).isFile() || (await folderIdentity()) !== identity) return false
+          await rm(data, { force: true })
+        }
+        if ((await folderIdentity()) !== identity) return false
+        // Fails when something came in since, and then the folder stays.
+        await rmdir(path)
+        return true
+      } catch {
+        return false
+      }
     },
 
     async createRoot(path) {

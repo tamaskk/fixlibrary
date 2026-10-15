@@ -630,6 +630,82 @@ describe('remove', () => {
     // Assert
     expect(readdirSync(library).sort()).toEqual(['Full'])
   })
+
+  it('removes a folder that holds nothing but what Finder keeps there, and nothing else', async () => {
+    // Arrange
+    mkdirSync(join(library, 'Finder'))
+    writeFileSync(join(library, 'Finder', '.DS_Store'), 'finder')
+    mkdirSync(join(library, 'Empty'))
+    mkdirSync(join(library, 'Other'))
+    writeFileSync(join(library, 'Other', '.DS_Store'), 'finder')
+    writeFileSync(join(library, 'Other', 'notes.txt'), 'mine')
+    mkdirSync(join(library, 'Odd'))
+    mkdirSync(join(library, 'Odd', '.DS_Store'))
+
+    // Act
+    const removed = await Promise.all(
+      ['Finder', 'Empty', 'Other', 'Odd', 'Missing'].map((name) =>
+        files.removeFolderOfFinderData(join(library, name))
+      )
+    )
+    const root = await files.removeFolderOfFinderData(library)
+
+    // Assert
+    expect(removed).toEqual([true, true, false, false, false])
+    expect(root).toBe(false)
+    expect(readdirSync(library).sort()).toEqual(['Odd', 'Other'])
+    expect(readdirSync(join(library, 'Other')).sort()).toEqual(['.DS_Store', 'notes.txt'])
+  })
+
+  it('follows no link, and deletes nothing through one', async () => {
+    // Arrange
+    mkdirSync(join(library, 'Real'))
+    writeFileSync(join(library, 'Real', '.DS_Store'), 'finder')
+    symlinkSync(join(library, 'Real'), join(library, 'Linked'))
+    mkdirSync(join(library, 'Data'))
+    symlinkSync(join(library, 'Real', '.DS_Store'), join(library, 'Data', '.DS_Store'))
+
+    // Act
+    const throughLink = await files.removeFolderOfFinderData(join(library, 'Linked'))
+    const linkedData = await files.removeFolderOfFinderData(join(library, 'Data'))
+
+    // Assert
+    expect([throughLink, linkedData]).toEqual([false, false])
+    expect(readdirSync(join(library, 'Real'))).toEqual(['.DS_Store'])
+  })
+
+  it('leaves a folder whose Finder data cannot be deleted, and says so without failing', async () => {
+    // Arrange
+    const locked = join(library, 'Locked')
+    mkdirSync(locked)
+    writeFileSync(join(locked, '.DS_Store'), 'finder')
+    execFileSync('chflags', ['uchg', join(locked, '.DS_Store')])
+
+    // Act
+    const removed = await files.removeFolderOfFinderData(locked).finally(() => {
+      execFileSync('chflags', ['nouchg', join(locked, '.DS_Store')])
+    })
+
+    // Assert
+    expect(removed).toBe(false)
+    expect(readdirSync(locked)).toEqual(['.DS_Store'])
+  })
+
+  it('deletes a folder once when two ask at the same time, and fails neither', async () => {
+    // Arrange
+    mkdirSync(join(library, 'Album'))
+    writeFileSync(join(library, 'Album', '.DS_Store'), 'finder')
+
+    // Act
+    const answers = await Promise.all([
+      files.removeFolderOfFinderData(join(library, 'Album')),
+      files.removeFolderOfFinderData(join(library, 'Album'))
+    ])
+
+    // Assert
+    expect(answers.filter(Boolean).length).toBeLessThanOrEqual(1)
+    expect(readdirSync(library)).not.toContain('Album')
+  })
 })
 
 describe('the folders it may touch', () => {

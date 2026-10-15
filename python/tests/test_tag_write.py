@@ -282,7 +282,7 @@ def test_does_not_write_tags_into_a_wav(tmp_path: Path) -> None:
     "fields",
     [
         {},
-        {"genre": "House"},
+        {"mood": "Happy"},
         {"title": ""},
         {"title": "two\nlines"},
         {"title": "turned ‮ around"},
@@ -681,3 +681,32 @@ def test_stops_reading_the_audio_when_the_job_is_told_to_stop(tmp_path: Path) ->
 
     with src.open("rb") as file, pytest.raises(Stopped):
         tag_write._audio_of(file, "mp3", stop)
+
+
+@pytest.mark.parametrize("extension", [".mp3", ".aiff"])
+def test_writes_the_genre_and_one_comment_in_place_of_every_plain_comment(
+    tmp_path: Path, extension: str
+) -> None:
+    from mutagen.id3 import COMM
+
+    src = track(tmp_path, extension)
+    first = written(src, {"title": "Glue"})
+    audio = AIFF(first) if extension != ".mp3" else MP3(first)
+    audio.tags.add(COMM(encoding=1, lang="eng", desc="", text=["8A - Energy 6"]))
+    audio.tags.add(COMM(encoding=1, lang="hun", desc="", text=["régi"]))
+    audio.tags.add(COMM(encoding=1, lang="eng", desc="iTunSMPB", text=["0000 0210"]))
+    audio.save()
+
+    result = written(first, {"genre": "Melodic House", "comment": "E7 | Afro House"})
+
+    tags = tags_of(result)
+    assert str(tags["TCON"]) == "Melodic House"
+    comments = tags.getall("COMM")
+    assert sorted((comment.desc, comment.text) for comment in comments) == [
+        ("", ["E7 | Afro House"]),
+        ("iTunSMPB", ["0000 0210"]),
+    ]
+    assert tag_write.would_change(
+        str(result), {"genre": "Melodic House", "comment": "E7 | Afro House"}
+    ) == {"changed": False}
+    assert tag_write.would_change(str(result), {"comment": "E8 | Afro House"}) == {"changed": True}

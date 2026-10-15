@@ -110,7 +110,7 @@ export function BatchPreview(): React.JSX.Element {
   const columns =
     batch === null || tab === 'errors'
       ? ERROR_COLUMNS
-      : columnsFor(batch.type, { covers: batch.findsCovers })
+      : columnsFor(batch.type, { covers: batch.findsCovers, folders: batch.organizes })
 
   return (
     <main className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-6">
@@ -408,6 +408,7 @@ export function BatchPreview(): React.JSX.Element {
                 newStyles={newStyles.taken}
                 newStylesLeft={newStyles.left}
                 stylesFull={newStyles.full}
+                organizes={batch.organizes}
                 busy={busy}
                 onApprove={async () => {
                   // The run panel of the Library page shows the apply phase.

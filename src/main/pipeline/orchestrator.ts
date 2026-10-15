@@ -466,7 +466,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
    */
   function regroup(batchId: number, stageNames: Iterable<string>): 'same' | 'changed' | 'failed' {
     let outcome: 'same' | 'changed' | 'failed' = 'same'
-    for (const name of new Set(stageNames)) {
+    const ran = new Set(stageNames)
+    // In the order of the stages: the groups of one may decide what another shows.
+    for (const { name } of stages.filter((stage) => ran.has(stage.name))) {
       try {
         const changed = stagesByName.get(name)?.regroup?.(batchId) ?? false
         if (changed && outcome === 'same') outcome = 'changed'

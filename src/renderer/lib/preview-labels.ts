@@ -17,6 +17,7 @@ export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {
   itunes: 'iTunes',
   coverartarchive: 'Cover Art Archive',
   placeholder: 'Generált',
+  organize: 'Rendezés',
   id3: 'ID3',
   fileName: 'Fájlnév',
   naming: 'Névszabály',

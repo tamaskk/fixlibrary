@@ -30,6 +30,7 @@ function row(trackId: number, overrides: Partial<PreviewRow> = {}): PreviewRow {
       styleId: CELL,
       secondaryStyleId: CELL,
       genre: CELL,
+      folder: CELL,
       energy: CELL,
       cover: CELL
     },
@@ -57,7 +58,8 @@ const WAITING: PreviewState = {
     failed: 1,
     canRefresh: true,
     findsDuplicates: false,
-    findsCovers: false
+    findsCovers: false,
+    organizes: false
   },
   canUndo: false
 }

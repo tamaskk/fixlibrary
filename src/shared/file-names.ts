@@ -42,3 +42,23 @@ export function unusableNameReason(name: string, kind: 'file' | 'folder'): strin
   }
   return null
 }
+
+// What a folder name may not hold on any drive the library can be on.
+const FOLDER_UNSAFE = /[/\\:*?<>|"]/gu
+const UNSAFE_TEXT_ALL = new RegExp(UNSAFE_TEXT.source, 'gu')
+
+/**
+ * The name of the folder of a style: the style's name with what a folder name may
+ * not hold made a hyphen, composed, without dots or spaces at its ends. Null when
+ * nothing usable is left.
+ */
+export function folderNameOf(name: string): string | null {
+  // What shows as nothing goes before the name is composed: composed after, it stays so.
+  const folder = name
+    .replace(UNSAFE_TEXT_ALL, '')
+    .normalize('NFC')
+    .replace(FOLDER_UNSAFE, '-')
+    .replace(/\s+/gu, ' ')
+    .replace(/^[\s.]+|[\s.]+$/gu, '')
+  return folder !== '' && unusableNameReason(folder, 'folder') === null ? folder : null
+}

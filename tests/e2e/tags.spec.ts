@@ -154,17 +154,20 @@ test('every function at once: a WAV becomes a named AIFF with its tags written, 
       timeout: 60_000
     })
 
-    // One file: an AIFF under its new name, with an ID3v2.3 tag that holds the
-    // names, the tempo and the key.
-    expect(readdirSync(libraryFolder)).toEqual([NEW_NAME])
-    const written = readFileSync(join(libraryFolder, NEW_NAME))
+    // One file: an AIFF under its new name, in the folder of its style (Unsorted: no
+    // genre to go by), with an ID3v2.3 tag that holds the names, the tempo, the key
+    // and the style.
+    expect(readdirSync(libraryFolder)).toEqual(['Unsorted'])
+    expect(readdirSync(join(libraryFolder, 'Unsorted'))).toEqual([NEW_NAME])
+    const written = readFileSync(join(libraryFolder, 'Unsorted', NEW_NAME))
     const tag = written.subarray(written.indexOf('ID3\u0003'))
     expect(written.toString('latin1', 0, 4) + written.toString('latin1', 8, 12)).toBe('FORMAIFF')
     for (const [frame, text] of [
       ['TPE1', 'Artist'],
       ['TIT2', 'Title'],
       ['TBPM', '124'],
-      ['TKEY', 'Am']
+      ['TKEY', 'Am'],
+      ['TCON', 'Unsorted']
     ] as const) {
       const at = tag.indexOf(frame)
       expect(at, frame).toBeGreaterThan(-1)
