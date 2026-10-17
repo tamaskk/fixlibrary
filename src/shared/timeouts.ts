@@ -48,6 +48,9 @@ export const STAGE_TIMEOUTS_MS = {
 
 export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS
 
+/** For one `analysis.peaks` call of the cue editor: a whole file decoded once. */
+export const PEAKS_RPC_TIMEOUT_MS = 120 * SECOND
+
 /** For one `cover.inspect` or `cover.prepare` call: one picture decoded and resized. */
 export const COVER_RPC_TIMEOUT_MS = 20 * SECOND
 

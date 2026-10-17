@@ -47,6 +47,8 @@ export interface PythonBridgeOptions {
   /** The one folder whose covers the sidecar reads and writes. Without it, covers fail per track. */
   coversDir?: string
   /** Where the stem envelopes are kept (T-028). */
+  /** Where the waveforms of the cue editor are kept (T-030). */
+  peaksDir?: string
   stemsDir?: string
   /** Where the model weights are (scripts/fetch-demucs-weights.sh). */
   modelsDir?: string
@@ -145,6 +147,7 @@ export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
     if (options.mp3gainPath !== undefined) env['FIXLIB_MP3GAIN'] = options.mp3gainPath
     if (options.coversDir !== undefined) env['FIXLIB_COVERS_DIR'] = options.coversDir
     if (options.stemsDir !== undefined) env['FIXLIB_STEMS_DIR'] = options.stemsDir
+    if (options.peaksDir !== undefined) env['FIXLIB_PEAKS_DIR'] = options.peaksDir
     if (options.modelsDir !== undefined) env['FIXLIB_MODELS_DIR'] = options.modelsDir
     if (options.torchHome !== undefined) env['TORCH_HOME'] = options.torchHome
     for (const name of INHERITED_ENV) {

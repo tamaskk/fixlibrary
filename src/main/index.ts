@@ -1,4 +1,4 @@
-import { app, dialog, powerSaveBlocker, shell, BrowserWindow } from 'electron'
+import { app, dialog, powerSaveBlocker, protocol, shell, BrowserWindow } from 'electron'
 import { existsSync, realpathSync } from 'fs'
 import { cpus, homedir, tmpdir, userInfo } from 'os'
 import { join, sep } from 'path'
@@ -8,6 +8,7 @@ import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
+import { registerCueEditorIpc } from './ipc/cue-editor'
 import { registerRekordboxIpc } from './ipc/rekordbox'
 import { parseExportInWorker } from './services/rekordbox-xml-read'
 import rekordboxXmlWorkerPath from './services/rekordbox-xml-worker?modulePath'
@@ -48,6 +49,10 @@ import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
 import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
+import { AUDIO_SCHEME, createAudioHandler } from './services/audio-protocol'
+import { createPeaksStore } from './services/peaks-store'
+import { getTrackById } from './db/tracks'
+import { isSetAsidePath } from '@shared/duplicates'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import {
   createMountedVolumesCache,
@@ -247,6 +252,7 @@ function startPythonSidecar(): void {
     mp3gainPath: resolveToolCommand('mp3gain', locations)?.command,
     coversDir: coversFolder(),
     stemsDir: stemsFolder(),
+    peaksDir: peaksFolder(),
     modelsDir: modelsFolder(),
     // Nothing of the app downloads into it; set so that no part of torch ever writes to
     // `~/.cache` instead.
@@ -282,6 +288,10 @@ function coversFolder(): string {
 
 function stemsFolder(): string {
   return join(app.getPath('userData'), 'stems')
+}
+
+function peaksFolder(): string {
+  return join(app.getPath('userData'), 'peaks')
 }
 
 /** `resources/models` in development; the packaged app gets its models with T-041. */
@@ -457,6 +467,27 @@ function registerLibraryAndPipeline(): void {
     // An export is untrusted and may be large: its parse costs a worker, not the app.
     parseExport: (bytes) => parseExportInWorker(rekordboxXmlWorkerPath, bytes)
   })
+  // Asked on every range a player reads, and every edit: not of the drives each time.
+  const cachedVolumes = createMountedVolumesCache(1000)
+  const cueEditor = {
+    db,
+    listMountedVolumes: cachedVolumes,
+    python: () => pythonBridge,
+    peaks: createPeaksStore(peaksFolder())
+  }
+  registerCueEditorIpc(cueEditor)
+  // The page plays a track by its id; the main process looks the file up.
+  protocol.handle(
+    AUDIO_SCHEME,
+    createAudioHandler({
+      pathOfTrack: (trackId) => {
+        const track = getTrackById(db, trackId, cachedVolumes())
+        return track && !track.offline && !track.fileMissing && !isSetAsidePath(track.path)
+          ? track.path
+          : null
+      }
+    })
+  )
   registerPreviewIpc(
     createPreview({
       db,
@@ -561,6 +592,12 @@ app.on('second-instance', () => {
   if (window.isMinimized()) window.restore()
   window.focus()
 })
+
+// Before the app is ready, as Electron asks: the scheme the page plays tracks from, with
+// byte ranges so the player can seek. It serves audio only (T-030).
+protocol.registerSchemesAsPrivileged([
+  { scheme: AUDIO_SCHEME, privileges: { standard: true, secure: true, stream: true } }
+])
 
 app.whenReady().then(() => {
   if (!isOnlyInstance) return

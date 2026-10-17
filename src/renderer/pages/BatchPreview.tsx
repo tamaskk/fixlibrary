@@ -51,6 +51,7 @@ export function BatchPreview(): React.JSX.Element {
   const discard = usePreviewStore((state) => state.discard)
   const undo = usePreviewStore((state) => state.undo)
   const setPage = useAppStore((state) => state.setPage)
+  const openCueEditor = useAppStore((state) => state.openCueEditor)
   const runActive = usePipelineStore((state) => state.progress !== null)
   const loadPipeline = usePipelineStore((state) => state.load)
   const [confirmingUndo, setConfirmingUndo] = React.useState(false)
@@ -400,6 +401,7 @@ export function BatchPreview(): React.JSX.Element {
                       onCursorRowChange={setCursorTrackId}
                       onActivate={(trackId, columnId) => {
                         if (columnId === 'cover') void chooseCover(trackId)
+                        if (columnId === 'cues') openCueEditor(trackId)
                       }}
                     />
                   )}
