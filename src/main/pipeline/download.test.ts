@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { insertTracks, listLibraryTracks, type Track } from '../db/tracks'
 import { YtDlpError, type YtDlp } from '../services/downloader'
@@ -137,8 +137,6 @@ function downloadsWith(
   return { downloads, changes }
 }
 
-const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10))
-
 describe('createDownloads', () => {
   it('says what an address is: its bitrate, and the track it may be a copy of', async () => {
     // Arrange
@@ -208,12 +206,12 @@ describe('createDownloads', () => {
       await downloads.inspect(address)
       downloads.start(address)
     }
-    await flush()
+    await vi.waitFor(() => expect(ytDlp.started).toHaveLength(2))
 
     // Act
     const before = [...ytDlp.started]
     ytDlp.finish(addresses[0] ?? '')
-    await flush()
+    await vi.waitFor(() => expect(ytDlp.started).toHaveLength(3))
 
     // Assert
     // The folders are made first, so two downloads may start in either order.
@@ -234,17 +232,67 @@ describe('createDownloads', () => {
     const { downloads } = downloadsWith(ytDlp)
     await downloads.inspect(ADDRESS)
     downloads.start(ADDRESS)
-    await flush()
+    await vi.waitFor(() => expect(ytDlp.started).toHaveLength(1))
 
     // Act
     ytDlp.finish(ADDRESS, new YtDlpError('extract'))
-    await flush()
+    await vi.waitFor(() => expect(downloads.list()[0]?.state).toBe('failed'))
 
     // Assert
     expect(statSync(join(folder, 'Inbox')).isDirectory()).toBe(true)
     expect(downloads.list()).toEqual([
       expect.objectContaining({ state: 'failed', failure: 'extract', percent: null })
     ])
+  })
+
+  it('stops what runs at quitting, and starts nothing of what waits in line', async () => {
+    // Arrange
+    const ytDlp = fakeYtDlp()
+    const aborted: string[] = []
+    const run = ytDlp.run
+    ytDlp.run = (args, options) => {
+      options.signal?.addEventListener('abort', () => {
+        aborted.push(args.at(-1) ?? '')
+        ytDlp.finish(args.at(-1) ?? '', new YtDlpError('failed'))
+      })
+      return run(args, options)
+    }
+    const { downloads } = downloadsWith(ytDlp)
+    const addresses = [1, 2, 3].map((n) => `https://www.youtube.com/watch?v=video${n}`)
+    for (const address of addresses) {
+      await downloads.inspect(address)
+      downloads.start(address)
+    }
+    await vi.waitFor(() => expect(ytDlp.started).toHaveLength(2))
+
+    // Act
+    downloads.stopAll()
+    await vi.waitFor(() =>
+      expect(downloads.list().every((item) => item.state === 'failed')).toBe(true)
+    )
+
+    // Assert
+    expect([...aborted].sort()).toEqual(addresses.slice(0, 2))
+    expect(ytDlp.started).toHaveLength(2)
+    expect(downloads.list().map((item) => item.state)).toEqual(['failed', 'failed', 'failed'])
+  })
+
+  it('downloads nothing into an Inbox that is a link', async () => {
+    // Arrange
+    const elsewhere = join(folder, 'elsewhere')
+    mkdirSync(elsewhere)
+    symlinkSync(elsewhere, join(folder, 'Inbox'))
+    const ytDlp = fakeYtDlp()
+    const { downloads } = downloadsWith(ytDlp)
+    await downloads.inspect(ADDRESS)
+
+    // Act
+    downloads.start(ADDRESS)
+    await vi.waitFor(() => expect(downloads.list()[0]?.state).toBe('failed'))
+
+    // Assert
+    expect(ytDlp.started).toEqual([])
+    expect(downloads.list()[0]?.state).toBe('failed')
   })
 
   it('makes no library folder when the library is not there', async () => {
@@ -255,7 +303,7 @@ describe('createDownloads', () => {
 
     // Act
     downloads.start(ADDRESS)
-    await flush()
+    await vi.waitFor(() => expect(downloads.list()[0]?.state).toBe('failed'))
 
     // Assert
     expect(ytDlp.started).toEqual([])

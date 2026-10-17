@@ -2,7 +2,7 @@
 // track of the library it may be a copy of), and the line of downloads, two at a
 // time. The finished MP3 lands in `<library root>/Inbox`, where the Inbox watcher
 // (T-035) takes it up; nothing here touches a file of the library.
-import { lstat, mkdir, stat } from 'fs/promises'
+import { chmod, lstat, mkdir, stat } from 'fs/promises'
 import { basename, dirname, extname, join } from 'path'
 import type { Track } from '../db/tracks'
 import { logger } from '../services/logger'
@@ -109,6 +109,20 @@ export async function findThumbnail(
   return null
 }
 
+/**
+ * Makes a folder of the app's own, or checks the one that is there: a folder, not a
+ * link, of this user, readable by no one else. As the covers folder is checked.
+ */
+async function ensureOwnFolder(folder: string): Promise<void> {
+  await mkdir(folder, { recursive: true, mode: 0o700 })
+  const stats = await lstat(folder)
+  if (!stats.isDirectory()) throw new Error('a folder of the app is not a folder')
+  if (process.getuid && stats.uid !== process.getuid()) {
+    throw new Error('a folder of the app belongs to another user')
+  }
+  if ((stats.mode & 0o077) !== 0) await chmod(folder, 0o700)
+}
+
 const FAILURE_CODES: Readonly<Record<DownloadFailure, ErrorCode>> = {
   extract: 'DOWNLOAD_EXTRACT_FAILED',
   failed: 'DOWNLOAD_FAILED',
@@ -156,21 +170,27 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
   const running = new Map<number, AbortController>()
   let nextId = 1
   let questions = 0
+  let stopped = false
+  // Questions to yt-dlp that are under way, so that quitting can stop them too.
+  const asking = new Set<AbortController>()
 
   const list = (): DownloadItem[] => entries.map(({ item }) => ({ ...item }))
   const changed = (): void => dependencies.onChange(list())
 
   /** Runs one question to yt-dlp, if there is room for it. */
-  async function ask<T>(question: () => Promise<Result<T>>): Promise<Result<T>> {
-    if (questions >= MAX_PARALLEL_QUESTIONS) return { ok: false, code: 'RUN_ACTIVE' }
+  async function ask<T>(question: (signal: AbortSignal) => Promise<Result<T>>): Promise<Result<T>> {
+    if (stopped || questions >= MAX_PARALLEL_QUESTIONS) return { ok: false, code: 'RUN_ACTIVE' }
     questions += 1
+    const controller = new AbortController()
+    asking.add(controller)
     try {
-      return await question()
+      return await question(controller.signal)
     } catch (error) {
       if (error instanceof YtDlpError) return { ok: false, code: FAILURE_CODES[error.failure] }
       throw error
     } finally {
       questions -= 1
+      asking.delete(controller)
     }
   }
 
@@ -186,8 +206,14 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
     await mkdir(inbox, { recursive: false }).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'EEXIST') throw error
     })
-    await mkdir(temp, { recursive: true, mode: 0o700 })
-    await mkdir(thumbnails, { recursive: true, mode: 0o700 })
+    // A link or a file in the place of the Inbox would send the MP3 out of the library.
+    const made = await lstat(inbox)
+    if (!made.isDirectory() || made.isSymbolicLink()) {
+      logger.warn('The Inbox is not a folder of the library; nothing is downloaded')
+      throw new YtDlpError('failed')
+    }
+    await ensureOwnFolder(temp)
+    await ensureOwnFolder(thumbnails)
     await dependencies.ytDlp.run(
       downloadArgs({ url: entry.url, inbox, temp, thumbnails, ffmpeg }),
       {
@@ -205,6 +231,7 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
   }
 
   function pump(): void {
+    if (stopped) return
     for (const entry of entries) {
       if (running.size >= MAX_PARALLEL_DOWNLOADS) return
       if (entry.item.state !== 'queued') continue
@@ -239,10 +266,11 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
 
   return {
     inspect: (text) =>
-      ask(async () => {
+      ask(async (signal) => {
         const address = typeof text === 'string' ? addressOf(text) : null
         if (address === null) return { ok: false, code: 'DOWNLOAD_UNSUPPORTED' }
         const answer = await dependencies.ytDlp.json(infoArgs(address.url), {
+          signal,
           timeoutMs: DOWNLOAD_INFO_TIMEOUT_MS
         })
         const info = readInfo(answer, address)
@@ -312,11 +340,12 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
     },
 
     search: (request) =>
-      ask(async () => {
+      ask(async (signal) => {
         const parsed = downloadSearchSchema.safeParse(request)
         if (!parsed.success) return { ok: false, code: 'INVALID_INPUT' }
         const { source, query } = parsed.data
         const answer = await dependencies.ytDlp.json(searchArgs(searchTermOf(source, query)), {
+          signal,
           timeoutMs: DOWNLOAD_SEARCH_TIMEOUT_MS
         })
         return { ok: true, value: readSearchHits(answer, source) }
@@ -325,7 +354,15 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
     list,
 
     stopAll() {
-      for (const controller of running.values()) controller.abort()
+      // Nothing starts after this, not even what waits in line.
+      stopped = true
+      for (const { item } of entries) {
+        if (item.state === 'queued') {
+          item.state = 'failed'
+          item.failure = 'failed'
+        }
+      }
+      for (const controller of [...running.values(), ...asking]) controller.abort()
     }
   }
 }

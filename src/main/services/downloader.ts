@@ -8,10 +8,16 @@ import type { ToolCommand } from './binaries'
 import { createLineReader } from './line-reader'
 import { failureOf, type DownloadFailure } from '@shared/download'
 
-// Whatever the user or the system configured for yt-dlp has no say, and nothing is
-// cached between calls. The file's time is now, not the upload's: a scan reads it.
+// Whatever the user or the system configured for yt-dlp has no say: no config file,
+// no plugin from the user's folders (`--ignore-config` leaves those on), and no
+// extractor but YouTube's and SoundCloud's, so no address falls through to the
+// generic one, which follows a page anywhere. Nothing is cached between calls. The
+// file's time is now, not the upload's: a scan reads it.
 const COMMON_ARGS = [
   '--ignore-config',
+  '--no-plugin-dirs',
+  '--use-extractors',
+  'youtube.*,soundcloud.*',
   '--no-cache-dir',
   '--encoding',
   'utf-8',

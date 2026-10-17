@@ -164,6 +164,42 @@ describe('the Inbox watcher', () => {
     expect(inbox.processed).toHaveLength(2)
   })
 
+  it('offers a file that settled while a batch was being started', async () => {
+    // Arrange: the first start takes as long as a slow scan.
+    let finishFirst: (started: boolean) => void = () => {}
+    const offered: string[][] = []
+    watcher.stop()
+    watcher = createInboxWatcher({
+      folder: () => INBOX,
+      watch: (_folder, onChange) => {
+        inbox.emit = onChange
+        return () => {}
+      },
+      list: async () => [...inbox.files.keys()],
+      stamp: async (path) => inbox.files.get(path.slice(INBOX.length + 1)) ?? null,
+      idle: () => true,
+      process: (paths) => {
+        offered.push(paths)
+        return offered.length === 1
+          ? new Promise((resolve) => (finishFirst = resolve))
+          : Promise.resolve(true)
+      }
+    })
+    inbox.files.set('a.mp3', { size: 1, mtimeMs: 1 })
+    watcher.start()
+    await vi.advanceTimersByTimeAsync(INBOX_SETTLE_MS)
+    inbox.files.set('b.mp3', { size: 1, mtimeMs: 1 })
+    inbox.emit('b.mp3')
+    await vi.advanceTimersByTimeAsync(INBOX_SETTLE_MS)
+
+    // Act
+    finishFirst(true)
+    await vi.advanceTimersByTimeAsync(INBOX_RETRY_MS)
+
+    // Assert
+    expect(offered).toEqual([[join(INBOX, 'a.mp3')], [join(INBOX, 'b.mp3')]])
+  })
+
   it('finds by its listing a file the watch said nothing of', async () => {
     // Arrange
     watcher.start()

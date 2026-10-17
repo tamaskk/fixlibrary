@@ -19,6 +19,8 @@ describe('the arguments', () => {
     for (const args of all) {
       expect(args.at(-2)).toBe('--')
       expect(args).toContain('--ignore-config')
+      expect(args).toContain('--no-plugin-dirs')
+      expect(args[args.indexOf('--use-extractors') + 1]).toBe('youtube.*,soundcloud.*')
       expect(args).not.toContain('--exec')
       expect(args).not.toContain('-U')
     }

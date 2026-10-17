@@ -175,7 +175,8 @@ export function createInboxWatcher(dependencies: InboxDependencies): InboxWatche
     } finally {
       processing = false
     }
-    // What settled while the batch was being started waits for the next one.
+    // What settled while the batch was being started is offered once that one has.
+    if (pending.size > 0) later()
   }
 
   /** A file the watch says changed: its wait starts again from how it is now. */

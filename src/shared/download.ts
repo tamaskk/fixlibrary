@@ -55,6 +55,8 @@ export function addressOf(text: string): DownloadAddress | null {
   const source = HOST_SOURCES[url.hostname]
   if (source === undefined) return null
   url.protocol = 'https:'
+  // yt-dlp reads data smuggled into a fragment (`#__youtubedl_smuggle=`); a page needs none.
+  url.hash = ''
   return { url: url.href, source }
 }
 

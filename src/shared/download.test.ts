@@ -38,6 +38,14 @@ describe('addressOf', () => {
     expect(address?.url).toBe('https://www.youtube.com/watch?v=jNQXAC9IVRw')
   })
 
+  it('drops the fragment of an address', () => {
+    // Act
+    const address = addressOf('https://youtu.be/x#__youtubedl_smuggle=%7B%7D')
+
+    // Assert
+    expect(address?.url).toBe('https://youtu.be/x')
+  })
+
   it.each([
     'https://example.com/watch?v=1',
     'https://youtube.com.evil.example/watch?v=1',
