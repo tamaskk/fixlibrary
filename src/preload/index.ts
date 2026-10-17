@@ -96,6 +96,13 @@ const api: FixLibraryApi = {
     track: (trackId) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorTrack, trackId),
     peaks: (trackId) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorPeaks, trackId),
     edit: (action) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorEdit, action)
+  },
+  download: {
+    inspect: (url) => ipcRenderer.invoke(IPC_CHANNELS.downloadInspect, url),
+    start: (url) => ipcRenderer.invoke(IPC_CHANNELS.downloadStart, url),
+    search: (request) => ipcRenderer.invoke(IPC_CHANNELS.downloadSearch, request),
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.downloadList),
+    onChange: (listener) => subscribe(IPC_EVENTS.downloadChanged, listener)
   }
 }
 

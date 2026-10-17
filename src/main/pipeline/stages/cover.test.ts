@@ -566,3 +566,50 @@ describe('the stage that draws a placeholder again', () => {
     await expect(result).rejects.toMatchObject({ code: 'PYTHON_CRASHED' })
   })
 })
+
+describe('the thumbnail of a download', () => {
+  function stageWithThumbnail(thumbnail: string | null): Stage {
+    const { fetch } = answering([{ status: 404, body: 'Not Found' }])
+    const http = createLookupHttp({ userAgent: USER_AGENT, fetch }, openLimiters())
+    return createCoverStage({
+      db: testDatabase.db,
+      python: () => python,
+      covers,
+      cache: createLookupCache(testDatabase.db),
+      clients: lookupClients(null),
+      coverClients: { itunes: itunesWith([]), images: http },
+      thumbnailOf: async () => thumbnail
+    })
+  }
+
+  it('makes the cover of the thumbnail when no service has one', async () => {
+    // Arrange
+    const thumbnails = mkdtempSync(join(tmpdir(), 'fixlibrary-thumbs-'))
+    const thumbnail = join(thumbnails, 'aaaaaaaaaaa.webp')
+    writeFileSync(thumbnail, 'webp bytes')
+    const stage = stageWithThumbnail(thumbnail)
+
+    // Act
+    const result = await stage.run(context(), trackWith())
+
+    // Assert
+    expect(result?.proposal?.fields?.cover?.source).toBe('thumbnail')
+    const prepare = calls.find((call) => call.method === 'cover.prepare')
+    expect(prepare?.params).toMatchObject({ manual: true })
+    // The thumbnail stays where it is; the covers folder keeps no download of it.
+    expect(readdirSync(thumbnails)).toEqual(['aaaaaaaaaaa.webp'])
+    expect(readdirSync(folder).some((name) => name.endsWith('.download'))).toBe(false)
+    rmSync(thumbnails, { recursive: true, force: true })
+  })
+
+  it('draws a placeholder when the track has no thumbnail', async () => {
+    // Arrange
+    const stage = stageWithThumbnail(null)
+
+    // Act
+    const result = await stage.run(context(), trackWith())
+
+    // Assert
+    expect(result?.proposal?.fields?.cover?.source).toBe('placeholder')
+  })
+})

@@ -1,0 +1,44 @@
+{
+  "_type": "playlist",
+  "id": "bicep glue",
+  "title": "bicep glue",
+  "entries": [
+    {
+      "_type": "url",
+      "ie_key": "Youtube",
+      "id": "A7ZxRs45tTg",
+      "title": "BICEP | GLUE (Official Video)",
+      "uploader": "BICEP",
+      "channel": "BICEP",
+      "duration": 285,
+      "url": "https://www.youtube.com/watch?v=A7ZxRs45tTg",
+      "webpage_url": null
+    },
+    {
+      "_type": "url",
+      "ie_key": "Youtube",
+      "id": "q5rliCxX8xc",
+      "title": "Bicep - Glue (Original Mix)",
+      "uploader": null,
+      "channel": "Filippos Sgouros",
+      "duration": 270,
+      "url": "https://www.youtube.com/watch?v=q5rliCxX8xc"
+    },
+    {
+      "_type": "url",
+      "ie_key": "Generic",
+      "id": "elsewhere",
+      "title": "Not a YouTube address",
+      "url": "https://example.com/track"
+    },
+    {
+      "_type": "url",
+      "ie_key": "Youtube",
+      "id": "w2oGFEsaG5c",
+      "title": "Bicep - Glue & Apricots\n| Glastonbury 2022",
+      "uploader": "BBC Music",
+      "duration": null,
+      "url": "https://www.youtube.com/watch?v=w2oGFEsaG5c"
+    }
+  ]
+}

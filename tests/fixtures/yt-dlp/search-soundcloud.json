@@ -1,0 +1,27 @@
+{
+  "_type": "playlist",
+  "id": "bicep glue",
+  "entries": [
+    {
+      "_type": "url",
+      "ie_key": "Soundcloud",
+      "id": "336067387",
+      "title": "BICEP | GLUE // CLIP",
+      "uploader": "BICEP",
+      "channel": null,
+      "duration": 103.43,
+      "url": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A336067387",
+      "webpage_url": "https://soundcloud.com/feelmybicep/bicep-glue-clip"
+    },
+    {
+      "_type": "url",
+      "ie_key": "Soundcloud",
+      "id": "1041939220",
+      "title": "Bicep - Glue",
+      "uploader": "Josh_mcauleyy",
+      "duration": 285.094,
+      "url": "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A1041939220",
+      "webpage_url": null
+    }
+  ]
+}

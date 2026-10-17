@@ -1,6 +1,7 @@
 import { AppSidebar } from '@/components/features/AppSidebar'
 import { BatchPreview } from '@/pages/BatchPreview'
 import { CueEditor } from '@/pages/CueEditor'
+import { Download } from '@/pages/Download'
 import { Library } from '@/pages/Library'
 import { RekordboxWizard } from '@/pages/RekordboxWizard'
 import { Settings } from '@/pages/Settings'
@@ -17,6 +18,8 @@ export function App(): React.JSX.Element {
           <Settings />
         ) : page === 'preview' ? (
           <BatchPreview />
+        ) : page === 'download' ? (
+          <Download />
         ) : page === 'cues' ? (
           <CueEditor />
         ) : page === 'rekordbox' ? (

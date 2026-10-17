@@ -51,6 +51,15 @@ export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS
 /** For one `analysis.peaks` call of the cue editor: a whole file decoded once. */
 export const PEAKS_RPC_TIMEOUT_MS = 120 * SECOND
 
+/** For asking yt-dlp what one address is (T-034). */
+export const DOWNLOAD_INFO_TIMEOUT_MS = 60 * SECOND
+
+/** For one search of YouTube or SoundCloud through yt-dlp. */
+export const DOWNLOAD_SEARCH_TIMEOUT_MS = 60 * SECOND
+
+/** For one download and its conversion to MP3. */
+export const DOWNLOAD_TIMEOUT_MS = 20 * MINUTE
+
 /** For one `cover.inspect` or `cover.prepare` call: one picture decoded and resized. */
 export const COVER_RPC_TIMEOUT_MS = 20 * SECOND
 

@@ -39,6 +39,11 @@ export interface CoverStageDependencies {
   cache: LookupCache
   clients: LookupClients
   coverClients: { itunes: ITunesClient; images: Pick<LookupHttp, 'image'> }
+  /**
+   * The thumbnail a download left for the track (T-034), or null: the cover of last
+   * resort, after every service and before a placeholder.
+   */
+  thumbnailOf?: (track: Track) => Promise<string | null>
 }
 
 const thumbName = z.string().regex(COVER_NAMES.thumb)
@@ -227,6 +232,36 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
     return null
   }
 
+  /** A cover made of the thumbnail of a download, or null when it gives none. */
+  async function thumbnailCover(
+    python: Pick<PythonBridge, 'call'>,
+    track: Track
+  ): Promise<{ cover: string; thumb: string } | null> {
+    const thumbnail = await dependencies.thumbnailOf?.(track)
+    if (!thumbnail) return null
+    let download: string
+    try {
+      download = await covers.importPicture(thumbnail)
+    } catch {
+      logger.warn(`Track ${track.id}: the thumbnail of its download could not be read`)
+      return null
+    }
+    try {
+      // A thumbnail is often a WebP, which only a picture the user chose may be;
+      // the app's own yt-dlp put this one in a folder of the app's.
+      return await python.call(
+        'cover.prepare',
+        { source: download, manual: true },
+        { timeoutMs: COVER_RPC_TIMEOUT_MS }
+      )
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'PYTHON_ERROR') return null
+      throw error
+    } finally {
+      await covers.remove(download, 'download')
+    }
+  }
+
   async function run(context: StageContext, track: Track): Promise<StageResult | void> {
     // A WAV gets its cover once it is an AIFF; a copy set aside gets none. A cover
     // the user gave the track is theirs: no run looks for another.
@@ -282,6 +317,16 @@ export function createCoverStage(dependencies: CoverStageDependencies): Stage {
       }
     }
     for (const source of search.failed) failed.add(source)
+    const fromThumbnail = await thumbnailCover(python, track)
+    if (fromThumbnail) {
+      const details: CoverDetails = { thumb: fromThumbnail.thumb, before: held }
+      return {
+        proposal: {
+          fields: { cover: { value: fromThumbnail.cover, source: 'thumbnail' } },
+          cover: details
+        }
+      }
+    }
     if (failed.size > 0) {
       logger.warn(`Cover of track ${track.id} not found without: ${[...failed].join(', ')}`)
       // "No cover" is only true when every place was asked; the next run asks again.

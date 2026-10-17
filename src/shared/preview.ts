@@ -58,6 +58,8 @@ export const FIELD_SOURCES = [
   'discogs',
   'itunes',
   'coverartarchive',
+  // The thumbnail of a YouTube or SoundCloud download (T-034).
+  'thumbnail',
   'placeholder',
   'organize',
   'id3',

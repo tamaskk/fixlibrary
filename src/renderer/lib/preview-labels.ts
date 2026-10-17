@@ -19,6 +19,7 @@ export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {
   discogs: 'Discogs',
   itunes: 'iTunes',
   coverartarchive: 'Cover Art Archive',
+  thumbnail: 'Thumbnail',
   placeholder: 'Generált',
   organize: 'Rendezés',
   id3: 'ID3',

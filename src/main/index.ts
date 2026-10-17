@@ -10,6 +10,7 @@ import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
 import { registerCueEditorIpc } from './ipc/cue-editor'
+import { registerDownloadIpc, sendDownloads } from './ipc/download'
 import { registerRekordboxIpc } from './ipc/rekordbox'
 import { parseExportInWorker } from './services/rekordbox-xml-read'
 import rekordboxXmlWorkerPath from './services/rekordbox-xml-worker?modulePath'
@@ -18,6 +19,7 @@ import { registerSettingsIpc } from './ipc/settings'
 import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
 import { createClaude, type Claude } from './pipeline/claude'
+import { createDownloads, findThumbnail, type Downloads } from './pipeline/download'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { commitApprovedValues, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
@@ -36,6 +38,7 @@ import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
 import { resolveToolCommand, resolveToolLocations } from './services/binaries'
 import { createClaudeCli } from './services/claude-cli'
+import { createYtDlp } from './services/downloader'
 import { readEnvFile } from './services/env-file'
 import { describeError } from './services/error-text'
 import { createFileOps } from './services/file-ops'
@@ -52,7 +55,7 @@ import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
 import { AUDIO_SCHEME, createAudioHandler, originOfRendererUrl } from './services/audio-protocol'
 import { createPeaksStore } from './services/peaks-store'
-import { getTrackById } from './db/tracks'
+import { getTrackById, listLibraryTracks } from './db/tracks'
 import { isSetAsidePath } from '@shared/duplicates'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import {
@@ -78,6 +81,8 @@ let orchestrator: Orchestrator | null = null
 let fileWork: FileWork | null = null
 // Kept so that quitting can stop a call to Claude that is still running.
 let claudeService: Claude | null = null
+// Kept so that quitting can stop the downloads that are running.
+let downloads: Downloads | null = null
 // The API keys of the lookup services; read by the stages that ask them.
 let secretStore: SecretStore | null = null
 
@@ -287,6 +292,14 @@ function coversFolder(): string {
   return join(app.getPath('userData'), 'covers')
 }
 
+/** What yt-dlp writes on the way to a finished MP3, and the thumbnails of downloads (T-034). */
+function downloadFolders(): { temp: string; thumbnails: string } {
+  return {
+    temp: join(app.getPath('userData'), 'download-tmp'),
+    thumbnails: join(app.getPath('userData'), 'thumbnails')
+  }
+}
+
 function stemsFolder(): string {
   return join(app.getPath('userData'), 'stems')
 }
@@ -341,6 +354,12 @@ function availableStages(db: AppDatabase): Stage[] {
       stems: createStemsStore(stemsFolder()),
       modelInstalled: () => stemModelInstalled(modelsFolder()),
       coverClients: { itunes: createITunesClient({ http, cache }), images: http },
+      thumbnailOf: (track) =>
+        findThumbnail(
+          track.path,
+          readSettings(db).library.rootFolder,
+          downloadFolders().thumbnails
+        ),
       claude: () => claudeService
     })
   }
@@ -477,6 +496,22 @@ function registerLibraryAndPipeline(): void {
     peaks: createPeaksStore(peaksFolder())
   }
   registerCueEditorIpc(cueEditor)
+  const tools = resolveToolLocations({
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath
+  })
+  downloads = createDownloads({
+    ytDlp: createYtDlp(() => resolveToolCommand('yt-dlp', tools)),
+    folders: () => ({ libraryRoot: readSettings(db).library.rootFolder, ...downloadFolders() }),
+    ffmpeg: () => {
+      const ffmpeg = resolveToolCommand('ffmpeg', tools)?.command
+      return ffmpeg !== undefined && existsSync(ffmpeg) ? ffmpeg : null
+    },
+    libraryTracks: () => listLibraryTracks(db, cachedVolumes()),
+    onChange: sendDownloads
+  })
+  registerDownloadIpc(downloads)
   // The page plays a track by its id; the main process looks the file up.
   protocol.handle(
     AUDIO_SCHEME,
@@ -663,6 +698,12 @@ function tellWorkToStop(): void {
     claudeService?.stop()
   } catch (error) {
     logger.error('The call to Claude could not be stopped', error)
+  }
+  try {
+    // A download stopped half way leaves only files of the app's own temp folder.
+    downloads?.stopAll()
+  } catch (error) {
+    logger.error('The downloads could not be stopped', error)
   }
 }
 
