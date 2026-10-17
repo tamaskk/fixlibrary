@@ -1,5 +1,7 @@
+import { Headphones } from 'lucide-react'
 import { formatDecimal } from '@/lib/format'
 import type { PreviewNormalization, PreviewRow, PreviewValue } from '@shared/preview'
+import { canListen } from '@shared/ab-player'
 import { DiffValue } from './cells'
 import { diffText, EMPTY } from './diff-text'
 import type { PreviewColumn } from './types'
@@ -50,6 +52,8 @@ function textOr(text: string | null): React.JSX.Element {
   )
 }
 
+const LISTEN_HINT = 'Meghallgatás A/B-ben: Enter, vagy dupla kattintás'
+
 /**
  * The columns of a batch that normalizes the loudness (T-032): the loudness and the
  * true peak as measured and as they will be, and the gain, at every width; the method
@@ -87,6 +91,25 @@ export const LOUDNESS_COLUMNS: readonly PreviewColumn[] = [
       <DiffValue cell={row.cells.truePeak} format={level} data compact={!context.wide} />
     ),
     text: (row) => diffText(row.cells.truePeak, level)
+  },
+  {
+    id: 'listen',
+    header: 'A/B',
+    track: '64px',
+    minWidth: 64,
+    // Enter or a double click opens the A/B player of the row (T-033).
+    activate: true,
+    render: (row) =>
+      canListen(row) ? (
+        <span className="flex items-center gap-1 text-small text-primary-text">
+          <Headphones className="size-4" aria-hidden="true" />
+          <span>A/B</span>
+          <span className="sr-only">Meghallgatás: Enter</span>
+        </span>
+      ) : (
+        <span className="text-text-muted">{EMPTY}</span>
+      ),
+    text: (row) => (canListen(row) ? LISTEN_HINT : null)
   },
   {
     id: 'normalizeMethod',

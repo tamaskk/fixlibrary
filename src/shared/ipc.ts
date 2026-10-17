@@ -58,6 +58,7 @@ import type { ToolCheck } from './tools'
 
 export const IPC_CHANNELS = {
   appGetVersion: 'app:getVersion',
+  appAudioReadToken: 'app:audioReadToken',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
   settingsPickFolder: 'settings:pickFolder',
@@ -119,6 +120,11 @@ export const IPC_EVENTS = {
 export interface FixLibraryApi {
   app: {
     getVersion: () => Promise<string>
+    /**
+     * The token of this launch that lets the A/B player read the samples it plays
+     * (`fixlib-audio://track/<id>?read=<token>`, T-033). Given to the app's own page only.
+     */
+    audioReadToken: () => Promise<string>
   }
   settings: {
     get: () => Promise<SettingsSnapshot>

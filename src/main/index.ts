@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto'
 import { app, dialog, powerSaveBlocker, protocol, shell, BrowserWindow } from 'electron'
 import { existsSync, realpathSync } from 'fs'
 import { cpus, homedir, tmpdir, userInfo } from 'os'
@@ -49,7 +50,7 @@ import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
 import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
-import { AUDIO_SCHEME, createAudioHandler } from './services/audio-protocol'
+import { AUDIO_SCHEME, createAudioHandler, originOfRendererUrl } from './services/audio-protocol'
 import { createPeaksStore } from './services/peaks-store'
 import { getTrackById } from './db/tracks'
 import { isSetAsidePath } from '@shared/duplicates'
@@ -480,6 +481,8 @@ function registerLibraryAndPipeline(): void {
   protocol.handle(
     AUDIO_SCHEME,
     createAudioHandler({
+      appOrigin: () => originOfRendererUrl(getRendererEntryUrl()),
+      readToken: audioReadToken,
       pathOfTrack: (trackId) => {
         const track = getTrackById(db, trackId, cachedVolumes())
         return track && !track.offline && !track.fileMissing && !isSetAsidePath(track.path)
@@ -580,6 +583,11 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('will-navigate', stayOnApp)
   contents.on('will-redirect', stayOnApp)
   contents.on('will-attach-webview', (event) => event.preventDefault())
+  // No document of a frame: the page has none of its own, and one put in by anything
+  // else must not run beside it.
+  contents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame) event.preventDefault()
+  })
 })
 
 // Two instances would share one database and could process the same library twice.
@@ -593,10 +601,19 @@ app.on('second-instance', () => {
   window.focus()
 })
 
+// The token of this launch that lets the app's page read the samples it plays (T-033).
+const audioReadToken = randomBytes(16).toString('hex')
+
 // Before the app is ready, as Electron asks: the scheme the page plays tracks from, with
 // byte ranges so the player can seek. It serves audio only (T-030).
 protocol.registerSchemesAsPrivileged([
-  { scheme: AUDIO_SCHEME, privileges: { standard: true, secure: true, stream: true } }
+  // CORS for the app's own page only (the handler names it), so that the A/B player of
+  // T-033 can read the audio through Web Audio; fetch stays refused (no supportFetchAPI,
+  // and the CSP's connect-src).
+  {
+    scheme: AUDIO_SCHEME,
+    privileges: { standard: true, secure: true, stream: true, corsEnabled: true }
+  }
 ])
 
 app.whenReady().then(() => {
@@ -617,7 +634,7 @@ app.whenReady().then(() => {
     app.quit()
     return
   }
-  registerAppIpc()
+  registerAppIpc({ audioReadToken })
   registerSettingsAndSystemIpc()
   startPythonSidecar()
   registerLibraryAndPipeline()

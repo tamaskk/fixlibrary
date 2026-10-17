@@ -3,8 +3,15 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { audioUrlOf, createAudioHandler, openAudioStreamCount } from './audio-protocol'
+import {
+  audioUrlOf,
+  createAudioHandler,
+  openAudioStreamCount,
+  originOfRendererUrl
+} from './audio-protocol'
 import { rangeOf, swapSampleBytes } from './audio-stream'
+
+const TOKEN = '0123456789abcdef0123456789abcdef'
 
 let folder: string
 let paths: Map<number, string>
@@ -46,9 +53,17 @@ async function bytesOf(response: Response): Promise<Buffer> {
   return Buffer.from(await response.arrayBuffer())
 }
 
-function request(trackId: number | string, range?: string, method = 'GET'): Request {
+function request(
+  trackId: number | string,
+  range?: string,
+  method = 'GET',
+  origin?: string
+): Request {
   const url = typeof trackId === 'number' ? audioUrlOf(trackId) : trackId
-  return new Request(url, { method, headers: range ? { range } : {} })
+  const headers: Record<string, string> = {}
+  if (range) headers['range'] = range
+  if (origin) headers['origin'] = origin
+  return new Request(url, { method, headers })
 }
 
 beforeEach(() => {
@@ -61,7 +76,11 @@ afterEach(() => {
 })
 
 const handler = (): ReturnType<typeof createAudioHandler> =>
-  createAudioHandler({ pathOfTrack: (id) => paths.get(id) ?? null })
+  createAudioHandler({
+    pathOfTrack: (id) => paths.get(id) ?? null,
+    appOrigin: () => 'null',
+    readToken: TOKEN
+  })
 
 describe('the fixlib-audio protocol', () => {
   it('serves an MP3 as it is, and a range of it for seeking', async () => {
@@ -231,6 +250,58 @@ describe('the files the protocol holds open', () => {
 
     // Assert
     expect(response.status).toBe(404)
+  })
+})
+
+describe('the app page reading the audio (T-033)', () => {
+  beforeEach(() => {
+    const path = join(folder, 'a.mp3')
+    writeFileSync(path, 'audio')
+    paths.set(1, path)
+  })
+
+  it('lets the app’s own page read it with the token of this launch, and no one else', async () => {
+    // Arrange
+    const withToken = `${audioUrlOf(1)}?read=${TOKEN}`
+    const otherToken = `${audioUrlOf(1)}?read=${'f'.repeat(32)}`
+
+    // Act
+    const own = await handler()(request(withToken, undefined, 'GET', 'null'))
+    const noToken = await handler()(request(1, undefined, 'GET', 'null'))
+    const wrongToken = await handler()(request(otherToken, undefined, 'GET', 'null'))
+    const other = await handler()(request(withToken, undefined, 'GET', 'https://example.com'))
+    const none = await handler()(request(withToken))
+
+    // Assert
+    expect(own.headers.get('access-control-allow-origin')).toBe('null')
+    for (const response of [noToken, wrongToken, other, none]) {
+      expect(response.status).toBe(200)
+      expect(response.headers.get('access-control-allow-origin')).toBeNull()
+      expect(response.headers.get('vary')).toBe('Origin')
+    }
+    await Promise.all(
+      [own, noToken, wrongToken, other, none].map((response) => response.body?.cancel())
+    )
+  })
+
+  it('serves nothing for a token of another shape', async () => {
+    // Act
+    const response = await handler()(request(`${audioUrlOf(1)}?read=xyz`))
+
+    // Assert
+    expect(response.status).toBe(404)
+  })
+
+  it.each([
+    ['file:///Applications/FixLibrary.app/out/renderer/index.html', 'null'],
+    ['http://localhost:5173/', 'http://localhost:5173'],
+    [null, null]
+  ])('takes %s to be the origin %s', (entry, origin) => {
+    // Act
+    const found = originOfRendererUrl(entry)
+
+    // Assert
+    expect(found).toBe(origin)
   })
 })
 

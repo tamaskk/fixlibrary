@@ -34,11 +34,12 @@ describe('columnsFor', () => {
     const loud = columnsFor('run', { covers: true, loudness: true })
 
     // Assert
-    expect(loud.map((column) => column.id).slice(-7)).toEqual([
+    expect(loud.map((column) => column.id).slice(-8)).toEqual([
       'cover',
       'lufs',
       'gain',
       'truePeak',
+      'listen',
       'normalizeMethod',
       'normalizeState',
       'source'
@@ -48,7 +49,9 @@ describe('columnsFor', () => {
       expect.arrayContaining(['normalizeMethod', 'normalizeState'])
     )
     expect(
-      loud.filter((column) => ['lufs', 'gain', 'truePeak'].includes(column.id) && column.wideOnly)
+      loud.filter(
+        (column) => ['lufs', 'gain', 'truePeak', 'listen'].includes(column.id) && column.wideOnly
+      )
     ).toEqual([])
     expect(plain).not.toContain('lufs')
   })
