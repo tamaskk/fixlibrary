@@ -421,7 +421,7 @@ def main() -> None:
         tag_write,
         tags,
     )
-    from fixlib_py.analysis import bpm_key, loudness, stems, structure  # noqa: F401
+    from fixlib_py.analysis import bpm_key, loudness, peaks, stems, structure  # noqa: F401
 
     protocol_output = claim_stdout()
     protocol_input = claim_stdin()
