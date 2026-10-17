@@ -21,6 +21,7 @@ describe('STAGE_TIMEOUTS_MS', () => {
       bpmKey: 120_000,
       energy: 120_000,
       demucs: 900_000,
+      cues: 60_000,
       convert: 120_000,
       tags: 120_000,
       writeTags: 360_000,

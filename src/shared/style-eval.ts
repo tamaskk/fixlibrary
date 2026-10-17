@@ -48,7 +48,8 @@ export function parseStylesCsv(text: string): Map<string, string> {
   return rows
 }
 
-function splitCsvLine(line: string): string[] {
+/** The cells of one line of a CSV file, quotes allowed. */
+export function splitCsvLine(line: string): string[] {
   const cells: string[] = []
   let cell = ''
   let quoted = false

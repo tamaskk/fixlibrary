@@ -73,6 +73,59 @@ export const stemsResultSchema = z.object({
 
 export type StemsResult = z.output<typeof stemsResultSchema>
 
+/**
+ * Names the rules behind `analysis.structure`. It is stored with every result. The same
+ * text is ANALYZER_VERSION in fixlib_py/analysis/structure.py.
+ */
+export const STRUCTURE_ANALYZER_VERSION = 'structure-house-1'
+
+/**
+ * The bounds of a grid of Rekordbox, wherever it is read, kept or written back: the
+ * two hours a track may last, the tempos Rekordbox offers, and a marker per tempo
+ * change, which a real track has a few of.
+ */
+export const GRID_BOUNDS = {
+  maxSeconds: 2 * 60 * 60,
+  minBpm: 20,
+  maxBpm: 999,
+  maxBattito: 16,
+  maxMarkers: 4000,
+  metro: /^\d{1,2}\/\d{1,2}$/u
+} as const
+
+/** One beat marker of Rekordbox's grid, as `rb_grid` keeps it and the sidecar takes it. */
+export const gridMarkerSchema = z.object({
+  inizio: z.number().nonnegative().max(GRID_BOUNDS.maxSeconds),
+  bpm: z.number().min(GRID_BOUNDS.minBpm).max(GRID_BOUNDS.maxBpm),
+  metro: z.string().regex(GRID_BOUNDS.metro),
+  battito: z.number().int().min(1).max(GRID_BOUNDS.maxBattito)
+})
+
+/** A whole grid: a track whose grid breaks a bound has none, never part of one. */
+export const gridSchema = z.array(gridMarkerSchema).max(GRID_BOUNDS.maxMarkers)
+
+export const structureResultSchema = z.object({
+  /** The slots found, 1 (A Start) to 8 (H Drop 3), each at a beat of the grid. */
+  cues: z
+    .array(
+      z.object({
+        slot: z.number().int().min(1).max(8),
+        timeSec: z
+          .number()
+          .nonnegative()
+          .max(2 * 60 * 60)
+      })
+    )
+    .max(8)
+    .refine((cues) => new Set(cues.map((cue) => cue.slot)).size === cues.length),
+  /** True when a slot was emptied because it broke the order of the scheme. */
+  review: z.boolean(),
+  instrumental: z.boolean(),
+  analyzerVersion: z.literal(STRUCTURE_ANALYZER_VERSION)
+})
+
+export type StructureResult = z.output<typeof structureResultSchema>
+
 export const bpmKeyResultSchema = z
   .object({
     /** The tempo inside the range that was asked for, moved there by octaves. */
@@ -317,6 +370,21 @@ export const RPC_SCHEMAS = {
       jobId: z.string().min(1).max(64)
     }),
     result: stemsResultSchema
+  },
+  /**
+   * The eight hot cues of a track from its stem envelopes (read from the stems folder by
+   * the track's id) and Rekordbox's grid. Reads only.
+   */
+  'analysis.structure': {
+    params: z.object({
+      trackId: z.number().int().positive(),
+      grid: gridSchema.min(1),
+      durationSeconds: z
+        .number()
+        .positive()
+        .max(2 * 60 * 60)
+    }),
+    result: structureResultSchema
   },
   /** The AcoustID fingerprint of one file. Reads the file only. */
   'fingerprint.compute': {

@@ -253,6 +253,7 @@ describe('the naming stage', () => {
       secondaryStyleId: null,
       genre: null,
       folder: null,
+      cues: null,
       energy: null,
       cover: null
     }
@@ -287,6 +288,7 @@ describe('the naming stage', () => {
         secondaryStyleId: null,
         genre: null,
         folder: null,
+        cues: null,
         energy: null,
         cover: null
       },
@@ -377,6 +379,7 @@ describe('the naming stage', () => {
         secondaryStyleId: null,
         genre: null,
         folder: null,
+        cues: null,
         energy: 9,
         cover: null
       },

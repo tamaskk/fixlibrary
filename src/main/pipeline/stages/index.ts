@@ -10,6 +10,7 @@ import {
   createConvertStage,
   type ConvertStageDependencies
 } from './convert'
+import { createCuesStage, type CuesStageDependencies } from './cues'
 import { createDuplicatesStage, type DuplicatesStageDependencies } from './duplicates'
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
@@ -25,6 +26,7 @@ import { createWriteTagsStage } from './write-tags'
 export type StageDependencies = BpmKeyStageDependencies &
   ConvertStageDependencies &
   CoverStageDependencies &
+  CuesStageDependencies &
   DuplicatesStageDependencies &
   FingerprintStageDependencies &
   LookupStageDependencies &
@@ -38,6 +40,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createLookupStage(dependencies),
     createBpmKeyStage(dependencies),
     createStemsStage(dependencies),
+    createCuesStage(dependencies),
     createStyleStage(dependencies),
     createCoverStage(dependencies),
     createNamingStage(),

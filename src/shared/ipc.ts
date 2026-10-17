@@ -43,6 +43,7 @@ import type {
   CopyablePath,
   WizardAction,
   WizardCheckResult,
+  WizardCueCheckResult,
   WizardState,
   WizardView
 } from './rekordbox-wizard'
@@ -94,6 +95,7 @@ export const IPC_CHANNELS = {
   rekordboxWizardView: 'rekordbox:wizardView',
   rekordboxWizardAction: 'rekordbox:wizardAction',
   rekordboxWizardCheck: 'rekordbox:wizardCheck',
+  rekordboxWizardCueCheck: 'rekordbox:wizardCueCheck',
   rekordboxCopyPath: 'rekordbox:copyPath'
 } as const
 
@@ -241,6 +243,8 @@ export interface FixLibraryApi {
     wizardAction: (action: WizardAction) => Promise<Result<WizardState>>
     /** Reads the newest export and judges it; a clean one ends phase A. */
     wizardCheck: () => Promise<Result<WizardCheckResult>>
+    /** Reads the newest export and checks the hot cues and the grid; a clean one ends the wizard. */
+    wizardCueCheck: () => Promise<Result<WizardCueCheckResult>>
     /**
      * Copies the app's XML path or the export folder to the clipboard; the page names
      * which, the main process the path. False when asked again too soon.

@@ -22,6 +22,7 @@ export const PREVIEW_FIELDS = [
   'secondaryStyleId',
   'genre',
   'folder',
+  'cues',
   'energy',
   'cover'
 ] as const
@@ -73,7 +74,13 @@ export const PREVIEW_WARNINGS = [
   'LOW_BITRATE',
   'CANNOT_NORMALIZE',
   'UNSORTED',
-  'NO_COVER'
+  'NO_COVER',
+  // A slot of the hot cues was emptied because it broke the order of the scheme.
+  'CUE_REVIEW',
+  // No grid of Rekordbox for the track: its hot cues cannot be placed yet.
+  'NO_GRID',
+  // The structure gave no cue at all: the cues the track has are kept.
+  'NO_CUES'
 ] as const
 export type PreviewWarning = (typeof PREVIEW_WARNINGS)[number]
 
@@ -117,6 +124,11 @@ export const previewValueSchemas = {
   genre: textValue,
   /** The folder the file is in, by its name: a style folder once the library is organized. */
   folder: textValue,
+  /** The hot cues by their letters, a dash for an empty slot: `A B – D E F G –`. */
+  cues: z
+    .string()
+    .regex(/^[A-H–]( [A-H–]){7}$/u)
+    .nullable(),
   energy: z.number().int().min(1).max(10).nullable(),
   /** The name of a cover the app made, to be embedded; a track's own cover has none. */
   cover: z.string().regex(COVER_NAMES.cover).nullable()
@@ -146,6 +158,7 @@ const proposedFieldsSchema = z
     secondaryStyleId: z.object({ value: previewValueSchemas.secondaryStyleId, ...provenance }),
     genre: z.object({ value: previewValueSchemas.genre, ...provenance }),
     folder: z.object({ value: previewValueSchemas.folder, ...provenance }),
+    cues: z.object({ value: previewValueSchemas.cues, ...provenance }),
     energy: z.object({ value: previewValueSchemas.energy, ...provenance }),
     cover: z.object({ value: previewValueSchemas.cover, ...provenance })
   })
@@ -335,6 +348,8 @@ export interface PreviewBatch {
   findsCovers: boolean
   /** True when the batch sorts files into style folders: the "Mappa" column is shown. */
   organizes: boolean
+  /** True when the batch places hot cues: the "Cue-k" column is shown. */
+  placesCues: boolean
 }
 
 /** How many rows one `preview:coverThumbs` call may ask about: about two screens. */

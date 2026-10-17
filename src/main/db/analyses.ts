@@ -46,3 +46,22 @@ export function deleteAnalysis(db: AppDatabase, trackId: number, type: AnalysisT
     .where(and(eq(analyses.trackId, trackId), eq(analyses.type, type)))
     .run()
 }
+
+/** Every stored result of one type, by track; as stored, for the caller to check. */
+export function listAnalysesOfType(
+  db: AppDatabase,
+  type: AnalysisType
+): Map<number, StoredAnalysis<unknown>> {
+  const rows = db
+    .select({
+      trackId: analyses.trackId,
+      result: analyses.result,
+      analyzerVersion: analyses.analyzerVersion
+    })
+    .from(analyses)
+    .where(eq(analyses.type, type))
+    .all()
+  return new Map(
+    rows.map((row) => [row.trackId, { result: row.result, analyzerVersion: row.analyzerVersion }])
+  )
+}

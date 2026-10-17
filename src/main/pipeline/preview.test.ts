@@ -10,7 +10,8 @@ import {
 } from '../db/batches'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { insertJobs } from '../db/jobs'
-import { batchItems } from '../db/schema'
+import { listTrackCues } from '../db/cues'
+import { batchItems, cues } from '../db/schema'
 import { listStyles, replaceStyles } from '../db/styles'
 import { getTrackById, insertTracks, updateTrack } from '../db/tracks'
 import { logger } from '../services/logger'
@@ -603,7 +604,8 @@ describe('the state of the preview', () => {
         canRefresh: false,
         findsDuplicates: false,
         findsCovers: false,
-        organizes: false
+        organizes: false,
+        placesCues: false
       },
       canUndo: true
     })
@@ -1702,5 +1704,75 @@ describe('the styles of a batch', () => {
     expect(known.ok && known.value.cells.secondaryStyleId.after).toBe(ids['Organic House'])
     expect(unknown).toEqual({ ok: false, code: 'INVALID_INPUT' })
     expect(same).toEqual({ ok: false, code: 'INVALID_INPUT' })
+  })
+})
+
+describe('the hot cues a batch placed', () => {
+  it('show the slots before and after, and become the track cues in the colors of the Settings', () => {
+    // Arrange
+    const [placed] = trackIds as [number]
+    testDatabase.db
+      .insert(cues)
+      .values({ trackId: placed, slot: 8, positionMs: 1000, name: 'Old', color: '#000000' })
+      .run()
+    propose(placed, {
+      fields: { cues: { value: 'A – – D – – – –', source: 'analysis' } },
+      cues: {
+        slots: [
+          { slot: 1, positionMs: 469 },
+          { slot: 4, positionMs: 45_469 }
+        ],
+        before: '– – – – – – – H'
+      }
+    })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    const row = rowOf(placed)
+    commitApprovedValues(testDatabase.db, batchId, placed)
+
+    // Assert
+    expect(row.cells.cues).toMatchObject({
+      before: '– – – – – – – H',
+      after: 'A – – D – – – –',
+      changed: true
+    })
+    expect(listTrackCues(testDatabase.db, placed)).toMatchObject([
+      { slot: 1, positionMs: 469, name: 'Start', color: '#22c55e' },
+      { slot: 4, positionMs: 45_469, name: 'Drop 1', color: '#ef4444' }
+    ])
+  })
+
+  it('keep a slot the user placed by hand, and leave all of them while the cues are locked', () => {
+    // Arrange
+    const [byHand, locked] = trackIds as [number, number]
+    for (const trackId of [byHand, locked]) {
+      testDatabase.db
+        .insert(cues)
+        .values({ trackId, slot: 4, positionMs: 50_000, name: 'Mine', color: '#000000' })
+        .run()
+      propose(trackId, {
+        cues: {
+          slots: [
+            { slot: 1, positionMs: 469 },
+            { slot: 4, positionMs: 45_469 }
+          ],
+          before: null
+        }
+      })
+    }
+    updateTrack(testDatabase.db, byHand, { lockedFields: ['cue:4'] })
+    updateTrack(testDatabase.db, locked, { lockedFields: ['cues'] })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    for (const trackId of [byHand, locked]) commitApprovedValues(testDatabase.db, batchId, trackId)
+
+    // Assert
+    expect(listTrackCues(testDatabase.db, byHand)).toMatchObject([
+      { slot: 1, positionMs: 469 },
+      { slot: 4, positionMs: 50_000, name: 'Mine' }
+    ])
+    expect(listTrackCues(testDatabase.db, locked)).toMatchObject([{ slot: 4, positionMs: 50_000 }])
   })
 })

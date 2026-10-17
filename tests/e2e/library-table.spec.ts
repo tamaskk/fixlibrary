@@ -103,6 +103,7 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
       'Online lookup',
       'BPM és key elemzés',
       'Stem-elemzés',
+      'Hot cue-k felismerése',
       'Stílusbesorolás',
       'Borító keresése',
       'Fájlnév és névtisztítás',

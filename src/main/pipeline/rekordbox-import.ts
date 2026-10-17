@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { deleteAnalysis, saveAnalysis } from '../db/analyses'
 import type { AppDatabase } from '../db/connection'
 import { volumeNameOfPath } from '../db/track-paths'
-import { listLibraryTracks } from '../db/tracks'
+import { listLibraryTracks, type Track } from '../db/tracks'
 import { describeError } from '../services/error-text'
 import { logger } from '../services/logger'
 import {
@@ -13,7 +13,7 @@ import {
   findNewestExport,
   parseRekordboxBytes,
   readExportBytes,
-  TEMPO_BOUNDS,
+  type RbTempo,
   type RekordboxExport
 } from '../services/rekordbox-xml-read'
 import { isSetAsidePath } from '@shared/duplicates'
@@ -25,21 +25,13 @@ import {
   type CheckedTrack,
   type RekordboxExportCheck
 } from '@shared/rekordbox'
+import { gridSchema } from '@shared/rpc'
 import { toOneLine } from '@shared/text'
 import { readSettings, resolveEffectiveSettings, type SettingsEnvironment } from './settings'
 
 /** What `rb_grid` holds: Rekordbox's beat markers, as its export had them. */
 export const rbGridSchema = z.object({
-  tempos: z
-    .array(
-      z.object({
-        inizio: z.number().nonnegative(),
-        bpm: z.number().positive().lt(TEMPO_BOUNDS.maxBpm),
-        metro: z.string().regex(TEMPO_BOUNDS.metro),
-        battito: z.number().int().min(1).max(TEMPO_BOUNDS.maxBattito)
-      })
-    )
-    .max(TEMPO_BOUNDS.maxTempos),
+  tempos: gridSchema,
   /** When Rekordbox wrote the export it came from, in ms since the epoch. */
   exportedAt: z.number(),
   /** When the app read it, in ms since the epoch. */
@@ -85,33 +77,46 @@ export function storeExportGrids(
   exported: RekordboxExport,
   libraryTracks: readonly { id: number; path: string }[],
   times: { exportedAt: number; readAt: number }
-): { matched: number; notInExport: CheckedTrack[]; unanalysed: CheckedTrack[] } {
-  const notInExport: CheckedTrack[] = []
-  const unanalysed: CheckedTrack[] = []
-  let matched = 0
+): ExportPairing {
+  const pairing = pairExportGrids(exported, libraryTracks)
   db.transaction((tx) => {
-    for (const track of libraryTracks) {
-      const found = exported.tracks.get(track.path.normalize('NFC'))
-      if (!found) {
-        notInExport.push({ trackId: track.id, path: track.path })
-        continue
-      }
-      matched += 1
-      if (found.tempos.length === 0) {
-        unanalysed.push({ trackId: track.id, path: track.path })
-        deleteAnalysis(tx, track.id, 'rb_grid')
-        continue
-      }
-      const grid: RbGrid = { tempos: found.tempos, ...times }
-      saveAnalysis(tx, {
-        trackId: track.id,
-        type: 'rb_grid',
-        result: grid,
-        analyzerVersion: RB_GRID_SOURCE
-      })
+    for (const track of pairing.unanalysed) deleteAnalysis(tx, track.trackId, 'rb_grid')
+    for (const [trackId, tempos] of pairing.grids) {
+      const grid: RbGrid = { tempos, ...times }
+      saveAnalysis(tx, { trackId, type: 'rb_grid', result: grid, analyzerVersion: RB_GRID_SOURCE })
     }
   })
-  return { matched, notInExport, unanalysed }
+  return pairing
+}
+
+/** How the library's tracks pair with an export, and the grids the export gives them. */
+export interface ExportPairing {
+  matched: number
+  notInExport: CheckedTrack[]
+  unanalysed: CheckedTrack[]
+  grids: Map<number, RbTempo[]>
+}
+
+/** Pairs the library's tracks with an export by path, without storing anything. */
+export function pairExportGrids(
+  exported: RekordboxExport,
+  libraryTracks: readonly { id: number; path: string }[]
+): ExportPairing {
+  const notInExport: CheckedTrack[] = []
+  const unanalysed: CheckedTrack[] = []
+  const grids = new Map<number, RbTempo[]>()
+  let matched = 0
+  for (const track of libraryTracks) {
+    const found = exported.tracks.get(track.path.normalize('NFC'))
+    if (!found) {
+      notInExport.push({ trackId: track.id, path: track.path })
+      continue
+    }
+    matched += 1
+    if (found.tempos.length === 0) unanalysed.push({ trackId: track.id, path: track.path })
+    else grids.set(track.id, found.tempos)
+  }
+  return { matched, notInExport, unanalysed, grids }
 }
 
 /**
@@ -150,6 +155,28 @@ async function filesOfExport(
 export async function readRekordboxExport(
   dependencies: RekordboxImportDependencies
 ): Promise<Result<RekordboxExportCheck>> {
+  const read = await readExportAndPair(dependencies)
+  return read.ok ? { ok: true, value: read.value.check } : read
+}
+
+/** What reading an export gave: the check, the export itself, and the library it was paired with. */
+export interface ExportRead {
+  check: RekordboxExportCheck
+  exported: RekordboxExport
+  library: Track[]
+}
+
+/**
+ * Reads the newest export and pairs it with the library, keeping the grids
+ * (`readRekordboxExport`), and hands back the export too, for the check of the hot
+ * cues (T-029). That check compares the export's grids with the stored ones, so it
+ * reads with `storeGrids: false`: storing them would make a second check compare
+ * the export with itself.
+ */
+export async function readExportAndPair(
+  dependencies: RekordboxImportDependencies,
+  options: { storeGrids: boolean } = { storeGrids: true }
+): Promise<Result<ExportRead>> {
   const { db } = dependencies
   if (dependencies.isBusy()) return { ok: false, code: 'RUN_ACTIVE' }
   const folder = resolveEffectiveSettings(
@@ -178,10 +205,9 @@ export async function readRekordboxExport(
     (track) => !track.offline && !track.fileMissing && !isSetAsidePath(track.path)
   )
   const readAt = (dependencies.now ?? Date.now)()
-  const stored = storeExportGrids(db, exported, library, {
-    exportedAt: file.modifiedAt,
-    readAt
-  })
+  const stored = options.storeGrids
+    ? storeExportGrids(db, exported, library, { exportedAt: file.modifiedAt, readAt })
+    : pairExportGrids(exported, library)
   const files = await filesOfExport(exported, mounted)
   const check: RekordboxExportCheck = {
     fileName: toOneLine(basename(file.path), 255),
@@ -201,5 +227,5 @@ export async function readRekordboxExport(
       `${check.unavailable} unavailable, ${check.unchecked} unchecked, ` +
       `${check.unanalysed.count} not analysed, ${check.skipped} not read`
   )
-  return { ok: true, value: check }
+  return { ok: true, value: { check, exported, library } }
 }

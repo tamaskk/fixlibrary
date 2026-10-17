@@ -44,7 +44,17 @@ export interface XmlTrack {
   tonality: string | null
   /** The absolute path of the file. */
   path: string
+  /** Rekordbox's own grid, as its export had it: written back so an import keeps it. */
+  tempos: readonly XmlTempo[]
   cues: readonly XmlCue[]
+}
+
+/** A beat marker of Rekordbox's grid. */
+export interface XmlTempo {
+  inizio: number
+  bpm: number
+  metro: string
+  battito: number
 }
 
 export interface XmlPlaylist {
@@ -126,6 +136,19 @@ function trackElement(track: XmlTrack): Record<string, unknown> {
       Tonality: track.tonality,
       Location: locationOf(track.path)
     }),
+    // As Rekordbox writes them: the time to the millisecond, the tempo to two places.
+    ...(track.tempos.length > 0
+      ? {
+          TEMPO: track.tempos.map((tempo) =>
+            attributes({
+              Inizio: tempo.inizio.toFixed(3),
+              Bpm: tempo.bpm.toFixed(2),
+              Metro: tempo.metro,
+              Battito: tempo.battito
+            })
+          )
+        }
+      : {}),
     ...(track.cues.length > 0
       ? {
           POSITION_MARK: track.cues.map((cue) =>

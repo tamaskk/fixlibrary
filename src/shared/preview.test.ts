@@ -36,6 +36,7 @@ function row(overrides: Partial<PreviewRow> = {}): PreviewRow {
       secondaryStyleId: EMPTY_CELL,
       genre: EMPTY_CELL,
       folder: EMPTY_CELL,
+      cues: EMPTY_CELL,
       energy: EMPTY_CELL,
       cover: EMPTY_CELL
     },

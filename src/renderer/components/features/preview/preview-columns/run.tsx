@@ -72,6 +72,18 @@ export const FOLDER_COLUMN: PreviewColumn = {
   text: (row) => diffText(row.cells.folder)
 }
 
+/** The column of a batch that places hot cues: the slots filled before and after, by letter. */
+export const CUES_COLUMN: PreviewColumn = {
+  id: 'cues',
+  header: 'Cue-k',
+  track: '160px',
+  minWidth: 160,
+  // Always shown: in a batch that places cues they are what is to be approved. Where
+  // the table is narrow, only the new letters, as with the file name.
+  render: (row, context) => <DiffValue cell={row.cells.cues} compact={!context.wide} />,
+  text: (row) => diffText(row.cells.cues)
+}
+
 /** The column of a batch that looked for covers: the old and the new one, side by side. */
 export const COVER_COLUMN: PreviewColumn = {
   id: 'cover',
