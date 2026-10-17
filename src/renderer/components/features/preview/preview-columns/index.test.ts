@@ -27,4 +27,29 @@ describe('columnsFor', () => {
     expect(both.slice(-2)).toEqual(['cover', 'source'])
     expect(both.filter((id) => id !== 'folder' && id !== 'cover')).toEqual(plain)
   })
+
+  it('shows the loudness columns only for a batch that normalizes, after the cover, before the source', () => {
+    // Act
+    const plain = columnsFor('run').map((column) => column.id)
+    const loud = columnsFor('run', { covers: true, loudness: true })
+
+    // Assert
+    expect(loud.map((column) => column.id).slice(-7)).toEqual([
+      'cover',
+      'lufs',
+      'gain',
+      'truePeak',
+      'normalizeMethod',
+      'normalizeState',
+      'source'
+    ])
+    // The values at every width, the method and the state where the table has room.
+    expect(loud.filter((column) => column.wideOnly).map((column) => column.id)).toEqual(
+      expect.arrayContaining(['normalizeMethod', 'normalizeState'])
+    )
+    expect(
+      loud.filter((column) => ['lufs', 'gain', 'truePeak'].includes(column.id) && column.wideOnly)
+    ).toEqual([])
+    expect(plain).not.toContain('lufs')
+  })
 })

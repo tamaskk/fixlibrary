@@ -37,6 +37,8 @@ export function errorMessage(code: ErrorCode): string {
       return 'A Claude nem adott használható választ.'
     case 'WRITE_FAILED':
       return 'A fájl nem írható.'
+    case 'OFF_TARGET':
+      return 'A normalizálás után mért hangerő eltér a tervezettől. A fájl módosult, a batch visszavonható.'
     case 'NOTHING_TO_UNDO':
       return 'Nincs visszavonható batch.'
     case 'PYTHON_CRASHED':

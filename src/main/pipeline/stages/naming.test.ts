@@ -255,7 +255,10 @@ describe('the naming stage', () => {
       folder: null,
       cues: null,
       energy: null,
-      cover: null
+      cover: null,
+      lufs: null,
+      truePeak: null,
+      gain: null
     }
 
     // Act
@@ -290,7 +293,10 @@ describe('the naming stage', () => {
         folder: null,
         cues: null,
         energy: null,
-        cover: null
+        cover: null,
+        lufs: null,
+        truePeak: null,
+        gain: null
       },
       {}
     )
@@ -381,7 +387,10 @@ describe('the naming stage', () => {
         folder: null,
         cues: null,
         energy: 9,
-        cover: null
+        cover: null,
+        lufs: null,
+        truePeak: null,
+        gain: null
       },
       {}
     )

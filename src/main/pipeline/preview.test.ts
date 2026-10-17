@@ -605,7 +605,8 @@ describe('the state of the preview', () => {
         findsDuplicates: false,
         findsCovers: false,
         organizes: false,
-        placesCues: false
+        placesCues: false,
+        normalizes: false
       },
       canUndo: true
     })

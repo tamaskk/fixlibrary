@@ -38,12 +38,16 @@ function row(overrides: Partial<PreviewRow> = {}): PreviewRow {
       folder: EMPTY_CELL,
       cues: EMPTY_CELL,
       energy: EMPTY_CELL,
-      cover: EMPTY_CELL
+      cover: EMPTY_CELL,
+      lufs: EMPTY_CELL,
+      truePeak: EMPTY_CELL,
+      gain: EMPTY_CELL
     },
     warnings: [],
     excluded: false,
     error: null,
     newStyle: null,
+    normalization: null,
     ...overrides
   }
 }

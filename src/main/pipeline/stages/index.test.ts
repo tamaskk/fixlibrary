@@ -26,6 +26,7 @@ describe('validateStages', () => {
       db: {} as AppDatabase,
       python: () => null,
       bpmRange: () => ({ bpmMin: 85, bpmMax: 175 }),
+      loudnessSettings: () => ({ targetLufs: -11, method: 'lossless' }),
       cache: { get: () => undefined, put: () => {} },
       wanted: () => false,
       clients: {} as LookupClients,
@@ -41,6 +42,44 @@ describe('validateStages', () => {
 
     // Assert
     expect(validate).not.toThrow()
+  })
+
+  it('orders the normalization of a file against every other step that changes the file', () => {
+    // Arrange
+    const stages = createStages({
+      db: {} as AppDatabase,
+      python: () => null,
+      bpmRange: () => ({ bpmMin: 85, bpmMax: 175 }),
+      loudnessSettings: () => ({ targetLufs: -11, method: 'lossless' }),
+      cache: { get: () => undefined, put: () => {} },
+      wanted: () => false,
+      clients: {} as LookupClients,
+      covers: {} as CoverStore,
+      stems: { ensure: async () => {}, has: async () => false },
+      modelInstalled: async () => false,
+      coverClients: {} as CoverStageDependencies['coverClients'],
+      claude: () => null
+    })
+    const byName = new Map(stages.map((each) => [each.name, each]))
+    const others = [
+      'convertFile',
+      'setAside',
+      'redrawPlaceholder',
+      'writeTags',
+      'embedCover',
+      'rename',
+      'organizeFile'
+    ]
+
+    // Act
+    const unordered = others.filter(
+      (name) =>
+        !byName.get('normalizeFile')?.after?.includes(name) &&
+        !byName.get(name)?.after?.includes('normalizeFile')
+    )
+
+    // Assert
+    expect(unordered).toEqual([])
   })
 
   it('accepts stages that depend on each other without a circle', () => {
@@ -231,7 +270,10 @@ describe('the demo stages', () => {
         folder: null,
         cues: null,
         energy: null,
-        cover: null
+        cover: null,
+        lufs: null,
+        truePeak: null,
+        gain: null
       },
       {}
     )

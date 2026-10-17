@@ -1,4 +1,5 @@
 import { ERROR_COLUMNS } from './errors'
+import { LOUDNESS_COLUMNS } from './loudness'
 import { COVER_COLUMN, CUES_COLUMN, FOLDER_COLUMN, RUN_COLUMNS } from './run'
 import type { PreviewColumn } from './types'
 
@@ -14,11 +15,12 @@ const COLUMNS_BY_BATCH_TYPE: Readonly<Record<string, readonly PreviewColumn[]>> 
 /**
  * The columns of the "Változások" tab for a kind of batch. A batch that sorts files
  * into style folders shows the folder after the file name; one that places hot cues
- * shows them, and one that looked for covers shows those, before the source of its values.
+ * shows them, one that looked for covers shows those, and one that normalizes shows the
+ * loudness, before the source of its values.
  */
 export function columnsFor(
   batchType: string,
-  options: { covers?: boolean; folders?: boolean; cues?: boolean } = {}
+  options: { covers?: boolean; folders?: boolean; cues?: boolean; loudness?: boolean } = {}
 ): readonly PreviewColumn[] {
   // The type is a stored string: only a set of its own is looked up, never what
   // every object has.
@@ -30,10 +32,12 @@ export function columnsFor(
     const name = columns.findIndex((column) => column.id === 'fileName')
     columns = [...columns.slice(0, name + 1), FOLDER_COLUMN, ...columns.slice(name + 1)]
   }
-  // The cues and the cover, in that order, before the source of the values.
-  const before = [options.cues ? CUES_COLUMN : null, options.covers ? COVER_COLUMN : null].filter(
-    (column): column is PreviewColumn => column !== null
-  )
+  // The cues, the cover and the loudness, in that order, before the source of the values.
+  const before = [
+    options.cues ? CUES_COLUMN : null,
+    options.covers ? COVER_COLUMN : null,
+    ...(options.loudness ? LOUDNESS_COLUMNS : [])
+  ].filter((column): column is PreviewColumn => column !== null)
   if (before.length === 0) return columns
   const source = columns.findIndex((column) => column.id === 'source')
   const at = source === -1 ? columns.length : source

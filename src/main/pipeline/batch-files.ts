@@ -86,9 +86,12 @@ export interface TrackFiles {
   move: (to: string) => Promise<{ path: string; collided: boolean }>
   /**
    * Replaces the content of the file with what `write` puts into the temp file it
-   * is given. `write` must stop when its signal is aborted.
+   * is given. `write` must stop when its signal is aborted. `source` is the file whose
+   * content is replaced, as it was hashed: what `write` is to read.
    */
-  replaceContent: (write: (tempPath: string, signal: AbortSignal) => Promise<void>) => Promise<void>
+  replaceContent: (
+    write: (tempPath: string, signal: AbortSignal, source: string) => Promise<void>
+  ) => Promise<void>
   /** Where the file that is worked on is now. Makes the backup or the copy first. */
   workingPath: () => Promise<string>
   /**
@@ -1186,7 +1189,7 @@ export function createBatchFiles(dependencies: BatchFilesDependencies): BatchFil
               await fileOps.replace(
                 target,
                 async (temp, stop) => {
-                  await write(temp, stop)
+                  await write(temp, stop, target)
                   // Of the temp file, before it has the name: what undo knows the
                   // batch's own file by is what was written, not what stands under
                   // the name a moment later.
