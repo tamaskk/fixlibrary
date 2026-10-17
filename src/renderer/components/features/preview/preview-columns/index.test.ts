@@ -28,6 +28,19 @@ describe('columnsFor', () => {
     expect(both.filter((id) => id !== 'folder' && id !== 'cover')).toEqual(plain)
   })
 
+  it('shows the folder of an Inbox batch as its target, at every width', () => {
+    // Act
+    const run = columnsFor('run', { folders: true }).find((column) => column.id === 'folder')
+    const inbox = columnsFor('run', { folders: true, inbox: true }).find(
+      (column) => column.id === 'folder'
+    )
+
+    // Assert
+    expect(run).toMatchObject({ header: 'Mappa', wideOnly: true })
+    expect(inbox?.header).toBe('Célmappa')
+    expect(inbox?.wideOnly).toBeUndefined()
+  })
+
   it('shows the loudness columns only for a batch that normalizes, after the cover, before the source', () => {
     // Act
     const plain = columnsFor('run').map((column) => column.id)

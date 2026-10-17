@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 import { app, dialog, powerSaveBlocker, protocol, shell, BrowserWindow } from 'electron'
-import { existsSync, realpathSync } from 'fs'
+import { existsSync, realpathSync, watch as watchFolder } from 'fs'
+import { lstat, readdir } from 'fs/promises'
 import { cpus, homedir, tmpdir, userInfo } from 'os'
 import { join, sep } from 'path'
 import { optimizer, is } from '@electron-toolkit/utils'
@@ -20,6 +21,12 @@ import { registerSystemIpc } from './ipc/system'
 import { createBatchFiles } from './pipeline/batch-files'
 import { createClaude, type Claude } from './pipeline/claude'
 import { createDownloads, findThumbnail, type Downloads } from './pipeline/download'
+import {
+  createInboxBatches,
+  createInboxWatcher,
+  inboxStages,
+  type InboxWatcher
+} from './pipeline/inbox'
 import { createOrchestrator, type Orchestrator } from './pipeline/orchestrator'
 import { commitApprovedValues, createPreview } from './pipeline/preview'
 import { createLibraryScanner } from './pipeline/scanner'
@@ -55,7 +62,8 @@ import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
 import { AUDIO_SCHEME, createAudioHandler, originOfRendererUrl } from './services/audio-protocol'
 import { createPeaksStore } from './services/peaks-store'
-import { getTrackById, listLibraryTracks } from './db/tracks'
+import { findPreviewBatch } from './db/batches'
+import { findTrackIdByPath, getTrackById, listLibraryTracks } from './db/tracks'
 import { isSetAsidePath } from '@shared/duplicates'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import {
@@ -65,7 +73,7 @@ import {
 } from './services/volumes'
 import { AppError } from '@shared/errors'
 import { FIXED_RESOURCE_LIMITS } from '@shared/pipeline'
-import { SECRET_NAMES, type SecretName } from '@shared/settings'
+import { INBOX_FOLDER_NAME, SECRET_NAMES, type SecretName } from '@shared/settings'
 import {
   ENGINE_CHECK_TIMEOUT_MS,
   QUIT_FILE_WORK_WAIT_MS,
@@ -83,6 +91,8 @@ let fileWork: FileWork | null = null
 let claudeService: Claude | null = null
 // Kept so that quitting can stop the downloads that are running.
 let downloads: Downloads | null = null
+// Kept so that quitting can stop watching the Inbox.
+let inboxWatcher: InboxWatcher | null = null
 // The API keys of the lookup services; read by the stages that ask them.
 let secretStore: SecretStore | null = null
 
@@ -509,9 +519,54 @@ function registerLibraryAndPipeline(): void {
       return ffmpeg !== undefined && existsSync(ffmpeg) ? ffmpeg : null
     },
     libraryTracks: () => listLibraryTracks(db, cachedVolumes()),
-    onChange: sendDownloads
+    onChange: (items) => {
+      sendDownloads(items)
+      // A finished download is looked for at once, not at the next listing.
+      if (items.some((item) => item.state === 'done')) inboxWatcher?.refresh()
+    }
   })
   registerDownloadIpc(downloads)
+  // New files of the Inbox become a batch of their own once nothing else runs or waits
+  // for approval, so a batch of the user's is never given up for one.
+  inboxWatcher = createInboxWatcher({
+    folder: () => {
+      const root = readSettings(db).library.rootFolder
+      return root === null ? null : join(root, INBOX_FOLDER_NAME)
+    },
+    watch: (folder, onChange, onEnd) => {
+      const watcher = watchFolder(folder, (_event, name) =>
+        onChange(typeof name === 'string' ? name : null)
+      )
+      watcher.on('error', () => {
+        watcher.close()
+        onEnd()
+      })
+      return () => watcher.close()
+    },
+    list: (folder) => readdir(folder),
+    stamp: async (path) => {
+      const stats = await lstat(path).catch(() => null)
+      return stats?.isFile() ? { size: stats.size, mtimeMs: stats.mtimeMs } : null
+    },
+    idle: () =>
+      startupDone &&
+      runs.progress() === null &&
+      !runs.changingFiles() &&
+      !scanner.isRunning() &&
+      findPreviewBatch(db) === undefined,
+    // The scan makes the files tracks; the run decides which of them it can take.
+    process: createInboxBatches({
+      scan: async () => (await scanner.scan()).ok,
+      trackIdOf: (path) => findTrackIdByPath(db, path),
+      start: (trackIds) => {
+        const started = runs.start({ trackIds, stages: inboxStages(functions) })
+        if (started.ok) {
+          logger.info(`Inbox batch ${started.value.batchId} started for ${trackIds.length} tracks`)
+        }
+        return started.ok
+      }
+    })
+  })
   // The page plays a track by its id; the main process looks the file up.
   protocol.handle(
     AUDIO_SCHEME,
@@ -564,6 +619,7 @@ function registerLibraryAndPipeline(): void {
       // Whatever happened above, the interrupted run is taken up and the app is usable.
       startupDone = true
       takeUpRun()
+      inboxWatcher?.start()
     }
   })()
 }
@@ -705,6 +761,7 @@ function tellWorkToStop(): void {
   } catch (error) {
     logger.error('The downloads could not be stopped', error)
   }
+  inboxWatcher?.stop()
 }
 
 /** Everything that must end while the database is still open. */

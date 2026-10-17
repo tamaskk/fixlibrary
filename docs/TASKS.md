@@ -29,8 +29,6 @@ Package 8: normalization.
 
 Package 9: download.
 
-- [ ] T-035 (F8, S) Inbox processing
-
 Package 10: playlists.
 
 - [ ] T-036 (F6, M) Similarity engine
@@ -64,6 +62,8 @@ Package 14: hardening. Not in the plan; found by the review of T-031 and T-032.
 Nothing planned. See docs/PRD.md §07 before proposing anything.
 
 ## Done
+
+- [x] T-035 (F8, S) Inbox processing: `pipeline/inbox.ts` (`createInboxWatcher`: `fs.watch` and a listing every minute, 10 s after the last change, each file once; `createInboxBatches`: a scan, then one run, each track once; `inboxStages`; `isInInbox`), the batch started only while nothing runs or waits for approval, `PreviewBatch.inbox`, the "Célmappa" column at every width and the notes of an Inbox batch, and an e2e test (`tests/e2e/inbox.spec.ts`, stand-in stages: a file at the start and one copied in while the app runs, each previewed and approved). Tried once with the real stages on a 19 s SoundCloud download in a temp library: the preview came after 20 s, with name, tempo, key, cover, folder and normalization plan, and after approval the Inbox was empty and the file in `Unsorted/`. Not done: energy (T-023, T-024: the preview says calibration is needed); the stems and the hot cues are left out of the batch, to be run by hand later; duplicates are looked for among the tracks of the batch, not against the whole library by fingerprint (the library check is the one by names before the download); a batch that is given up leaves its files in the Inbox until the next start; in clean library mode the original stays in the Inbox; `chokidar` replaced by `fs.watch`, by the owner's choice; a library chosen in this session is watched from the next listing, within a minute; the e2e test runs the stand-in stages, which do not move files into style folders; a real download through the app and a real hand-copied MP3 are the owner's to try.
 
 - [x] T-034 (F8, M) Downloader: `shared/download.ts` (`addressOf`, `readInfo`, `bestAudioKbps`, `readSearchHits`, `readProgressLine`, `failureOf`), `services/downloader.ts` (yt-dlp with an argument array, a system `PATH` only, its own process group, a time limit), `pipeline/download.ts` (what an address is, the check against the library by the name rule of T-017, two downloads at a time, the search, `findThumbnail`), the `download:*` channels, the page "Letöltés" with its store and its two dialogs, `ui/textarea.tsx`, the thumbnail as the cover after every service (source `thumbnail`), and the ffmpeg build with the mp4 muxer (owner's choice: yt-dlp's `-movflags`). Not done: real downloads were tried by hand on one YouTube and one SoundCloud track while building, not through the app; the thumbnail is kept as yt-dlp got it (WebP or JPEG) in `userData/thumbnails`, not as a JPG in the Inbox, because the app's ffmpeg has no picture codecs and the Inbox must be empty after approval (T-035); the low bitrate and duplicate dialogs say "Mégse" and "Letöltés így is"/"Letöltés mégis", not "Confirm" and "Decline", since the UI is Hungarian; the downloads run in a line of their own, not on the orchestrator's `network` resource; the list of downloads is not kept across a restart; the fingerprint check after the download is T-035's; yt-dlp warns that without a JavaScript runtime some YouTube formats may be missing; updating yt-dlp is T-043.
 

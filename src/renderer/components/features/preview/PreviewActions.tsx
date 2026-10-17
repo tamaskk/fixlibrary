@@ -21,6 +21,8 @@ type PreviewActionsProps = {
   stylesFull: boolean
   /** True when the batch sorts files into style folders: their genre and comment are replaced. */
   organizes: boolean
+  /** A batch of the Inbox: the confirmation says what the hot cues need afterwards. */
+  inbox: boolean
   /** The action that is on its way, or null. */
   busy: 'approve' | 'discard' | 'undo' | null
   onApprove: () => void
@@ -48,6 +50,7 @@ export function PreviewActions({
   newStylesLeft,
   stylesFull,
   organizes,
+  inbox,
   busy,
   onApprove,
   onDiscard,
@@ -87,6 +90,7 @@ export function PreviewActions({
   const organizeNote = organizes
     ? ' A fájlok a stílusmappájukba kerülnek, a genre és a comment tag felülíródik.'
     : ''
+  const inboxNote = inbox ? ' A hot cue-khoz utána a Rekordbox varázsló A és B fázisa kell.' : ''
 
   return (
     <section aria-label="Jóváhagyás" className="flex items-center gap-4">
@@ -149,7 +153,7 @@ export function PreviewActions({
             backTo(approveButton.current)
           }}
           title="Jóváhagyod a változásokat?"
-          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote}${stylesNote}${organizeNote} ${MODE_NOTES[mode]}`}
+          description={`${formatCount(counts.applied)} track fájljai változnak, ${formatCount(left)} kimarad.${asideNote}${stylesNote}${organizeNote}${inboxNote} ${MODE_NOTES[mode]}`}
         >
           <DialogFooter>
             <DialogClose asChild>

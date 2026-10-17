@@ -379,6 +379,8 @@ export interface PreviewBatch {
   placesCues: boolean
   /** True when the batch normalizes the loudness: its columns are shown. */
   normalizes: boolean
+  /** True for a batch of new tracks from the Inbox (T-035): the target folder is always shown. */
+  inbox: boolean
 }
 
 /** How many rows one `preview:coverThumbs` call may ask about: about two screens. */

@@ -1,6 +1,6 @@
 import { ERROR_COLUMNS } from './errors'
 import { LOUDNESS_COLUMNS } from './loudness'
-import { COVER_COLUMN, CUES_COLUMN, FOLDER_COLUMN, RUN_COLUMNS } from './run'
+import { COVER_COLUMN, CUES_COLUMN, FOLDER_COLUMN, RUN_COLUMNS, TARGET_FOLDER_COLUMN } from './run'
 import type { PreviewColumn } from './types'
 
 export type { PreviewColumn, PreviewColumnContext, PreviewEditor } from './types'
@@ -20,7 +20,14 @@ const COLUMNS_BY_BATCH_TYPE: Readonly<Record<string, readonly PreviewColumn[]>> 
  */
 export function columnsFor(
   batchType: string,
-  options: { covers?: boolean; folders?: boolean; cues?: boolean; loudness?: boolean } = {}
+  options: {
+    covers?: boolean
+    folders?: boolean
+    cues?: boolean
+    loudness?: boolean
+    /** A batch of the Inbox: the folder is its target, shown at every width. */
+    inbox?: boolean
+  } = {}
 ): readonly PreviewColumn[] {
   // The type is a stored string: only a set of its own is looked up, never what
   // every object has.
@@ -30,7 +37,8 @@ export function columnsFor(
   // The folder a file goes into, right after its name.
   if (options.folders) {
     const name = columns.findIndex((column) => column.id === 'fileName')
-    columns = [...columns.slice(0, name + 1), FOLDER_COLUMN, ...columns.slice(name + 1)]
+    const folder = options.inbox ? TARGET_FOLDER_COLUMN : FOLDER_COLUMN
+    columns = [...columns.slice(0, name + 1), folder, ...columns.slice(name + 1)]
   }
   // The cues, the cover and the loudness, in that order, before the source of the values.
   const before = [
