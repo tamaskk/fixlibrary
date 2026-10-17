@@ -8,6 +8,7 @@ import { Worker } from 'worker_threads'
 import { XMLParser } from 'fast-xml-parser'
 import { z } from 'zod'
 import { REKORDBOX_XML_FILE_NAME } from '@shared/rekordbox'
+import { GRID_BOUNDS, gridMarkerSchema } from '@shared/rpc'
 
 /**
  * The largest export read. A 3000-track library with its grids is tens of MB; the
@@ -15,13 +16,9 @@ import { REKORDBOX_XML_FILE_NAME } from '@shared/rekordbox'
  */
 export const MAX_EXPORT_BYTES = 64 * 1024 * 1024
 
-/** The bounds a grid of Rekordbox stays in; what is stored is checked by them again. */
-export const TEMPO_BOUNDS = {
-  maxBpm: 1000,
-  maxBattito: 16,
-  maxTempos: 100_000,
-  metro: /^\d{1,2}\/\d{1,2}$/u
-} as const
+// Read past the bound of a grid, so that a track with too many markers keeps its other
+// data and loses only the grid.
+const MAX_TEMPO_ITEMS = 100_000
 
 /** One beat marker of Rekordbox's grid, as its export holds it. */
 export interface RbTempo {
@@ -99,12 +96,30 @@ const integer = (min: number, max: number): z.ZodType<number, string> =>
     .transform(Number)
     .refine((value) => value >= min && value <= max)
 
-const tempoSchema = z.object({
-  Inizio: decimal.refine((value) => value >= 0),
-  Bpm: decimal.refine((value) => value > 0 && value < TEMPO_BOUNDS.maxBpm),
-  Metro: z.string().regex(TEMPO_BOUNDS.metro).default('4/4'),
-  Battito: integer(1, TEMPO_BOUNDS.maxBattito)
-})
+const tempoSchema = z
+  .object({
+    Inizio: decimal,
+    Bpm: decimal,
+    Metro: z.string().default('4/4'),
+    Battito: integer(1, GRID_BOUNDS.maxBattito)
+  })
+  .transform((tempo) => ({
+    inizio: tempo.Inizio,
+    bpm: tempo.Bpm,
+    metro: tempo.Metro,
+    battito: tempo.Battito
+  }))
+  .pipe(gridMarkerSchema)
+
+/**
+ * The grid of a track, whole or not at all: the app writes the grid back into its own
+ * XML, and part of one would move Rekordbox's beats. Without one the track is taken as
+ * not analysed, and gets no cues.
+ */
+function gridOf(items: readonly unknown[]): RbTempo[] {
+  const grid = z.array(tempoSchema).max(GRID_BOUNDS.maxMarkers).safeParse(items)
+  return grid.success ? grid.data : []
+}
 
 const positionMarkSchema = z.object({
   Name: z.string().max(1000).default(''),
@@ -120,7 +135,7 @@ const trackSchema = z.object({
   Tonality: optionalText,
   TotalTime: optionalDecimal,
   // Item by item below: one odd marker must not cost the track its grid.
-  TEMPO: z.array(z.unknown()).max(TEMPO_BOUNDS.maxTempos).default([]),
+  TEMPO: z.array(z.unknown()).max(MAX_TEMPO_ITEMS).default([]),
   POSITION_MARK: z.array(z.unknown()).max(1000).default([])
 })
 
@@ -217,19 +232,7 @@ export function parseRekordboxXml(xml: string): RekordboxExport {
       averageBpm: data.AverageBpm,
       tonality: data.Tonality,
       totalTime: data.TotalTime,
-      tempos: data.TEMPO.flatMap((item) => {
-        const tempo = tempoSchema.safeParse(item)
-        return tempo.success
-          ? [
-              {
-                inizio: tempo.data.Inizio,
-                bpm: tempo.data.Bpm,
-                metro: tempo.data.Metro,
-                battito: tempo.data.Battito
-              }
-            ]
-          : []
-      }),
+      tempos: gridOf(data.TEMPO),
       positionMarks: data.POSITION_MARK.flatMap((item) => {
         const mark = positionMarkSchema.safeParse(item)
         return mark.success

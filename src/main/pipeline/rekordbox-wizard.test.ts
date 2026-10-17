@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
+import { cues } from '../db/schema'
 import { setSetting } from '../db/settings'
 import { insertTracks } from '../db/tracks'
 import { logger } from '../services/logger'
@@ -11,6 +12,7 @@ import { DEFAULT_SETTINGS } from '@shared/settings'
 import { PHASE_A_STEPS, type WizardState } from '@shared/rekordbox-wizard'
 import {
   applyWizardAction,
+  checkWizardCues,
   checkWizardExport,
   readWizardState,
   readWizardView,
@@ -50,11 +52,11 @@ async function atCheck(beforeExportStep: () => void = () => {}): Promise<void> {
   }
 }
 
-function writeExport(paths: string[], grid: boolean): void {
+function writeExport(paths: string[], grid: boolean, marks = '', bpm = '124'): void {
   const tracks = paths
     .map(
       (path, index) =>
-        `<TRACK TrackID="${index + 1}" Location="${locationOf(path)}">${grid ? '<TEMPO Inizio="0" Bpm="124" Metro="4/4" Battito="1"/>' : ''}</TRACK>`
+        `<TRACK TrackID="${index + 1}" Location="${locationOf(path)}">${grid ? `<TEMPO Inizio="0" Bpm="${bpm}" Metro="4/4" Battito="1"/>` : ''}${marks}</TRACK>`
     )
     .join('')
   writeFileSync(
@@ -98,7 +100,7 @@ describe('the Rekordbox wizard', () => {
       xmlWritten: false,
       xmlPath: join(generated, 'fixlibrary.xml'),
       exportFolder: exports,
-      phaseBLocked: true
+      phaseBLocked: false
     })
   })
 
@@ -192,7 +194,7 @@ describe('the Rekordbox wizard', () => {
     expect(readWizardState(testDatabase.db).step).toBe('a.check')
   })
 
-  it('ends phase A when the export is clean', async () => {
+  it('goes on to phase B when the export of phase A is clean', async () => {
     // Arrange
     const path = join(folder, 'a.mp3')
     writeFileSync(path, 'audio')
@@ -206,7 +208,7 @@ describe('the Rekordbox wizard', () => {
     // Assert
     expect(result).toMatchObject({
       ok: true,
-      value: { verdict: { clean: true }, state: { setupDone: true, step: 'doneA' } }
+      value: { verdict: { clean: true }, state: { setupDone: true, step: 'b.writeXml' } }
     })
   })
 
@@ -285,6 +287,129 @@ describe('the Rekordbox wizard', () => {
       step: 'setup.showXml',
       enteredAt: 0,
       exportFrom: null
+    })
+  })
+
+  describe('phase B', () => {
+    /** One track of the library with its grid read and a hot cue placed; the wizard at B's check. */
+    async function atCueCheck(): Promise<string> {
+      const path = join(folder, 'a.mp3')
+      writeFileSync(path, 'audio')
+      const [id] = insertTracks(testDatabase.db, [{ path, originalPath: path, format: 'mp3' }]) as [
+        number
+      ]
+      await atCheck()
+      writeExport([path], true)
+      const passed = await checkWizardExport(dependencies())
+      if (!passed.ok || passed.value.state.step !== 'b.writeXml')
+        throw new Error('phase A not passed')
+      testDatabase.db
+        .insert(cues)
+        .values({ trackId: id, slot: 4, positionMs: 61_960, name: 'Drop 1', color: '#ef4444' })
+        .run()
+      writeFileSync(join(generated, 'fixlibrary.xml'), '<x/>')
+      for (const step of ['b.writeXml', 'b.import', 'b.export'] as const) await done(step)
+      return path
+    }
+
+    it('ends the wizard when every hot cue is in place and the grid is the one read before', async () => {
+      // Arrange
+      const path = await atCueCheck()
+      writeExport([path], true, '<POSITION_MARK Name="Drop 1" Type="0" Start="61.952" Num="3"/>')
+
+      // Act
+      const result = await checkWizardCues(dependencies())
+
+      // Assert
+      expect(result).toMatchObject({
+        ok: true,
+        value: { verdict: { clean: true }, state: { step: 'doneB' } }
+      })
+    })
+
+    it('names a hot cue that is not in place, and a grid Rekordbox moved', async () => {
+      // Arrange
+      const path = await atCueCheck()
+      writeExport(
+        [path],
+        true,
+        '<POSITION_MARK Name="Drop 1" Type="0" Start="61.940" Num="3"/>',
+        '125'
+      )
+
+      // Act
+      const result = await checkWizardCues(dependencies())
+
+      // Assert
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          verdict: {
+            clean: false,
+            mismatches: {
+              count: 1,
+              items: [{ slot: 4, expectedMs: 61_960, foundMs: 61_940, path }]
+            },
+            gridChanged: { count: 1, items: [{ path }] }
+          },
+          state: { step: 'b.check' }
+        }
+      })
+    })
+
+    it('does not pass when no hot cue was placed, since nothing was checked', async () => {
+      // Arrange
+      const path = await atCueCheck()
+      testDatabase.db.delete(cues).run()
+      writeExport([path], true)
+
+      // Act
+      const result = await checkWizardCues(dependencies())
+
+      // Assert
+      expect(result).toMatchObject({
+        ok: true,
+        value: { verdict: { clean: false, noCues: true }, state: { step: 'b.check' } }
+      })
+    })
+
+    it('still finds the moved grid on a second check of the same export', async () => {
+      // Arrange
+      const path = await atCueCheck()
+      writeExport(
+        [path],
+        true,
+        '<POSITION_MARK Name="Drop 1" Type="0" Start="61.952" Num="3"/>',
+        '125'
+      )
+      await checkWizardCues(dependencies())
+      clock += 5_000
+
+      // Act
+      const result = await checkWizardCues(dependencies())
+
+      // Assert
+      expect(result).toMatchObject({
+        ok: true,
+        value: { verdict: { clean: false, gridChanged: { count: 1 } } }
+      })
+    })
+
+    it('does not take the XML of phase B as written before its step', async () => {
+      // Arrange
+      await atCueCheck()
+      await applyWizardAction(dependencies(), { type: 'goTo', step: 'b.writeXml' })
+
+      // Act
+      clock = Date.now() + 60_000
+      await applyWizardAction(dependencies(), { type: 'goTo', step: 'b.writeXml' })
+      const result = await applyWizardAction(dependencies(), {
+        type: 'complete',
+        step: 'b.writeXml'
+      })
+
+      // Assert
+      expect(result).toEqual({ ok: false, code: 'XML_NOT_FOUND' })
     })
   })
 })

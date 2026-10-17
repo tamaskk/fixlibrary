@@ -1,7 +1,7 @@
 // The steps of the Rekordbox wizard (T-027) and what the app keeps of where the user
 // is in it. The texts of the steps are the page's (`pages/rekordbox-wizard-steps.ts`).
 import { z } from 'zod'
-import type { RekordboxExportCheck } from './rekordbox'
+import type { CheckedList, CheckedTrack, RekordboxExportCheck } from './rekordbox'
 
 /** The one-time setup of Rekordbox: shown only until it was done once. */
 export const SETUP_STEPS = ['setup.showXml', 'setup.importedLibrary'] as const
@@ -26,8 +26,8 @@ export const WIZARD_STEPS = [...SETUP_STEPS, ...PHASE_A_STEPS, ...PHASE_B_STEPS]
 
 export type WizardStep = (typeof WIZARD_STEPS)[number]
 
-/** True while phase B cannot be done: no track has hot cues yet. */
-export const PHASE_B_LOCKED = true
+/** True while phase B cannot be done. Open since the cues of T-029. */
+export const PHASE_B_LOCKED = false
 
 export const wizardStepSchema = z.enum(WIZARD_STEPS)
 
@@ -38,7 +38,7 @@ export const wizardStepSchema = z.enum(WIZARD_STEPS)
  */
 export const wizardStateSchema = z.object({
   setupDone: z.boolean(),
-  step: z.union([wizardStepSchema, z.literal('doneA')]),
+  step: z.union([wizardStepSchema, z.literal('doneA'), z.literal('doneB')]),
   /** When the current step was reached, in ms since the epoch. */
   enteredAt: z.number().default(0),
   /** When the export step of phase A was last reached; an older export is not checked. */
@@ -106,4 +106,33 @@ export interface WizardView {
   /** Where Rekordbox is to export its collection. */
   exportFolder: string
   phaseBLocked: boolean
+}
+
+/** A hot cue that is not where the app placed it in the export. */
+export interface CueMismatch {
+  trackId: number
+  path: string
+  /** 1 is A. */
+  slot: number
+  expectedMs: number
+  /** Where the export has it, or null when it has none in that slot. */
+  foundMs: number | null
+}
+
+/** What the check of phase B found: the hot cues not in place, the grids Rekordbox moved. */
+export interface CueVerdict {
+  clean: boolean
+  /** The app has placed no hot cue on any track of the library, so nothing was checked. */
+  noCues: boolean
+  mismatches: CheckedList<CueMismatch>
+  /** Tracks whose grid in the export is not the one the app read before (T-026). */
+  gridChanged: CheckedList<CheckedTrack>
+  holds: CheckHold[]
+}
+
+/** What checking the export of phase B did. */
+export interface WizardCueCheckResult {
+  check: RekordboxExportCheck
+  verdict: CueVerdict
+  state: WizardState
 }

@@ -75,3 +75,31 @@ export function compareCues(
   }
   return mismatches
 }
+
+/** A beat marker as a grid is compared: the time and the tempo, and the beat of its bar. */
+export interface GridMarker {
+  inizio: number
+  bpm: number
+  battito: number
+}
+
+// How far a marker may be from the one read before and still be the same: Rekordbox
+// writes the time to the millisecond and the tempo to two places.
+const GRID_TIME_TOLERANCE_S = 0.0015
+const GRID_BPM_TOLERANCE = 0.006
+
+/** True when Rekordbox's grid in an export is the one the app read before. */
+export function sameGrid(before: readonly GridMarker[], after: readonly GridMarker[]): boolean {
+  return (
+    before.length === after.length &&
+    before.every((marker, index) => {
+      const other = after[index]
+      return (
+        other !== undefined &&
+        Math.abs(other.inizio - marker.inizio) <= GRID_TIME_TOLERANCE_S &&
+        Math.abs(other.bpm - marker.bpm) <= GRID_BPM_TOLERANCE &&
+        other.battito === marker.battito
+      )
+    })
+  )
+}

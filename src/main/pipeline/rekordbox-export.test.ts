@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { XMLParser } from 'fast-xml-parser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { saveAnalysis } from '../db/analyses'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { cues, playlists, playlistTracks } from '../db/schema'
 import { setSetting } from '../db/settings'
@@ -52,7 +53,7 @@ function readXml(path: string): ParsedXml {
   return new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '',
-    isArray: (name) => ['TRACK', 'NODE', 'POSITION_MARK'].includes(name)
+    isArray: (name) => ['TRACK', 'NODE', 'POSITION_MARK', 'TEMPO'].includes(name)
   }).parse(readFileSync(path, 'utf8')) as ParsedXml
 }
 
@@ -239,5 +240,35 @@ describe('exportRekordboxXml', () => {
       ok: true,
       value: { path: join(chosen, 'fixlibrary.xml'), tracks: 0 }
     })
+  })
+
+  it('writes back the grid Rekordbox analysed, so an import keeps it', async () => {
+    // Arrange
+    const id = addTrack('/Music/a.mp3')
+    saveAnalysis(testDatabase.db, {
+      trackId: id,
+      type: 'rb_grid',
+      result: {
+        tempos: [
+          { inizio: 0.025, bpm: 124, metro: '4/4', battito: 1 },
+          { inizio: 92.312, bpm: 124.5, metro: '4/4', battito: 3 }
+        ],
+        exportedAt: 1,
+        readAt: 2
+      },
+      analyzerVersion: 'rekordbox-xml'
+    })
+
+    // Act
+    const written = await exportRekordboxXml(dependencies())
+
+    // Assert
+    if (!written.ok) throw new Error(written.code)
+    expect(readFileSync(written.value.path, 'utf8')).toContain(
+      '<TEMPO Inizio="0.025" Bpm="124.00" Metro="4/4" Battito="1"/>'
+    )
+    expect(readXml(written.value.path).DJ_PLAYLISTS.COLLECTION.TRACK?.[0]?.['TEMPO']).toHaveLength(
+      2
+    )
   })
 })

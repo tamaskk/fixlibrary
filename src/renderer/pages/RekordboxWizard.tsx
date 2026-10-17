@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { WizardCheckResult } from '@/components/features/rekordbox/WizardCheckResult'
+import { WizardCueResult } from '@/components/features/rekordbox/WizardCueResult'
 import { WizardStepList } from '@/components/features/rekordbox/WizardStepList'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -12,6 +13,7 @@ import type {
   CopyablePath,
   WizardAction,
   WizardCheckResult as CheckResult,
+  WizardCueCheckResult,
   WizardStep,
   WizardView
 } from '@shared/rekordbox-wizard'
@@ -50,6 +52,7 @@ export function RekordboxWizard(): React.JSX.Element {
   const [busy, setBusy] = React.useState<'action' | 'write' | 'check' | 'copy' | null>(null)
   const [said, setSaid] = React.useState<Said>(null)
   const [checked, setChecked] = React.useState<CheckResult | null>(null)
+  const [cueChecked, setCueChecked] = React.useState<WizardCueCheckResult | null>(null)
 
   // Asked once on opening, and again on "Próbáld újra"; an answer that comes after the
   // page was left is dropped.
@@ -85,6 +88,7 @@ export function RekordboxWizard(): React.JSX.Element {
           : current
       )
       setChecked(null)
+      setCueChecked(null)
     } catch {
       setSaid({ tone: 'danger', text: errorMessage('UNEXPECTED') })
     } finally {
@@ -124,6 +128,29 @@ export function RekordboxWizard(): React.JSX.Element {
       )
     } catch {
       setSaid({ tone: 'danger', text: 'Az útvonal nem másolható.' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function checkCues(): Promise<void> {
+    setBusy('check')
+    setSaid(null)
+    setCueChecked(null)
+    try {
+      const result = await window.api.rekordbox.wizardCueCheck()
+      if (!result.ok) {
+        setSaid({ tone: 'danger', text: describeError(result.code, 'check') })
+        return
+      }
+      setCueChecked(result.value)
+      setLoaded((current) =>
+        current.status === 'ready'
+          ? { status: 'ready', view: { ...current.view, state: result.value.state } }
+          : current
+      )
+    } catch {
+      setSaid({ tone: 'danger', text: errorMessage('UNEXPECTED') })
     } finally {
       setBusy(null)
     }
@@ -181,7 +208,19 @@ export function RekordboxWizard(): React.JSX.Element {
               onGoTo={(step) => void act({ type: 'goTo', step })}
             />
             <div className="flex max-w-form min-w-0 flex-1 flex-col gap-4">
-              {loaded.view.state.step === 'doneA' ? (
+              {loaded.view.state.step === 'doneB' ? (
+                <Card className="flex flex-col gap-4">
+                  <h2 className="text-h2">A hot cue-k bent vannak a Rekordboxban</h2>
+                  <p className="text-body text-text-muted">
+                    Minden hot cue a helyén van (±10 ms), és a Rekordbox gridje nem változott.
+                  </p>
+                  <div>
+                    <Button disabled={busy !== null} onClick={() => void act({ type: 'restart' })}>
+                      Újrakezdés az A fázistól
+                    </Button>
+                  </div>
+                </Card>
+              ) : loaded.view.state.step === 'doneA' ? (
                 <Card className="flex flex-col gap-4">
                   <h2 className="text-h2">Az A fázis kész</h2>
                   <p className="text-body text-text-muted">
@@ -205,11 +244,13 @@ export function RekordboxWizard(): React.JSX.Element {
                   view={loaded.view}
                   busy={busy}
                   checked={checked}
+                  cueChecked={cueChecked}
                   onComplete={(step) => void act({ type: 'complete', step })}
                   onRepeat={(step) => void act({ type: 'goTo', step })}
                   onWrite={() => void writeXml()}
                   onCopy={(which) => void copyPath(which)}
                   onCheck={() => void checkExport()}
+                  onCueCheck={() => void checkCues()}
                 />
               )}
               <div role="status">
@@ -228,11 +269,13 @@ type StepCardProps = {
   view: WizardView
   busy: 'action' | 'write' | 'check' | 'copy' | null
   checked: CheckResult | null
+  cueChecked: WizardCueCheckResult | null
   onComplete: (step: WizardStep) => void
   onRepeat: (step: WizardStep) => void
   onWrite: () => void
   onCopy: (which: CopyablePath) => void
   onCheck: () => void
+  onCueCheck: () => void
 }
 
 /** The step the user is at: what to do, what the app does for it, and "Kész". */
@@ -241,15 +284,19 @@ function StepCard({
   view,
   busy,
   checked,
+  cueChecked,
   onComplete,
   onRepeat,
   onWrite,
   onCopy,
-  onCheck
+  onCheck,
+  onCueCheck
 }: StepCardProps): React.JSX.Element {
   const text = WIZARD_STEP_TEXTS[step]
   // The XML must be written in this step before it counts as done; the check moves on by itself.
-  const canComplete = step === 'a.writeXml' ? view.xmlWritten : step !== 'a.check'
+  const writesXml = step === 'a.writeXml' || step === 'b.writeXml'
+  const isCheck = step === 'a.check' || step === 'b.check'
+  const canComplete = writesXml ? view.xmlWritten : !isCheck
   return (
     <Card className="flex flex-col gap-4">
       <h2 className="text-h2">{text.title}</h2>
@@ -272,7 +319,7 @@ function StepCard({
           </div>
         </div>
       )}
-      {step === 'a.export' && (
+      {(step === 'a.export' || step === 'b.export') && (
         <div className="flex flex-col gap-2">
           <PathLine path={view.exportFolder} />
           <div>
@@ -286,7 +333,7 @@ function StepCard({
           </div>
         </div>
       )}
-      {step === 'a.writeXml' && (
+      {writesXml && (
         <div>
           <Button loading={busy === 'write'} disabled={busy !== null} onClick={onWrite}>
             XML írása
@@ -300,11 +347,21 @@ function StepCard({
           </Button>
         </div>
       )}
+      {step === 'b.check' && (
+        <div>
+          <Button loading={busy === 'check'} disabled={busy !== null} onClick={onCueCheck}>
+            Hot cue-k ellenőrzése
+          </Button>
+        </div>
+      )}
       {text.note !== null && <p className="text-small text-text-muted">{text.note}</p>}
       {step === 'a.check' && checked !== null && (
         <WizardCheckResult result={checked} onRepeat={onRepeat} disabled={busy !== null} />
       )}
-      {step !== 'a.check' && (
+      {step === 'b.check' && cueChecked !== null && (
+        <WizardCueResult result={cueChecked} onRepeat={onRepeat} disabled={busy !== null} />
+      )}
+      {!isCheck && (
         <div className="flex items-center gap-4">
           <Button
             variant="primary"

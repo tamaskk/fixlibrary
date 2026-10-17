@@ -87,6 +87,7 @@ const api: FixLibraryApi = {
     wizardView: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardView),
     wizardAction: (action) => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardAction, action),
     wizardCheck: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardCheck),
+    wizardCueCheck: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardCueCheck),
     copyPath: (which) => ipcRenderer.invoke(IPC_CHANNELS.rekordboxCopyPath, which)
   }
 }

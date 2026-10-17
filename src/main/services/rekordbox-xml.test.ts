@@ -50,6 +50,7 @@ function track(id: number, overrides: Partial<XmlTrack> = {}): XmlTrack {
     averageBpm: 124,
     tonality: 'Am',
     path: `/Volumes/DJ/Music/Melodic House/Bicep - Track ${id}.mp3`,
+    tempos: [],
     cues: [],
     ...overrides
   }

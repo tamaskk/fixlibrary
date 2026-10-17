@@ -4,6 +4,7 @@ const STAGE_LABELS: Readonly<Record<string, string>> = {
   lookup: 'Online lookup',
   bpmKey: 'BPM és key elemzés',
   stems: 'Stem-elemzés',
+  cues: 'Hot cue-k felismerése',
   naming: 'Fájlnév és névtisztítás',
   rename: 'Átnevezés',
   writeTags: 'Tagek írása',

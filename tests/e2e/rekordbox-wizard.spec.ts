@@ -50,7 +50,7 @@ test.afterEach(() => {
   rmSync(folder, { recursive: true, force: true })
 })
 
-test('the wizard is walked through phase A, goes on where it was after a restart, and passes a clean export', async () => {
+test('the wizard is walked through phase A and B, goes on where it was after a restart, passes a clean export and holds phase B without cues', async () => {
   const first = await launch()
   try {
     const { app, page } = first
@@ -109,10 +109,38 @@ test('the wizard is walked through phase A, goes on where it was after a restart
       '<?xml version="1.0" encoding="UTF-8"?><DJ_PLAYLISTS Version="1.0.0"><COLLECTION Entries="0"/></DJ_PLAYLISTS>'
     )
     await page.getByRole('button', { name: 'Export ellenőrzése', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Az A fázis kész' })).toBeVisible()
+
+    // Phase B: the hot cues.
     await expect(
-      page.getByText('A hot cue-k (B fázis) a cue-k felismerésével jönnek.')
+      page.getByRole('heading', { name: 'Az XML megírása a hot cue-kkal' })
     ).toBeVisible()
+    await expect(done).toBeDisabled()
+    // The check just read an XML: a write within two seconds of it is turned away.
+    await expect(async () => {
+      await page.getByRole('button', { name: 'XML írása', exact: true }).click()
+      await expect(page.getByText('Az XML elkészült.')).toBeVisible({ timeout: 1000 })
+    }).toPass({ timeout: 10_000 })
+    await done.click()
+    await expect(page.getByRole('heading', { name: 'Hot cue-k importja' })).toBeVisible()
+    await done.click()
+    await expect(page.getByRole('heading', { name: 'A collection exportja' })).toBeVisible()
+    await done.click()
+    await expect(page.getByRole('heading', { name: 'A hot cue-k ellenőrzése' })).toBeVisible()
+    // Exported after the export step was reached: an older export would not pass.
+    writeFileSync(
+      join(folder, 'Exports', 'rekordbox.xml'),
+      '<?xml version="1.0" encoding="UTF-8"?><DJ_PLAYLISTS Version="1.0.0"><COLLECTION Entries="0"/></DJ_PLAYLISTS>'
+    )
+    // The XML was written moments ago: a check within two seconds of it is turned away.
+    // The library is empty, so no hot cue was placed and the check cannot pass; a clean
+    // check with cues is the unit tests' (rekordbox-wizard.test.ts).
+    await expect(async () => {
+      await page.getByRole('button', { name: 'Hot cue-k ellenőrzése', exact: true }).click()
+      await expect(page.getByText('Még nincs elhelyezett hot cue.', { exact: false })).toBeVisible({
+        timeout: 1000
+      })
+    }).toPass({ timeout: 10_000 })
+    await expect(page.getByRole('heading', { name: 'A hot cue-k ellenőrzése' })).toBeVisible()
   } finally {
     await second.app.close()
   }

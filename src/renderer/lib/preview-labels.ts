@@ -7,7 +7,10 @@ export const WARNING_LABELS: Readonly<Record<PreviewWarning, string>> = {
   LOW_BITRATE: 'Alacsony bitrate',
   CANNOT_NORMALIZE: 'Nem normalizálható',
   UNSORTED: 'Nincs stílusa (Unsorted)',
-  NO_COVER: 'Nem található borító'
+  NO_COVER: 'Nem található borító',
+  CUE_REVIEW: 'A cue-k sorrendje nem stimmelt, egy slot üresen maradt',
+  NO_GRID: 'Nincs Rekordbox grid: előbb a Rekordbox varázsló A fázisa kell',
+  NO_CUES: 'Nem található cue, a meglévők maradnak'
 }
 
 export const SOURCE_LABELS: Readonly<Record<FieldSource, string>> = {

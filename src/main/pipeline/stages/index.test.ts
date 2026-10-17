@@ -229,6 +229,7 @@ describe('the demo stages', () => {
         secondaryStyleId: null,
         genre: null,
         folder: null,
+        cues: null,
         energy: null,
         cover: null
       },

@@ -17,6 +17,8 @@ export const STAGE_TIMEOUTS_MS = {
   bpmKey: 120 * SECOND,
   energy: 120 * SECOND,
   demucs: 15 * MINUTE,
+  // The rules over the envelopes of one track; the sidecar reads a file of some 50 KB.
+  cues: 60 * SECOND,
   convert: 120 * SECOND,
   // One call to the sidecar that copies a file and changes its tags.
   tags: 120 * SECOND,

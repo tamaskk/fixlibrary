@@ -10,6 +10,7 @@ function statusOf(step: WizardStep, state: WizardState, phaseBLocked: boolean): 
   if (step.startsWith('setup.') && state.setupDone && state.step !== step) return 'done'
   if (state.step === step) return 'current'
   if (state.step === 'doneA') return step.startsWith('a.') ? 'done' : 'upcoming'
+  if (state.step === 'doneB') return 'done'
   return WIZARD_STEPS.indexOf(step) < WIZARD_STEPS.indexOf(state.step) ? 'done' : 'upcoming'
 }
 

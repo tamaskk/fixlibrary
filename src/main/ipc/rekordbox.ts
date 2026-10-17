@@ -3,6 +3,7 @@ import { exportRekordboxXml, type RekordboxExportDependencies } from '../pipelin
 import { readRekordboxExport, type RekordboxImportDependencies } from '../pipeline/rekordbox-import'
 import {
   applyWizardAction,
+  checkWizardCues,
   checkWizardExport,
   pathToCopy,
   readWizardView
@@ -11,7 +12,12 @@ import { copyText } from '../services/clipboard'
 import type { Result } from '@shared/errors'
 import { IPC_CHANNELS } from '@shared/ipc'
 import type { RekordboxExportCheck, RekordboxXmlWritten } from '@shared/rekordbox'
-import { COPYABLE_PATHS, type WizardCheckResult, type WizardState } from '@shared/rekordbox-wizard'
+import {
+  COPYABLE_PATHS,
+  type WizardCheckResult,
+  type WizardCueCheckResult,
+  type WizardState
+} from '@shared/rekordbox-wizard'
 import { handleIpc } from './handle'
 
 // Each XML call reads the whole library on the main process: not more often than this.
@@ -63,6 +69,11 @@ export function registerRekordboxIpc(
     IPC_CHANNELS.rekordboxWizardCheck,
     z.tuple([]),
     (): Promise<Result<WizardCheckResult>> => once(() => checkWizardExport(dependencies))
+  )
+  handleIpc(
+    IPC_CHANNELS.rekordboxWizardCueCheck,
+    z.tuple([]),
+    (): Promise<Result<WizardCueCheckResult>> => once(() => checkWizardCues(dependencies))
   )
   handleIpc(IPC_CHANNELS.rekordboxCopyPath, z.tuple([z.enum(COPYABLE_PATHS)]), (_event, which) => {
     if (now() - lastCopyAt < MIN_COPY_INTERVAL_MS) return false

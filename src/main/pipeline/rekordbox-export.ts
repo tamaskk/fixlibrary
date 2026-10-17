@@ -1,6 +1,7 @@
 // Writes the Rekordbox XML of the library (T-025): which tracks go in, what each says,
 // the playlists of the styles and of the user, and the hot cues in the fixed scheme.
 import { basename, extname } from 'path'
+import { listAnalysesOfType } from '../db/analyses'
 import { listAllCues, type Cue } from '../db/cues'
 import type { AppDatabase } from '../db/connection'
 import { listPlaylistsWithTracks } from '../db/playlists'
@@ -11,6 +12,7 @@ import {
   saveRekordboxXml,
   writeRekordboxXml,
   type XmlCue,
+  type XmlTempo,
   type XmlTrack,
   type XmlTrackKind
 } from '../services/rekordbox-xml'
@@ -20,6 +22,7 @@ import { AppError, type Result } from '@shared/errors'
 import type { RekordboxXmlWritten } from '@shared/rekordbox'
 import type { Settings } from '@shared/settings'
 import { readSettings, resolveEffectiveSettings, type SettingsEnvironment } from './settings'
+import { rbGridSchema } from './rekordbox-import'
 import { styleComment } from './stages/style-tags'
 import { titleWithMix } from './stages/write-tags'
 
@@ -51,11 +54,18 @@ function cuesOf(cues: readonly Cue[], hotCues: Settings['hotCues']): XmlCue[] {
   })
 }
 
+/** The grid of a track as `rb_grid` keeps it; none when it cannot be read. */
+function gridOf(stored: unknown): XmlTempo[] {
+  const parsed = rbGridSchema.safeParse(stored)
+  return parsed.success ? parsed.data.tempos : []
+}
+
 /** What the XML says of a track: what its tags say, and its primary style as the genre. */
 export function xmlTrackOf(
   track: Track,
   styleNames: ReadonlyMap<number, string>,
-  cues: readonly XmlCue[]
+  cues: readonly XmlCue[],
+  tempos: readonly XmlTempo[] = []
 ): XmlTrack {
   const title = text(track.title)
   const mix = text(track.mix)
@@ -83,6 +93,7 @@ export function xmlTrackOf(
     averageBpm: track.bpm,
     tonality: text(track.musicalKey),
     path: track.path,
+    tempos,
     cues
   }
 }
@@ -121,6 +132,8 @@ export async function exportRekordboxXml(
   const included = new Set(tracks.map((track) => track.id))
   const styles = listStyles(db)
   const styleNames = new Map(styles.map((style) => [style.id, style.name]))
+  // Rekordbox's grid of each track, from its export (T-026): an import must not move it.
+  const grids = listAnalysesOfType(db, 'rb_grid')
   const cuesByTrack = new Map<number, Cue[]>()
   for (const cue of listAllCues(db)) {
     const list = cuesByTrack.get(cue.trackId)
@@ -131,7 +144,12 @@ export async function exportRekordboxXml(
   const xml = writeRekordboxXml(
     {
       tracks: tracks.map((track) =>
-        xmlTrackOf(track, styleNames, cuesOf(cuesByTrack.get(track.id) ?? [], settings.hotCues))
+        xmlTrackOf(
+          track,
+          styleNames,
+          cuesOf(cuesByTrack.get(track.id) ?? [], settings.hotCues),
+          gridOf(grids.get(track.id)?.result)
+        )
       ),
       stylePlaylists: styles.map((style) => ({
         name: style.name,

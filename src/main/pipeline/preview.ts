@@ -71,6 +71,9 @@ import {
 } from './stages/cover'
 import { DUPLICATES_STAGE } from './stages/duplicates'
 import { ORGANIZE_FILE_STAGE, ORGANIZE_STAGE } from './stages/organize'
+import { CUES_STAGE } from './stages/cues'
+import { cuesEntryOf, writeTrackCues } from './cues'
+import { readSettings } from './settings'
 import { styleTagsFor } from './stages/style-tags'
 import { createsStyle } from './new-styles'
 import { identifiersSchema } from './stages/lookup'
@@ -139,6 +142,8 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     genre: track.genre,
     // The folder the file is in, by its name: for display only, as the file name.
     folder: track.path === '' ? null : toOneLine(basename(dirname(track.path)), MAX_NAME_LENGTH),
+    // The cues a track had are not in its row: the cues stage keeps them with its proposal.
+    cues: null,
     energy: track.energy,
     // The cover a file holds has no name of the app's: a new one is a change.
     cover: null
@@ -174,6 +179,15 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
       changed,
       source: proposed?.source ?? null,
       confidence
+    }
+  }
+  // The cues the track had, as the cues stage found them when it ran.
+  const cuesBefore = cuesEntryOf(item.after)?.before ?? null
+  if (cuesBefore !== null) {
+    cells.cues = {
+      ...cells.cues,
+      before: cuesBefore,
+      changed: cells.cues.after !== cuesBefore
     }
   }
   const error = trackErrorSchema.safeParse(item.error)
@@ -214,6 +228,8 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
     const identifiers = identifiersSchema.safeParse(
       z.record(z.string(), z.unknown()).safeParse(item.after).data?.['identifiers']
     )
+    // The hot cues the batch placed: written to the track's cues, not to its file.
+    const placedCues = cuesEntryOf(item.after)
     // What the batch wrote into the file's tags is the track's own from then on: the
     // names a lookup found and the naming cleaned. Only then, so that a row never
     // says more than its file.
@@ -231,7 +247,8 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       !fields.styleId &&
       !fields.secondaryStyleId &&
       !fields.genre &&
-      !identifiers.success
+      !identifiers.success &&
+      placedCues === null
     ) {
       return
     }
@@ -334,6 +351,10 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       changes.lockedFields = [...new Set([...track.lockedFields, ...committed])]
     }
     updateTrack(tx, trackId, changes)
+    // Not while the cues are locked as a whole; a slot the user placed by hand stays.
+    if (placedCues !== null && !track.lockedFields.includes('cues')) {
+      writeTrackCues(tx, trackId, placedCues, readSettings(tx).hotCues, track.lockedFields)
+    }
   })
 }
 
@@ -461,7 +482,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
             canRefresh: refreshableStages(batch.id).length > 0,
             findsDuplicates: listJobStageNames(db, batch.id).includes(DUPLICATES_STAGE),
             findsCovers: listJobStageNames(db, batch.id).includes(COVER_STAGE),
-            organizes: listJobStageNames(db, batch.id).includes(ORGANIZE_STAGE)
+            organizes: listJobStageNames(db, batch.id).includes(ORGANIZE_STAGE),
+            placesCues: listJobStageNames(db, batch.id).includes(CUES_STAGE)
           }
         : null,
       canUndo: batchFiles.lastUndoable() !== null

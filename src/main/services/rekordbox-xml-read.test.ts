@@ -140,6 +140,10 @@ describe('parseRekordboxXml', () => {
               averageBpm: null,
               tonality: null,
               path: '/Volumes/DJ/Music/Unsorted/Ünnep - Árvíztűrő #1 100%.mp3',
+              tempos: [
+                { inizio: 0.025, bpm: 124, metro: '4/4', battito: 1 },
+                { inizio: 61.5, bpm: 126.5, metro: '4/4', battito: 3 }
+              ],
               cues: []
             }
           ],
@@ -152,6 +156,13 @@ describe('parseRekordboxXml', () => {
 
     // Assert
     expect(exported.tracks.size).toBe(1)
+    // The grid goes back as it came: an import keeps Rekordbox's own.
+    expect(
+      exported.tracks.get('/Volumes/DJ/Music/Unsorted/Ünnep - Árvíztűrő #1 100%.mp3')?.tempos
+    ).toEqual([
+      { inizio: 0.025, bpm: 124, metro: '4/4', battito: 1 },
+      { inizio: 61.5, bpm: 126.5, metro: '4/4', battito: 3 }
+    ])
     expect(
       exported.tracks.get('/Volumes/DJ/Music/Unsorted/Ünnep - Árvíztűrő #1 100%.mp3')?.trackId
     ).toBe(3)
@@ -230,7 +241,7 @@ function exportOf(tracks: string): string {
 }
 
 describe('parseRekordboxXml, item by item', () => {
-  it('drops a marker that is not what Rekordbox writes and keeps the rest of the grid, one element or many', () => {
+  it('drops the whole grid of a track with a marker that is not what Rekordbox writes, and keeps its cues', () => {
     // Arrange
     const xml = exportOf(
       '<TRACK TrackID="1" Location="file://localhost/a.mp3"><TEMPO Inizio="" Bpm="120" Metro="4/4" Battito="1"/><TEMPO Inizio="1.5" Bpm="120" Metro="4/4" Battito="99"/><TEMPO Inizio="2" Bpm="120" Metro="4/4" Battito="2"/><POSITION_MARK Name="A" Type="0" Start="2" Num="0"/></TRACK>' +
@@ -241,9 +252,7 @@ describe('parseRekordboxXml, item by item', () => {
     const exported = parseRekordboxXml(xml)
 
     // Assert
-    expect(exported.tracks.get('/a.mp3')?.tempos).toEqual([
-      { inizio: 2, bpm: 120, metro: '4/4', battito: 2 }
-    ])
+    expect(exported.tracks.get('/a.mp3')?.tempos).toEqual([])
     expect(exported.tracks.get('/a.mp3')?.positionMarks).toEqual([
       { name: 'A', type: 0, start: 2, num: 0 }
     ])
@@ -251,6 +260,22 @@ describe('parseRekordboxXml, item by item', () => {
     expect(exported.playlists?.children).toEqual([
       { name: 'One', kind: 'playlist', trackIds: [1], children: [] }
     ])
+  })
+
+  it.each([
+    ['a tempo below 20', '<TEMPO Inizio="0" Bpm="19.9" Metro="4/4" Battito="1"/>'],
+    ['a tempo above 999', '<TEMPO Inizio="0" Bpm="999.5" Metro="4/4" Battito="1"/>'],
+    ['a marker past two hours', '<TEMPO Inizio="7200.5" Bpm="120" Metro="4/4" Battito="1"/>'],
+    ['more than 4000 markers', '<TEMPO Inizio="0" Bpm="120" Metro="4/4" Battito="1"/>'.repeat(4001)]
+  ])('has no grid for a track with %s', (_, tempos) => {
+    // Arrange
+    const xml = exportOf(`<TRACK TrackID="1" Location="file://localhost/a.mp3">${tempos}</TRACK>`)
+
+    // Act
+    const exported = parseRekordboxXml(xml)
+
+    // Assert
+    expect(exported.tracks.get('/a.mp3')?.tempos).toEqual([])
   })
 
   it('keeps the entry with a grid of two that name one file', () => {

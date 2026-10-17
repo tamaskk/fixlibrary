@@ -3,20 +3,11 @@ import { StatusLine } from '@/components/ui/status-line'
 import { formatCount, formatDateTime } from '@/lib/format'
 import { WIZARD_STEP_TEXTS } from '@/pages/rekordbox-wizard-steps'
 import type { CheckedList, CheckedTrack } from '@shared/rekordbox'
+import { HOLD_TEXTS } from './check-texts'
 import type { CheckHold, WizardCheckResult as Result, WizardStep } from '@shared/rekordbox-wizard'
 
-const HOLD_TEXTS: Readonly<Record<CheckHold, (count: number) => string>> = {
-  stale: () =>
-    'Ez az export régebbi, mint az export lépése. Exportáld újra a collectiont, és ellenőrizd újra.',
-  unavailable: (count) =>
-    `${formatCount(count)} bejegyzés nem csatlakoztatott lemezen van, ezek nincsenek ellenőrizve. Csatlakoztasd a lemezt, és ellenőrizd újra.`,
-  unchecked: (count) =>
-    `${formatCount(count)} bejegyzést nem lehetett ellenőrizni (hálózati mappa vagy olvasási hiba).`,
-  skipped: (count) => `${formatCount(count)} bejegyzés nem olvasható.`
-}
-
 /** The first entries of a list the check found, with how many more there are. */
-function Entries({ list }: { list: CheckedList<CheckedTrack | string> }): React.JSX.Element {
+export function Entries({ list }: { list: CheckedList<CheckedTrack | string> }): React.JSX.Element {
   const more = list.count - list.items.length
   return (
     <ul className="flex flex-col gap-1 pl-6">
