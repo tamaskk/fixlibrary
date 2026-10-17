@@ -113,7 +113,8 @@ export function BatchPreview(): React.JSX.Element {
       : columnsFor(batch.type, {
           covers: batch.findsCovers,
           folders: batch.organizes,
-          cues: batch.placesCues
+          cues: batch.placesCues,
+          loudness: batch.normalizes
         })
 
   return (

@@ -244,6 +244,7 @@ function startPythonSidecar(): void {
     // The sidecar decodes and fingerprints with the app's own tools and with nothing else.
     ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command,
     fpcalcPath: resolveToolCommand('fpcalc', locations)?.command,
+    mp3gainPath: resolveToolCommand('mp3gain', locations)?.command,
     coversDir: coversFolder(),
     stemsDir: stemsFolder(),
     modelsDir: modelsFolder(),
@@ -306,6 +307,7 @@ function availableStages(db: AppDatabase): Stage[] {
       db,
       python: () => pythonBridge,
       bpmRange: () => readSettings(db).analysis,
+      loudnessSettings: () => readSettings(db).loudness,
       cache,
       // Without an AcoustID key a fingerprint has nowhere to go.
       wanted: () => secret('acoustid') !== undefined,

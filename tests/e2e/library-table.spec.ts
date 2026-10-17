@@ -106,6 +106,7 @@ test('tracks are selected with click, Shift, Cmd and Cmd+A', async () => {
       'Hot cue-k felismerése',
       'Stílusbesorolás',
       'Borító keresése',
+      'Hangerő-normalizálás',
       'Fájlnév és névtisztítás',
       'Duplikátumok keresése',
       'Mappába rendezés',

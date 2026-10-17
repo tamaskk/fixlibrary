@@ -72,7 +72,9 @@ import {
 import { DUPLICATES_STAGE } from './stages/duplicates'
 import { ORGANIZE_FILE_STAGE, ORGANIZE_STAGE } from './stages/organize'
 import { CUES_STAGE } from './stages/cues'
+import { NORMALIZE_STAGE } from './stages/normalize'
 import { cuesEntryOf, writeTrackCues } from './cues'
+import { normalizeEntryOf } from './normalize'
 import { readSettings } from './settings'
 import { styleTagsFor } from './stages/style-tags'
 import { createsStyle } from './new-styles'
@@ -146,7 +148,11 @@ function valuesBefore(before: unknown): Record<PreviewField, PreviewValue> {
     cues: null,
     energy: track.energy,
     // The cover a file holds has no name of the app's: a new one is a change.
-    cover: null
+    cover: null,
+    // What was measured is the normalize stage's to say: it keeps it with its plan.
+    lufs: null,
+    truePeak: null,
+    gain: null
   }
 }
 
@@ -190,6 +196,16 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
       changed: cells.cues.after !== cuesBefore
     }
   }
+  // What the track measured when the batch ran, as the normalize stage kept it.
+  const normalized = normalizeEntryOf(item.after)
+  if (normalized !== null) {
+    for (const [field, measured] of [
+      ['lufs', normalized.measuredLufs],
+      ['truePeak', normalized.measuredTruePeakDbtp]
+    ] as const) {
+      cells[field] = { ...cells[field], before: measured, changed: cells[field].after !== measured }
+    }
+  }
   const error = trackErrorSchema.safeParse(item.error)
   return {
     trackId: item.trackId,
@@ -206,7 +222,17 @@ export function buildPreviewRow(item: BatchItem): PreviewRow {
     newStyle:
       proposal.fields?.styleId?.source === 'claude' && proposal.fields.styleId.value === null
         ? (styleDetailsOf(item.after)?.newPrimary ?? null)
-        : null
+        : null,
+    normalization:
+      normalized === null
+        ? null
+        : {
+            kind: normalized.plan.kind,
+            action: normalized.plan.action,
+            neededGainDb: normalized.plan.action === 'skip' ? normalized.plan.neededGainDb : null,
+            possibleGainDb:
+              normalized.plan.action === 'skip' ? normalized.plan.possibleGainDb : null
+          }
   }
 }
 
@@ -483,7 +509,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
             findsDuplicates: listJobStageNames(db, batch.id).includes(DUPLICATES_STAGE),
             findsCovers: listJobStageNames(db, batch.id).includes(COVER_STAGE),
             organizes: listJobStageNames(db, batch.id).includes(ORGANIZE_STAGE),
-            placesCues: listJobStageNames(db, batch.id).includes(CUES_STAGE)
+            placesCues: listJobStageNames(db, batch.id).includes(CUES_STAGE),
+            normalizes: listJobStageNames(db, batch.id).includes(NORMALIZE_STAGE)
           }
         : null,
       canUndo: batchFiles.lastUndoable() !== null

@@ -24,7 +24,10 @@ export const PREVIEW_FIELDS = [
   'folder',
   'cues',
   'energy',
-  'cover'
+  'cover',
+  'lufs',
+  'truePeak',
+  'gain'
 ] as const
 export type PreviewField = (typeof PREVIEW_FIELDS)[number]
 
@@ -131,7 +134,13 @@ export const previewValueSchemas = {
     .nullable(),
   energy: z.number().int().min(1).max(10).nullable(),
   /** The name of a cover the app made, to be embedded; a track's own cover has none. */
-  cover: z.string().regex(COVER_NAMES.cover).nullable()
+  cover: z.string().regex(COVER_NAMES.cover).nullable(),
+  /** The integrated loudness in LUFS: as measured, and as the normalization will make it. */
+  lufs: z.number().min(-70).max(10).nullable(),
+  /** The true peak in dBTP, as measured and after the normalization. */
+  truePeak: z.number().min(-200).max(40).nullable(),
+  /** The gain the normalization applies, in dB. */
+  gain: z.number().min(-40).max(40).nullable()
 } as const satisfies Record<PreviewField, z.ZodType>
 
 export type PreviewValue = string | number | null
@@ -160,7 +169,10 @@ const proposedFieldsSchema = z
     folder: z.object({ value: previewValueSchemas.folder, ...provenance }),
     cues: z.object({ value: previewValueSchemas.cues, ...provenance }),
     energy: z.object({ value: previewValueSchemas.energy, ...provenance }),
-    cover: z.object({ value: previewValueSchemas.cover, ...provenance })
+    cover: z.object({ value: previewValueSchemas.cover, ...provenance }),
+    lufs: z.object({ value: previewValueSchemas.lufs, ...provenance }),
+    truePeak: z.object({ value: previewValueSchemas.truePeak, ...provenance }),
+    gain: z.object({ value: previewValueSchemas.gain, ...provenance })
   })
   .partial()
 
@@ -255,6 +267,19 @@ export interface PreviewRow {
    * the batch is approved. Null when the proposed style is one of the list.
    */
   newStyle: string | null
+  /** What the normalization plans for the track, or null when the batch plans none. */
+  normalization: PreviewNormalization | null
+}
+
+/** How a row is normalized: the method, and for a track that is skipped, the gains. */
+export interface PreviewNormalization {
+  /** mp3gain in steps, an MP3 encoded again, or the samples of an AIFF or WAV. */
+  kind: 'mp3gain' | 'reencode' | 'pcm'
+  /** `apply`: the gain is applied; `none`: at its target already; `skip`: it would clip. */
+  action: 'apply' | 'none' | 'skip'
+  /** For a track that is skipped: the gain it needed, and the most it could have had. */
+  neededGainDb: number | null
+  possibleGainDb: number | null
 }
 
 export const PREVIEW_FILTERS = ['all', 'warnings', 'lowConfidence', 'duplicates', 'errors'] as const
@@ -350,6 +375,8 @@ export interface PreviewBatch {
   organizes: boolean
   /** True when the batch places hot cues: the "Cue-k" column is shown. */
   placesCues: boolean
+  /** True when the batch normalizes the loudness: its columns are shown. */
+  normalizes: boolean
 }
 
 /** How many rows one `preview:coverThumbs` call may ask about: about two screens. */

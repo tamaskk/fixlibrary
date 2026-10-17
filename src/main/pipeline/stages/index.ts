@@ -14,7 +14,13 @@ import { createCuesStage, type CuesStageDependencies } from './cues'
 import { createDuplicatesStage, type DuplicatesStageDependencies } from './duplicates'
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
+import { createLoudnessStage } from './loudness'
 import { createNamingStage } from './naming'
+import {
+  createNormalizeFileStage,
+  createNormalizeStage,
+  type NormalizeStageDependencies
+} from './normalize'
 import { createOrganizeFileStage, createOrganizeStage } from './organize'
 import { createRenameStage } from './rename'
 import { createSetAsideStage } from './set-aside'
@@ -30,6 +36,7 @@ export type StageDependencies = BpmKeyStageDependencies &
   DuplicatesStageDependencies &
   FingerprintStageDependencies &
   LookupStageDependencies &
+  NormalizeStageDependencies &
   StemsStageDependencies &
   StyleStageDependencies
 
@@ -43,6 +50,8 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createCuesStage(dependencies),
     createStyleStage(dependencies),
     createCoverStage(dependencies),
+    createLoudnessStage(dependencies),
+    createNormalizeStage(dependencies),
     createNamingStage(),
     createDuplicatesStage(dependencies),
     // After the duplicates: a copy that is set aside goes into no style folder.
@@ -52,6 +61,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createRedrawPlaceholderStage(dependencies),
     createWriteTagsStage(dependencies),
     createEmbedCoverStage(dependencies),
+    createNormalizeFileStage(dependencies),
     createRenameStage(),
     createOrganizeFileStage(dependencies),
     createSetAsideStage()

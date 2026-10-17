@@ -33,12 +33,16 @@ function row(trackId: number, overrides: Partial<PreviewRow> = {}): PreviewRow {
       folder: CELL,
       cues: CELL,
       energy: CELL,
-      cover: CELL
+      cover: CELL,
+      lufs: CELL,
+      truePeak: CELL,
+      gain: CELL
     },
     warnings: [],
     excluded: false,
     error: null,
     newStyle: null,
+    normalization: null,
     ...overrides
   }
 }
@@ -61,7 +65,8 @@ const WAITING: PreviewState = {
     findsDuplicates: false,
     findsCovers: false,
     organizes: false,
-    placesCues: false
+    placesCues: false,
+    normalizes: false
   },
   canUndo: false
 }
