@@ -6,6 +6,9 @@ import type { PlaylistAction, PlaylistSummary, PlaylistView } from '@shared/play
 export type PlaylistNotice =
   { kind: 'skipped'; count: number } | { kind: 'failed'; code: ErrorCode }
 
+/** What an edit came to, for the place that asked for it. */
+export type PlaylistEditOutcome = { ok: true; skipped: number } | { ok: false; code: ErrorCode }
+
 interface PlaylistsState {
   playlists: PlaylistSummary[]
   /** False until the list was read once; true also when that failed. */
@@ -17,11 +20,18 @@ interface PlaylistsState {
   viewFailed: boolean
   /** True while an edit is on its way. */
   editing: boolean
+  /** What the last edit made on the Playlists page said. */
   notice: PlaylistNotice | null
   load: () => Promise<void>
   select: (playlistId: number) => Promise<void>
-  /** Sends an edit; true when it was made. */
-  edit: (action: PlaylistAction) => Promise<boolean>
+  /**
+   * Sends an edit. From the page (`fromLibrary` false) its outcome is the page's notice;
+   * an add from the Library says its own and makes that playlist the one shown.
+   */
+  edit: (
+    action: PlaylistAction,
+    options?: { fromLibrary?: boolean }
+  ) => Promise<PlaylistEditOutcome>
 }
 
 // The main process is the authority: the lists are only ever what main answered.
@@ -58,31 +68,47 @@ export const usePlaylistsStore = create<PlaylistsState>((set, get) => ({
       if (get().selectedId === playlistId) set({ viewLoading: false, viewFailed: true })
     }
   },
-  edit: async (action) => {
+  edit: async (action, { fromLibrary = false } = {}) => {
+    const asked = get().selectedId
     set({ editing: true })
+    let outcome: PlaylistEditOutcome
     try {
       const result = await window.api.playlists.edit(action)
-      if (!result.ok) {
-        set({ notice: { kind: 'failed', code: result.code } })
-        return false
+      if (result.ok) {
+        const { playlists, view, skipped } = result.value
+        outcome = { ok: true, skipped }
+        set({ playlists })
+        const current = get()
+        if (view === null) {
+          // A delete: the first playlist left is shown.
+          const first = playlists[0]?.id ?? null
+          if (first !== null) await get().select(first)
+          else set({ selectedId: null, view: null })
+        } else if (fromLibrary || action.action === 'create' || current.selectedId === asked) {
+          // An answer for a playlist the user left meanwhile does not take the page back.
+          const kept = current.view?.id === view.id ? current.view.recommendations : null
+          set({
+            selectedId: view.id,
+            view: { ...view, recommendations: view.recommendations ?? kept ?? [] },
+            viewFailed: false
+          })
+        }
+      } else {
+        outcome = { ok: false, code: result.code }
       }
-      const { playlists, view, skipped } = result.value
-      const selectedId = view?.id ?? playlists[0]?.id ?? null
-      set({
-        playlists,
-        view: view ?? null,
-        selectedId,
-        viewFailed: false,
-        notice: skipped > 0 ? { kind: 'skipped', count: skipped } : null
-      })
-      // After a delete the first playlist left is shown.
-      if (view === null && selectedId !== null) await get().select(selectedId)
-      return true
     } catch {
-      set({ notice: { kind: 'failed', code: 'UNEXPECTED' } })
-      return false
-    } finally {
-      set({ editing: false })
+      outcome = { ok: false, code: 'UNEXPECTED' }
     }
+    set({ editing: false })
+    if (!fromLibrary) {
+      set({
+        notice: !outcome.ok
+          ? { kind: 'failed', code: outcome.code }
+          : outcome.skipped > 0
+            ? { kind: 'skipped', count: outcome.skipped }
+            : null
+      })
+    }
+    return outcome
   }
 }))

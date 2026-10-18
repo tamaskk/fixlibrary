@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowDown, ArrowUp, Pause, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
@@ -10,8 +11,17 @@ import { cn } from '@/lib/cn'
 import { formatCount, formatElapsed } from '@/lib/format'
 import { errorMessage } from '@/lib/messages'
 import { useTrackPlayer, type TrackPlayer } from '@/lib/use-track-player'
-import { usePlaylistsStore, type PlaylistNotice } from '@/stores/playlists-store'
-import { MAX_PLAYLIST_NAME, type PlaylistTrackItem, type PlaylistView } from '@shared/playlists'
+import {
+  usePlaylistsStore,
+  type PlaylistEditOutcome,
+  type PlaylistNotice
+} from '@/stores/playlists-store'
+import {
+  MAX_PLAYLIST_NAME,
+  MAX_PLAYLISTS,
+  type PlaylistTrackItem,
+  type PlaylistView
+} from '@shared/playlists'
 
 function nameOf(item: PlaylistTrackItem): string {
   return item.artist && item.title ? `${item.artist} - ${item.title}` : item.fileName
@@ -57,7 +67,10 @@ function PlayButton({
 function TrackName({ item }: { item: PlaylistTrackItem }): React.JSX.Element {
   return (
     <span className="flex min-w-0 flex-1 flex-col">
-      <span className={cn('truncate text-body', item.unavailable && 'text-text-muted')}>
+      <span
+        title={nameOf(item)}
+        className={cn('truncate text-body', item.unavailable && 'text-text-muted')}
+      >
         {nameOf(item)}
       </span>
       <span className="truncate text-small text-text-muted">
@@ -77,23 +90,27 @@ function noticeText(notice: PlaylistNotice): string {
 type NameFormProps = {
   initial: string
   confirm: string
-  onSave: (name: string) => Promise<boolean>
+  onSave: (name: string) => Promise<PlaylistEditOutcome>
   onDone: () => void
+  /** What a refusal of the main process means for this dialog. */
+  refused: string
 }
 
 // Mounted with the dialog's content, so every opening starts from `initial`.
-function NameForm({ initial, confirm, onSave, onDone }: NameFormProps): React.JSX.Element {
+function NameForm({ initial, confirm, onSave, onDone, refused }: NameFormProps): React.JSX.Element {
   const [name, setName] = React.useState(initial)
   const [saving, setSaving] = React.useState(false)
+  const [failure, setFailure] = React.useState<string | null>(null)
   const trimmed = name.trim()
 
   async function submit(event: React.SubmitEvent): Promise<void> {
     event.preventDefault()
     if (trimmed === '') return
     setSaving(true)
-    const saved = await onSave(trimmed)
+    const outcome = await onSave(trimmed)
     setSaving(false)
-    if (saved) onDone()
+    if (outcome.ok) onDone()
+    else setFailure(outcome.code === 'INVALID_INPUT' ? refused : errorMessage(outcome.code))
   }
 
   return (
@@ -105,6 +122,7 @@ function NameForm({ initial, confirm, onSave, onDone }: NameFormProps): React.JS
         autoFocus
         onChange={(event) => setName(event.target.value)}
       />
+      <div role="status">{failure && <StatusLine tone="danger">{failure}</StatusLine>}</div>
       <DialogFooter>
         <DialogClose asChild>
           <Button>Mégse</Button>
@@ -137,6 +155,105 @@ function NameDialog({
   )
 }
 
+// A row of the list: two lines of text, and the buttons of 32px.
+const ROW_HEIGHT = 48
+
+/**
+ * The tracks of a playlist, in order, with their buttons. Virtualized: a playlist may
+ * hold thousands of tracks, and every move would draw them all again.
+ */
+function TrackList({
+  view,
+  player
+}: {
+  view: PlaylistView
+  player: TrackPlayer
+}): React.JSX.Element {
+  const edit = usePlaylistsStore((state) => state.edit)
+  const editing = usePlaylistsStore((state) => state.editing)
+  const { tracks } = view
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  // The virtualizer's functions change with every scroll and are meant to be called
+  // during render; nothing here memoizes them.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: tracks.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 8
+  })
+
+  function move(trackId: number, direction: -1 | 1): void {
+    void edit({ action: 'move', playlistId: view.id, trackId, direction })
+  }
+
+  return (
+    <div
+      ref={scrollRef}
+      role="list"
+      // A Tab stop of its own, like the tables: with the focus on it the arrows scroll.
+      tabIndex={0}
+      aria-label="A playlist trackjei"
+      className="max-h-96 overflow-auto rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((row) => {
+          const item = tracks[row.index]
+          if (!item) return null
+          const name = nameOf(item)
+          const index = row.index
+          return (
+            <div
+              key={item.trackId}
+              role="listitem"
+              aria-setsize={tracks.length}
+              aria-posinset={index + 1}
+              className="absolute inset-x-0 top-0 flex items-center gap-2 border-b border-border"
+              style={{ height: ROW_HEIGHT, transform: `translateY(${row.start}px)` }}
+            >
+              <span className="w-6 shrink-0 text-right text-text-muted">
+                <Data>{index + 1}</Data>
+              </span>
+              <PlayButton item={item} player={player} />
+              <TrackName item={item} />
+              <TrackFacts item={item} />
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`${name} mozgatása feljebb`}
+                disabled={index === 0 || editing}
+                onClick={() => move(item.trackId, -1)}
+              >
+                <ArrowUp />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`${name} mozgatása lejjebb`}
+                disabled={index === tracks.length - 1 || editing}
+                onClick={() => move(item.trackId, 1)}
+              >
+                <ArrowDown />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`${name} eltávolítása a playlistből`}
+                disabled={editing}
+                onClick={() =>
+                  void edit({ action: 'remove', playlistId: view.id, trackId: item.trackId })
+                }
+              >
+                <X />
+              </Button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function PlaylistBody({
   view,
   player
@@ -149,7 +266,8 @@ function PlaylistBody({
   const notice = usePlaylistsStore((state) => state.notice)
   const [renaming, setRenaming] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
-  const { tracks, recommendations } = view
+  const { tracks } = view
+  const recommendations = view.recommendations ?? []
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-6">
@@ -178,10 +296,7 @@ function PlaylistBody({
           <Data>{formatCount(tracks.length)}</Data> track
         </span>
         <span>
-          Hossz:{' '}
-          <Data>
-            {tracks.some((track) => track.durationMs !== null) ? formatElapsed(view.totalMs) : '–'}
-          </Data>
+          Hossz: <Data>{view.totalMs > 0 ? formatElapsed(view.totalMs) : '–'}</Data>
         </span>
         <span>
           BPM:{' '}
@@ -217,67 +332,7 @@ function PlaylistBody({
             Még üres. Jelölj ki trackeket a Könyvtárban, és add hozzá őket a playlisthez.
           </p>
         ) : (
-          <ol className="flex flex-col">
-            {tracks.map((item, index) => {
-              const name = nameOf(item)
-              return (
-                <li
-                  key={item.trackId}
-                  className="flex min-h-12 items-center gap-2 border-b border-border py-1 last:border-b-0"
-                >
-                  <span className="w-6 shrink-0 text-right text-text-muted">
-                    <Data>{index + 1}</Data>
-                  </span>
-                  <PlayButton item={item} player={player} />
-                  <TrackName item={item} />
-                  <TrackFacts item={item} />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`${name} mozgatása feljebb`}
-                    disabled={index === 0 || editing}
-                    onClick={() =>
-                      void edit({
-                        action: 'move',
-                        playlistId: view.id,
-                        trackId: item.trackId,
-                        direction: -1
-                      })
-                    }
-                  >
-                    <ArrowUp />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`${name} mozgatása lejjebb`}
-                    disabled={index === tracks.length - 1 || editing}
-                    onClick={() =>
-                      void edit({
-                        action: 'move',
-                        playlistId: view.id,
-                        trackId: item.trackId,
-                        direction: 1
-                      })
-                    }
-                  >
-                    <ArrowDown />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`${name} eltávolítása a playlistből`}
-                    disabled={editing}
-                    onClick={() =>
-                      void edit({ action: 'remove', playlistId: view.id, trackId: item.trackId })
-                    }
-                  >
-                    <X />
-                  </Button>
-                </li>
-              )
-            })}
-          </ol>
+          <TrackList view={view} player={player} />
         )}
       </Card>
 
@@ -324,6 +379,7 @@ function PlaylistBody({
         title="Playlist átnevezése"
         initial={view.name}
         confirm="Átnevezés"
+        refused="A playlist már nincs meg."
         onClose={() => setRenaming(false)}
         onSave={(name) => edit({ action: 'rename', playlistId: view.id, name })}
       />
@@ -341,7 +397,7 @@ function PlaylistBody({
               loading={editing}
               onClick={() =>
                 void edit({ action: 'delete', playlistId: view.id }).then(
-                  (done) => done && setDeleting(false)
+                  (outcome) => outcome.ok && setDeleting(false)
                 )
               }
             >
@@ -383,6 +439,7 @@ export function Playlists(): React.JSX.Element {
       title="Új playlist"
       initial=""
       confirm="Létrehozás"
+      refused={`Legfeljebb ${formatCount(MAX_PLAYLISTS)} playlist lehet.`}
       onClose={() => setCreating(false)}
       onSave={(name) => edit({ action: 'create', name })}
     />
@@ -406,6 +463,7 @@ export function Playlists(): React.JSX.Element {
         message="Még nincs playlist."
         action={
           <Button variant="primary" onClick={() => setCreating(true)}>
+            <Plus />
             Új playlist
           </Button>
         }
@@ -414,35 +472,37 @@ export function Playlists(): React.JSX.Element {
   } else {
     body = (
       <div className="flex min-h-0 gap-6">
-        <nav aria-label="Playlistek" className="flex w-48 shrink-0 flex-col gap-2">
+        <div className="flex w-48 shrink-0 flex-col gap-2">
           <Button variant="primary" onClick={() => setCreating(true)}>
             <Plus />
             Új playlist
           </Button>
-          <ul className="flex flex-col">
-            {playlists.map((playlist) => {
-              const current = playlist.id === selectedId
-              return (
-                <li key={playlist.id}>
-                  <button
-                    type="button"
-                    aria-current={current ? 'true' : undefined}
-                    onClick={() => choose(playlist.id)}
-                    className={cn(
-                      'flex h-8 w-full items-center gap-2 rounded-r-md border-l-2 px-3 text-left text-small transition-colors duration-150 ease-out hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
-                      current
-                        ? 'border-primary bg-surface-hover text-text'
-                        : 'border-transparent text-text-muted'
-                    )}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{playlist.name}</span>
-                    <Data>{formatCount(playlist.trackCount)}</Data>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-        </nav>
+          <nav aria-label="Playlistek">
+            <ul className="flex flex-col">
+              {playlists.map((playlist) => {
+                const current = playlist.id === selectedId
+                return (
+                  <li key={playlist.id}>
+                    <button
+                      type="button"
+                      aria-current={current ? 'true' : undefined}
+                      onClick={() => choose(playlist.id)}
+                      className={cn(
+                        'flex h-8 w-full items-center gap-2 rounded-r-md border-l-2 px-3 text-left text-small font-medium transition-colors duration-150 ease-out hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
+                        current
+                          ? 'border-primary bg-surface-hover text-text'
+                          : 'border-transparent text-text-muted hover:text-text'
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{playlist.name}</span>
+                      <Data>{formatCount(playlist.trackCount)}</Data>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </nav>
+        </div>
         {viewFailed ? (
           <div className="flex items-center gap-4">
             <StatusLine tone="danger">A playlist nem tölthető be.</StatusLine>
@@ -451,7 +511,9 @@ export function Playlists(): React.JSX.Element {
             </Button>
           </div>
         ) : view === null ? (
-          viewLoading && <StatusLine tone="neutral">Betöltés…</StatusLine>
+          <div role="status">
+            {viewLoading && <StatusLine tone="neutral">Betöltés…</StatusLine>}
+          </div>
         ) : (
           <PlaylistBody view={view} player={player} />
         )}

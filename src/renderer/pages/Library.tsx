@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StatusLine } from '@/components/ui/status-line'
 import { applyView, DEFAULT_VIEW } from '@/lib/library-view'
+import { selectedInOrder } from '@/lib/selection'
 import { scanPhaseLabel } from '@/lib/scan-phase'
 import { useAppStore } from '@/stores/app-store'
 import { useLibraryStore } from '@/stores/library-store'
@@ -216,9 +217,8 @@ export function Library(): React.JSX.Element {
                 onRun={(scope) => void run(scope, chosenStages())}
               />
               <AddToPlaylist
-                trackIds={rows
-                  .filter((track) => selection.ids.has(track.id))
-                  .map((track) => track.id)}
+                // In library order, as a run takes them.
+                trackIds={selectedInOrder(selection, tracks?.map(({ id }) => id) ?? [])}
               />
             </>
           )}
