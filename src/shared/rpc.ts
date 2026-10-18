@@ -53,6 +53,9 @@ export const BPM_KEY_ANALYZER_VERSION = 'essentia-2.1b6-multifeature-edma-1'
  */
 export const STEMS_ANALYZER_VERSION = 'htdemucs-8726e21a-rms100ms-1'
 
+/** The most peaks `analysis.peaks` makes: twenty minutes, a hundred a second. */
+export const MAX_PEAKS = 20 * 60 * 100 + 100
+
 /**
  * Names the measure behind `analysis.loudness`: EBU R128 by ffmpeg's `ebur128`. It is
  * stored with every result, and a track is measured again only when it changes.
@@ -406,6 +409,28 @@ export const RPC_SCHEMAS = {
       bpmMax: z.number()
     }),
     result: bpmKeyResultSchema
+  },
+  /**
+   * The waveform of one file for the cue editor: a hundred peaks a second, written as
+   * `<trackId>.json` into the peaks folder. Reads the file, writes only that file.
+   */
+  'analysis.peaks': {
+    params: z.object({
+      path: z.string().min(1),
+      trackId: z.number().int().positive(),
+      jobId: z.string().min(1).max(64),
+      fileSizeBytes: z.number().int().nonnegative().nullable(),
+      fileMtimeMs: z.number().int().nonnegative().nullable()
+    }),
+    result: z.object({
+      file: z.string().regex(/^[1-9][0-9]{0,15}\.json$/u),
+      count: z.number().int().nonnegative().max(MAX_PEAKS),
+      bytes: z.number().int().positive(),
+      durationSeconds: z
+        .number()
+        .nonnegative()
+        .max(20 * 60 + 1)
+    })
   },
   /** The loudness of one file by EBU R128. Reads the file only. */
   'analysis.loudness': {

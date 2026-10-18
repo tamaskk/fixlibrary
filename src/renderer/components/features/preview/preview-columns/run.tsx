@@ -79,7 +79,9 @@ export const CUES_COLUMN: PreviewColumn = {
   track: '160px',
   minWidth: 160,
   // Always shown: in a batch that places cues they are what is to be approved. Where
-  // the table is narrow, only the new letters, as with the file name.
+  // the table is narrow, only the new letters, as with the file name. Enter or a double
+  // click opens the track in the cue editor.
+  activate: true,
   render: (row, context) => <DiffValue cell={row.cells.cues} compact={!context.wide} />,
   text: (row) => diffText(row.cells.cues)
 }

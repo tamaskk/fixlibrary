@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatCount,
+  formatCueTime,
   formatDecimal,
   formatElapsed,
   formatGigabytes,
@@ -119,5 +120,22 @@ describe('formatPercent', () => {
 
     // Assert
     expect(text).toBe(expected)
+  })
+})
+
+describe('formatCueTime', () => {
+  it.each([
+    [0, '0:00,0'],
+    [4_500, '0:04,5'],
+    [9_960, '0:10,0'],
+    [59_960, '1:00,0'],
+    [61_240, '1:01,2'],
+    [724_500, '12:04,5']
+  ])('shows %s ms as %s', (ms, text) => {
+    // Act
+    const shown = formatCueTime(ms)
+
+    // Assert
+    expect(shown).toBe(text)
   })
 })

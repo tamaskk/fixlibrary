@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy
 import pytest
 
 from fixlib_py.analysis import stems, structure
+
+ROOT = Path(__file__).resolve().parents[2]
 
 BPM = 128.0
 BEAT = 60.0 / BPM
@@ -168,3 +171,16 @@ def test_reads_the_envelopes_of_the_track_from_the_stems_folder(
     assert result["cues"][3]["timeSec"] == pytest.approx(24 * BAR)
     with pytest.raises(ValueError):
         structure.structure(10, grid(), 120.0)
+
+
+def test_counts_the_beats_of_the_golden_grid_as_the_cue_editor_does() -> None:
+    # The same file is read by src/shared/beat-grid.test.ts: the editor snaps to the
+    # grid the cues are placed on.
+    golden = json.loads((ROOT / "tests" / "fixtures" / "grids" / "golden-grid.json").read_text())
+
+    times, places = structure.beats_of(
+        structure.markers_of(golden["grid"]), golden["durationSeconds"]
+    )
+
+    assert times == pytest.approx([beat["time"] for beat in golden["beats"]], abs=1e-9)
+    assert [place == 1 for place in places] == [beat["level"] != "beat" for beat in golden["beats"]]

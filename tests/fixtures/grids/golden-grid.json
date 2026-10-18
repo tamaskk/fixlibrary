@@ -1,0 +1,133 @@
+{
+  "durationSeconds": 14.0,
+  "grid": [
+    {
+      "inizio": 0.25,
+      "bpm": 120,
+      "metro": "4/4",
+      "battito": 3
+    },
+    {
+      "inizio": 4.25,
+      "bpm": 90,
+      "metro": "3/4",
+      "battito": 1
+    },
+    {
+      "inizio": 9.0,
+      "bpm": 128,
+      "metro": "4/4",
+      "battito": 2
+    }
+  ],
+  "beats": [
+    {
+      "time": 0.25,
+      "level": "beat"
+    },
+    {
+      "time": 0.75,
+      "level": "beat"
+    },
+    {
+      "time": 1.25,
+      "level": "phrase"
+    },
+    {
+      "time": 1.75,
+      "level": "beat"
+    },
+    {
+      "time": 2.25,
+      "level": "beat"
+    },
+    {
+      "time": 2.75,
+      "level": "beat"
+    },
+    {
+      "time": 3.25,
+      "level": "bar"
+    },
+    {
+      "time": 3.75,
+      "level": "beat"
+    },
+    {
+      "time": 4.25,
+      "level": "bar"
+    },
+    {
+      "time": 4.916666667,
+      "level": "beat"
+    },
+    {
+      "time": 5.583333333,
+      "level": "beat"
+    },
+    {
+      "time": 6.25,
+      "level": "bar"
+    },
+    {
+      "time": 6.916666667,
+      "level": "beat"
+    },
+    {
+      "time": 7.583333333,
+      "level": "beat"
+    },
+    {
+      "time": 8.25,
+      "level": "bar"
+    },
+    {
+      "time": 8.916666667,
+      "level": "beat"
+    },
+    {
+      "time": 9.0,
+      "level": "beat"
+    },
+    {
+      "time": 9.46875,
+      "level": "beat"
+    },
+    {
+      "time": 9.9375,
+      "level": "beat"
+    },
+    {
+      "time": 10.40625,
+      "level": "bar"
+    },
+    {
+      "time": 10.875,
+      "level": "beat"
+    },
+    {
+      "time": 11.34375,
+      "level": "beat"
+    },
+    {
+      "time": 11.8125,
+      "level": "beat"
+    },
+    {
+      "time": 12.28125,
+      "level": "bar"
+    },
+    {
+      "time": 12.75,
+      "level": "beat"
+    },
+    {
+      "time": 13.21875,
+      "level": "beat"
+    },
+    {
+      "time": 13.6875,
+      "level": "beat"
+    }
+  ]
+}

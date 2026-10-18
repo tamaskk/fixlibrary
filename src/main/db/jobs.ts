@@ -1,6 +1,6 @@
-import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, lt, max, sql } from 'drizzle-orm'
 import type { AppDatabase } from './connection'
-import { jobs, type JOB_PHASES, type JOB_STATUSES } from './schema'
+import { batchItems, jobs, type JOB_PHASES, type JOB_STATUSES } from './schema'
 import type { TrackError } from '@shared/errors'
 
 type JobPhase = (typeof JOB_PHASES)[number]
@@ -115,4 +115,37 @@ export function listJobStageNames(db: AppDatabase, batchId: number): string[] {
     .where(eq(jobs.batchId, batchId))
     .all()
     .map((job) => job.stage)
+}
+
+/**
+ * Per track, the warnings of the latest batch that ran a stage to its end, whatever
+ * happened to the batch afterwards. Only that batch's item is read for each track.
+ */
+export function listLatestWarningsOfStage(db: AppDatabase, stage: string): Map<number, unknown> {
+  const latest = db
+    .select({ trackId: jobs.trackId, batchId: max(jobs.batchId).as('latest_batch_id') })
+    .from(jobs)
+    .where(and(eq(jobs.stage, stage), eq(jobs.status, 'done')))
+    .groupBy(jobs.trackId)
+    .as('latest')
+  const rows = db
+    .select({
+      trackId: batchItems.trackId,
+      warnings: sql<string | null>`json_extract(${batchItems.after}, '$.warnings')`
+    })
+    .from(batchItems)
+    .innerJoin(
+      latest,
+      and(eq(batchItems.trackId, latest.trackId), eq(batchItems.batchId, latest.batchId))
+    )
+    .all()
+  return new Map(
+    rows.map((row) => {
+      try {
+        return [row.trackId, row.warnings === null ? null : JSON.parse(row.warnings)]
+      } catch {
+        return [row.trackId, null]
+      }
+    })
+  )
 }
