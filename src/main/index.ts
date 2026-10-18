@@ -11,6 +11,7 @@ import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
 import { registerEnergyIpc } from './ipc/energy'
+import { registerPlaylistsIpc } from './ipc/playlists'
 import { registerCueEditorIpc } from './ipc/cue-editor'
 import { registerDownloadIpc, sendDownloads } from './ipc/download'
 import { registerRekordboxIpc } from './ipc/rekordbox'
@@ -508,6 +509,7 @@ function registerLibraryAndPipeline(): void {
   }
   registerCueEditorIpc(cueEditor)
   registerEnergyIpc({ db, python: () => pythonBridge })
+  registerPlaylistsIpc({ db, listMountedVolumes: cachedVolumes })
   const tools = resolveToolLocations({
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),

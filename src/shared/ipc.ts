@@ -16,6 +16,7 @@ import type {
 } from './download'
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
+import type { PlaylistAction, PlaylistEditResult, PlaylistSummary, PlaylistView } from './playlists'
 import type { Result } from './errors'
 import type {
   LibraryPage,
@@ -120,6 +121,9 @@ export const IPC_CHANNELS = {
   energyRate: 'energy:rate',
   energyFit: 'energy:fit',
   energyNewSample: 'energy:newSample',
+  playlistsList: 'playlists:list',
+  playlistsView: 'playlists:view',
+  playlistsEdit: 'playlists:edit',
   downloadInspect: 'download:inspect',
   downloadStart: 'download:start',
   downloadSearch: 'download:search',
@@ -283,6 +287,14 @@ export interface FixLibraryApi {
      * which, the main process the path. False when asked again too soon.
      */
     copyPath: (which: CopyablePath) => Promise<boolean>
+  }
+  playlists: {
+    /** Every playlist, in the order they were made, with its track count. */
+    list: () => Promise<PlaylistSummary[]>
+    /** One playlist with its tracks, what they add up to and ten tracks that fit; null if gone. */
+    view: (playlistId: number) => Promise<PlaylistView | null>
+    /** Creates, renames, deletes or changes the tracks of a playlist. */
+    edit: (action: PlaylistAction) => Promise<Result<PlaylistEditResult>>
   }
   energy: {
     /** The calibration sample, the ratings given, and the kept model. */

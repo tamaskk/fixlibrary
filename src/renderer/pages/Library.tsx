@@ -3,6 +3,7 @@ import { LibraryTable } from '@/components/features/library/LibraryTable'
 import { LibraryToolbar } from '@/components/features/library/LibraryToolbar'
 import { ScanProgressPanel } from '@/components/features/library/ScanProgressPanel'
 import { ScanResult } from '@/components/features/library/ScanResult'
+import { AddToPlaylist } from '@/components/features/library/AddToPlaylist'
 import { SelectionBar } from '@/components/features/library/SelectionBar'
 import { RunPanel } from '@/components/features/pipeline/RunPanel'
 import { RunResult } from '@/components/features/pipeline/RunResult'
@@ -10,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StatusLine } from '@/components/ui/status-line'
 import { applyView, DEFAULT_VIEW } from '@/lib/library-view'
+import { selectedInOrder } from '@/lib/selection'
 import { scanPhaseLabel } from '@/lib/scan-phase'
 import { useAppStore } from '@/stores/app-store'
 import { useLibraryStore } from '@/stores/library-store'
@@ -213,6 +215,10 @@ export function Library(): React.JSX.Element {
                   lastRun?.ok && (runProgress !== null || runFinished !== null) ? null : lastRun
                 }
                 onRun={(scope) => void run(scope, chosenStages())}
+              />
+              <AddToPlaylist
+                // In library order, as a run takes them.
+                trackIds={selectedInOrder(selection, tracks?.map(({ id }) => id) ?? [])}
               />
             </>
           )}

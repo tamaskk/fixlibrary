@@ -172,7 +172,7 @@ Icon buttons
 
 Navigation
 
-- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Letöltés, Cue-k, Energy, Rekordbox, Beállítások.
+- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Letöltés, Cue-k, Energy, Playlistek, Rekordbox, Beállítások.
 - Current page: surface-hover background, text color and a straight 2px primary left edge, marked with `aria-current="page"`. Focus ring as for buttons.
 
 Rekordbox wizard
@@ -191,6 +191,14 @@ Cue editor
 - Deleting a cue is not confirmed, by the owner's choice: an exception to the rule of §06 Buttons, because a cue is no file and is put back with one click. After a delete "<letter> visszavonása" (ghost) puts it back where it was, until the next edit or another track.
 - States: "Betöltés…", "A waveform készül…" while the sidecar makes the peaks, "A waveform nem készíthető el." with the reason and "Próbáld újra", "Ez a track most nem szerkeszthető. Lehet, hogy a lemeze nincs csatlakoztatva."; with no track with a grid, "Nincs track Rekordbox griddel. Előbb a Rekordbox varázsló A fázisa kell." and "A Rekordbox varázsló" (Secondary). An edit refused says "Ez a hely nincs a griden. Próbáld a track hosszán belül.", and the cue goes back where it is saved. The XML button before phase A is done says "Előbb fejezd be a Rekordbox varázsló A fázisát, utána frissítheted az XML-t." in warning.
 - In the batch preview, Enter or a double click on a cell of the "Cue-k" column opens that track on this page.
+
+Playlists
+
+- The page "Playlistek" (H1, the full width of the page): on the left a column of 192px with "Új playlist" (Primary, the one of the page) and the playlists as rows of 32px (name cut short, track count in the Data role; the chosen one surface-hover with a 2px primary left edge, `aria-current`). On the right the chosen playlist: its name (H2) with "átnevezése" (ghost icon, a dialog with the field "Név") and "törlése" (ghost icon on the far right, confirmed in a dialog with a Danger button: the tracks stay in the library); a line in Small text-muted with the track count, "Hossz" (an en dash when no length is known), "BPM" (lowest–highest) and "Key", numbers in the Data role and an en dash for what is not known.
+- "Trackek": a virtualized list (a Tab stop of its own, 384px high at most, scrolling inside) of numbered rows of 48px: play (ghost icon), artist - title (or the file name, the whole of it in a tooltip) with the style or "Nem elérhető" under it in Small text-muted, tempo, key and `E<n>` in the Data role, then "mozgatása feljebb", "lejjebb" (ghost icons, disabled at the ends) and "eltávolítása a playlistből". Reordering is by these buttons, not by dragging. Empty: "Még üres. Jelölj ki trackeket a Könyvtárban, és add hozzá őket a playlisthez."
+- "Ajánlott a könyvtárból": up to ten rows like those, best first, with the fit in percent in the Data role and "hozzáadása a playlisthez" (ghost "+" icon). No cover images: the library has no thumbnails of its own yet. Before the first track: "Ajánlás az első track hozzáadása után jelenik meg."
+- States: "Betöltés…", "A playlistek nem tölthetők be." and "A playlist nem tölthető be." with "Próbáld újra", the empty state "Még nincs playlist." with "Új playlist", tracks that were skipped on an add ("… kimaradt: már a playlistben van, vagy nincs a könyvtárban.") and a track that cannot be played.
+- In the Library, under the run bar: "Playlist" (select) and "Hozzáadás a playlisthez" (Secondary) add the selected tracks at the end, in the order the table shows them; "<n> track hozzáadva: <név>." and how many were skipped ("már a playlistben van, vagy nincs a könyvtárban"); a playlist deleted meanwhile falls back to the first. A refused name says so in its dialog ("Legfeljebb 500 playlist lehet.", "A playlist már nincs meg."). Shown once there is a playlist.
 
 Energy calibration
 
