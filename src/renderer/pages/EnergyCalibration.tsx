@@ -7,7 +7,8 @@ import { ProgressBar } from '@/components/ui/progress-bar'
 import { RadioGroup, RadioRow } from '@/components/ui/radio-group'
 import { StatusLine } from '@/components/ui/status-line'
 import { errorMessage } from '@/lib/messages'
-import { useEnergyStore } from '@/stores/energy-store'
+import { useAppStore } from '@/stores/app-store'
+import { useEnergyStore, type EnergyFailure } from '@/stores/energy-store'
 import { MIN_RATINGS_TO_FIT, type CalibrationItem } from '@shared/energy'
 
 const RATINGS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -58,7 +59,7 @@ function SampleRow({
             aria-label={`Energy ${rating}`}
             className="w-auto"
           >
-            <span className="text-small">{rating}</span>
+            <span className="font-mono text-data tabular-nums">{rating}</span>
           </RadioRow>
         ))}
       </RadioGroup>
@@ -66,16 +67,31 @@ function SampleRow({
   )
 }
 
+// What the page says of a failure; a fit refused for its ratings says why.
+function failureText(failure: EnergyFailure): string {
+  if (failure.of === 'model' && failure.code === 'INVALID_INPUT') {
+    return `A kalibráláshoz legalább ${MIN_RATINGS_TO_FIT} értékelés kell, és nem lehet mind egyforma.`
+  }
+  return errorMessage(failure.code)
+}
+
+function Count({ value }: { value: number }): React.JSX.Element {
+  return <span className="font-mono text-data tabular-nums">{value}</span>
+}
+
 export function EnergyCalibration(): React.JSX.Element {
   const view = useEnergyStore((state) => state.view)
   const loadFailed = useEnergyStore((state) => state.loadFailed)
   const failure = useEnergyStore((state) => state.failure)
   const fitting = useEnergyStore((state) => state.fitting)
+  const choosing = useEnergyStore((state) => state.choosing)
   const load = useEnergyStore((state) => state.load)
   const rate = useEnergyStore((state) => state.rate)
   const fit = useEnergyStore((state) => state.fit)
   const newSample = useEnergyStore((state) => state.newSample)
+  const setPage = useAppStore((state) => state.setPage)
   const [playingId, setPlayingId] = React.useState<number | null>(null)
+  const [playFailed, setPlayFailed] = React.useState(false)
   const audio = React.useRef<HTMLAudioElement | null>(null)
 
   React.useEffect(() => {
@@ -83,34 +99,51 @@ export function EnergyCalibration(): React.JSX.Element {
     return () => audio.current?.pause()
   }, [load])
 
-  // One track plays at a time; playing the one that plays stops it.
-  function play(trackId: number): void {
+  function stop(): void {
     audio.current?.pause()
-    if (playingId === trackId) {
-      setPlayingId(null)
-      return
-    }
-    const player = new Audio(`fixlib-audio://track/${trackId}`)
-    player.addEventListener('ended', () => setPlayingId(null))
-    player.addEventListener('error', () => setPlayingId(null))
-    audio.current = player
-    setPlayingId(trackId)
-    void player.play().catch(() => setPlayingId(null))
+    audio.current = null
+    setPlayingId(null)
   }
 
-  let body: React.ReactNode
-  if (loadFailed) {
+  // One track plays at a time; playing the one that plays stops it.
+  function play(trackId: number): void {
+    const again = playingId === trackId
+    stop()
+    setPlayFailed(false)
+    if (again) return
+    const player = new Audio(`fixlib-audio://track/${trackId}`)
+    const failed = (): void => {
+      if (audio.current !== player) return
+      stop()
+      setPlayFailed(true)
+    }
+    player.addEventListener('ended', () => audio.current === player && stop())
+    player.addEventListener('error', failed)
+    audio.current = player
+    setPlayingId(trackId)
+    void player.play().catch(failed)
+  }
+
+  function chooseNewSample(): void {
+    stop()
+    void newSample()
+  }
+
+  let body: React.ReactNode = null
+  if (view !== null && view.measuredCount === 0) {
     body = (
-      <StatusLine tone="danger">A kalibráció nem tölthető be. Nyisd meg újra az oldalt.</StatusLine>
+      <EmptyState
+        message="Még nincs mért track. Futtasd az „Energy jellemzők mérése” funkciót a Könyvtárban."
+        action={
+          <Button variant="primary" onClick={() => setPage('library')}>
+            Könyvtár megnyitása
+          </Button>
+        }
+      />
     )
-  } else if (view === null) {
-    body = <StatusLine tone="neutral">Betöltés…</StatusLine>
-  } else if (view.measuredCount === 0) {
-    body = (
-      <EmptyState message="Még nincs mért track. Futtasd az „Energy jellemzők mérése” funkciót a Könyvtárban." />
-    )
-  } else {
+  } else if (view !== null) {
     const { model, sample, ratedCount } = view
+    const sampleRated = sample.filter((item) => item.rating !== null).length
     body = (
       <>
         <Card>
@@ -118,8 +151,8 @@ export function EnergyCalibration(): React.JSX.Element {
           <div className="flex flex-col gap-4">
             {model === null ? (
               <p className="text-body text-text-muted">
-                Még nincs kalibrálva. Értékelj legalább {MIN_RATINGS_TO_FIT} tracket 1-től 10-ig a
-                saját érzésed szerint, stílusán belül.
+                Még nincs kalibrálva. Értékeld a mintát 1-től 10-ig a saját érzésed szerint, a track
+                stílusán belül.
               </p>
             ) : (
               <p className="text-body">
@@ -127,7 +160,7 @@ export function EnergyCalibration(): React.JSX.Element {
                 <span className="font-mono text-data tabular-nums">
                   {model.looMae.toLocaleString('hu-HU', { maximumFractionDigits: 1 })}
                 </span>{' '}
-                ({model.ratedCount} értékelés alapján)
+                pont (<Count value={model.ratedCount} /> értékelés alapján)
               </p>
             )}
             {model?.stale && (
@@ -137,18 +170,29 @@ export function EnergyCalibration(): React.JSX.Element {
             )}
             <div className="flex flex-col gap-1">
               <span className="text-small text-text-muted">
-                Értékelve: {ratedCount} / {sample.length}
+                A mintából értékelve: <Count value={sampleRated} /> /{' '}
+                <Count value={sample.length} />
               </span>
               <ProgressBar
-                percent={sample.length === 0 ? 0 : (ratedCount / sample.length) * 100}
-                label="Értékelt trackek"
+                percent={sample.length === 0 ? 0 : (sampleRated / sample.length) * 100}
+                label="A minta értékelt trackjei"
               />
             </div>
             <div role="status">
-              {failure && <StatusLine tone="danger">{errorMessage(failure)}</StatusLine>}
+              {failure?.of === 'model' && (
+                <StatusLine tone="danger">{failureText(failure)}</StatusLine>
+              )}
             </div>
-            <div className="flex justify-end gap-2">
-              <Button onClick={() => void newSample()}>Új minta</Button>
+            <div className="flex items-center justify-end gap-2">
+              {ratedCount < MIN_RATINGS_TO_FIT && (
+                <span className="mr-auto text-small text-text-muted">
+                  Összesen <Count value={ratedCount} /> értékelés, legalább {MIN_RATINGS_TO_FIT}{' '}
+                  kell.
+                </span>
+              )}
+              <Button loading={choosing} onClick={chooseNewSample}>
+                Új minta
+              </Button>
               <Button
                 variant="primary"
                 loading={fitting}
@@ -162,6 +206,18 @@ export function EnergyCalibration(): React.JSX.Element {
         </Card>
         <Card>
           <CardTitle>Minta</CardTitle>
+          <div role="status" className="flex flex-col gap-1">
+            {failure?.of === 'rating' && (
+              <StatusLine tone="danger">
+                Az értékelés nem mentődött el: {failureText(failure)}
+              </StatusLine>
+            )}
+            {playFailed && (
+              <StatusLine tone="danger">
+                A fájl nem játszható le. Lehet, hogy a lemeze nincs csatlakoztatva.
+              </StatusLine>
+            )}
+          </div>
           <ul className="flex flex-col">
             {sample.map((item) => (
               <SampleRow
@@ -182,6 +238,17 @@ export function EnergyCalibration(): React.JSX.Element {
     <main className="h-full overflow-y-auto p-6">
       <div className="mx-auto flex max-w-form flex-col gap-6">
         <h1 className="text-h1">Energy kalibráció</h1>
+        <div role="status" className="contents">
+          {view === null && !loadFailed && <StatusLine tone="neutral">Betöltés…</StatusLine>}
+          {loadFailed && (
+            <div className="flex items-center gap-4">
+              <StatusLine tone="danger">A kalibráció nem tölthető be.</StatusLine>
+              <Button variant="primary" onClick={() => void load()}>
+                Próbáld újra
+              </Button>
+            </div>
+          )}
+        </div>
         {body}
       </div>
     </main>

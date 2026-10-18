@@ -47,6 +47,9 @@ def _check(samples: object) -> tuple[list[str], list[list[float]], list[float]]:
         rows.append([float(v) for v in row])
         ratings.append(float(rating))
     assert names is not None
+    # Ratings that are all the same say nothing about what makes a track harder.
+    if len(set(ratings)) < 2:
+        raise ValueError("the ratings must not all be the same")
     return names, rows, ratings
 
 
@@ -76,7 +79,9 @@ def fit_samples(samples: object) -> dict[str, Any]:
     errors = []
     for left_out in range(len(y)):
         keep = numpy.arange(len(y)) != left_out
-        # Standardized by the whole sample: the left-out row's scale barely moves it.
+        # Standardized by the whole sample, so the error is a close approximation of a
+        # true leave-one-out one, a little on the kind side; the left-out row barely
+        # moves the means and scales.
         w, b = _solve(x[keep], y[keep])
         errors.append(abs(float(x[left_out] @ w + b) - y[left_out]))
     return {

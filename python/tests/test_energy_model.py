@@ -80,11 +80,13 @@ def test_a_feature_that_never_varies_gets_no_weight() -> None:
         [],
         "nope",
         samples_of(4),
-        [{"features": {"a": 1.0}, "rating": 11}] * 5,
+        [{"features": {"a": float(n)}, "rating": n + 1} for n in range(5)]
+        + [{"features": {"a": 9.0}, "rating": 11}],
         [{"features": {"a": 1.0}, "rating": True}] * 5,
         [{"features": {"a": float("nan")}, "rating": 5}] * 5,
         [{"features": {"a": 1.0}, "rating": 5, "extra": 1}] * 5,
         [{"features": {"a": 1.0}, "rating": 5}] * 4 + [{"features": {"b": 1.0}, "rating": 5}],
+        [{"features": {"a": float(n)}, "rating": 5} for n in range(6)],
     ],
 )
 def test_refuses_samples_that_are_no_ratings(samples: Any) -> None:

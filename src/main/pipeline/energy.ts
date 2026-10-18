@@ -125,7 +125,7 @@ function viewOf(
   const view: CalibrationView = {
     measuredCount: measured.length,
     sample: items,
-    ratedCount: items.filter((item) => item.rating !== null).length,
+    ratedCount: ratings.size,
     model: kept && {
       looMae: kept.model.looMae,
       ratedCount: kept.ratedCount,
@@ -152,45 +152,67 @@ export function calibrationView(dependencies: EnergyCalibrationDependencies): Ca
 }
 
 /**
- * Chooses a new sample: by the model's scores when there is one, so the new tracks
- * spread over what the model calls calm and hard. Ratings already given stay.
+ * Chooses a new sample from the tracks not rated yet: by the model's scores when there
+ * is one, so the new tracks spread over what the model calls calm and hard. When every
+ * measured track is rated, from all of them. The ratings given stay, and count.
  */
 export function newCalibrationSample(dependencies: EnergyCalibrationDependencies): CalibrationView {
   const { db } = dependencies
   const measured = measuredTracks(db)
-  const sample = selectCalibrationSample(scored(measured, currentEnergyModel(db)?.model ?? null))
+  const ratings = listEnergyRatings(db)
+  const unrated = measured.filter((track) => !ratings.has(track.id))
+  const sample = selectCalibrationSample(
+    scored(unrated.length > 0 ? unrated : measured, currentEnergyModel(db)?.model ?? null)
+  )
   setSetting(db, SAMPLE_KEY, sample)
   return viewOf(db, measured, sample)
 }
 
-/** Keeps the user's rating of a track of the sample. */
+/**
+ * Keeps the user's rating of a track of the sample, and answers with how many ratings
+ * there are now. Reads the sample only: the page asks for this on every choice.
+ */
 export function rateCalibrationTrack(
   dependencies: EnergyCalibrationDependencies,
   { trackId, rating }: CalibrationRating
-): Result<CalibrationView> {
+): Result<{ ratedCount: number }> {
   const { db } = dependencies
   if (!(keptSample(db) ?? []).includes(trackId)) return { ok: false, code: 'INVALID_INPUT' }
   saveEnergyRating(db, trackId, rating)
-  return { ok: true, value: calibrationView(dependencies) }
+  return { ok: true, value: { ratedCount: listEnergyRatings(db).size } }
 }
 
+// One fit at a time: a second would race the first to the kept model.
+const fitsInFlight = new WeakMap<AppDatabase, Promise<Result<CalibrationView>>>()
+
 /**
- * Fits the model to the rated tracks of the sample, and sets the scale of every style
- * by the scores of the library's measured tracks. Replaces the kept model.
+ * Fits the model to every rated track that is measured, and sets the scale of every
+ * style by the scores of the library's measured tracks. Replaces the kept model. Asked
+ * again while it runs, it answers with the fit that runs.
  */
-export async function fitEnergyModel(
+export function fitEnergyModel(
+  dependencies: EnergyCalibrationDependencies
+): Promise<Result<CalibrationView>> {
+  const running = fitsInFlight.get(dependencies.db)
+  if (running) return running
+  const fit = fitOnce(dependencies).finally(() => fitsInFlight.delete(dependencies.db))
+  fitsInFlight.set(dependencies.db, fit)
+  return fit
+}
+
+async function fitOnce(
   dependencies: EnergyCalibrationDependencies
 ): Promise<Result<CalibrationView>> {
   const { db } = dependencies
   const measured = measuredTracks(db)
-  const byId = new Map(measured.map((track) => [track.id, track]))
   const ratings = listEnergyRatings(db)
-  const samples = (keptSample(db) ?? []).flatMap((trackId) => {
-    const track = byId.get(trackId)
-    const rating = ratings.get(trackId)
-    return track && rating !== undefined ? [{ features: track.features, rating }] : []
+  const samples = measured.flatMap((track) => {
+    const rating = ratings.get(track.id)
+    return rating === undefined ? [] : [{ features: track.features, rating }]
   })
-  if (samples.length < MIN_RATINGS_TO_FIT) return { ok: false, code: 'INVALID_INPUT' }
+  // Ratings that are all the same say nothing; the sidecar refuses them too.
+  const varied = new Set(samples.map((sample) => sample.rating)).size > 1
+  if (samples.length < MIN_RATINGS_TO_FIT || !varied) return { ok: false, code: 'INVALID_INPUT' }
   const python = dependencies.python()
   if (!python) return { ok: false, code: 'PYTHON_CRASHED' }
   let model

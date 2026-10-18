@@ -287,8 +287,8 @@ export interface FixLibraryApi {
   energy: {
     /** The calibration sample, the ratings given, and the kept model. */
     calibration: () => Promise<CalibrationView>
-    /** Keeps the user's 1–10 rating of a track of the sample. */
-    rate: (rating: CalibrationRating) => Promise<Result<CalibrationView>>
+    /** Keeps the user's 1–10 rating of a track of the sample; answers the count rated. */
+    rate: (rating: CalibrationRating) => Promise<Result<{ ratedCount: number }>>
     /** Fits the model to the ratings and sets the scale of every style. */
     fit: () => Promise<Result<CalibrationView>>
     /** Chooses a new sample; the ratings given stay. */

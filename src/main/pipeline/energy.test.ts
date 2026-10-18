@@ -135,13 +135,13 @@ describe('the calibration sample', () => {
 
     // Assert
     expect(refused).toEqual({ ok: false, code: 'INVALID_INPUT' })
-    expect(taken.ok && taken.value.sample[0]?.rating).toBe(7)
-    expect(taken.ok && taken.value.ratedCount).toBe(1)
+    expect(taken).toEqual({ ok: true, value: { ratedCount: 1 } })
+    expect(calibrationView(dependencies).sample[0]?.rating).toBe(7)
   })
 
-  it('keeps the ratings when a new sample is chosen', () => {
+  it('chooses a new sample from the tracks not rated yet, and keeps the ratings', () => {
     // Arrange
-    addMeasuredTracks(12, null)
+    addMeasuredTracks(40, null)
     const [first] = calibrationView(dependencies).sample
     rateCalibrationTrack(dependencies, { trackId: first?.trackId as number, rating: 4 })
 
@@ -149,7 +149,9 @@ describe('the calibration sample', () => {
     const view = newCalibrationSample(dependencies)
 
     // Assert
-    expect(view.sample.find((item) => item.trackId === first?.trackId)?.rating).toBe(4)
+    expect(view.sample.map((item) => item.trackId)).not.toContain(first?.trackId)
+    expect(view.sample).toHaveLength(30)
+    expect(view.ratedCount).toBe(1)
   })
 })
 
@@ -166,6 +168,53 @@ describe('fitting the model', () => {
     // Assert
     expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
     expect(fitCalls).toEqual([])
+  })
+
+  it('refuses ratings that are all the same', async () => {
+    // Arrange
+    addMeasuredTracks(12, null)
+    rateAll(() => 5)
+
+    // Act
+    const result = await fitEnergyModel(dependencies)
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(fitCalls).toEqual([])
+  })
+
+  it('takes the ratings of earlier samples too', async () => {
+    // Arrange
+    addMeasuredTracks(50, null)
+    const first = calibrationView(dependencies).sample.slice(0, 6)
+    first.forEach((item, index) =>
+      rateCalibrationTrack(dependencies, { trackId: item.trackId, rating: index + 1 })
+    )
+    newCalibrationSample(dependencies)
+    rateAll((index) => (index < 6 ? 10 - index : 5))
+
+    // Act
+    await fitEnergyModel(dependencies)
+
+    // Assert
+    const [{ params }] = fitCalls as [{ params: { samples: unknown[] } }]
+    expect(params.samples).toHaveLength(36)
+  })
+
+  it('runs one fit at a time, and gives a second caller the one that runs', async () => {
+    // Arrange
+    addMeasuredTracks(12, null)
+    rateAll((index) => 1 + (index % 10))
+
+    // Act
+    const [first, second] = await Promise.all([
+      fitEnergyModel(dependencies),
+      fitEnergyModel(dependencies)
+    ])
+
+    // Assert
+    expect(fitCalls).toHaveLength(1)
+    expect(second).toEqual(first)
   })
 
   it('sends the rated features to the sidecar and keeps the model with the scales', async () => {

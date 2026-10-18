@@ -214,6 +214,7 @@ export interface CalibrationView {
   /** Tracks whose energy features are measured for their file as it is. */
   measuredCount: number
   sample: CalibrationItem[]
+  /** Every rating given, of this sample and the ones before: the fit takes them all. */
   ratedCount: number
   /** The kept model, or null while there is none. */
   model: {
