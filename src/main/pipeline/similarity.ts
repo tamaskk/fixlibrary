@@ -1,7 +1,7 @@
 // How well two tracks, or a track and a playlist, go together (T-036): by style, tempo,
 // key, energy and mood, in that order of weight. Pure, for the recommendations and
 // the generator to share.
-import type { MoodTag } from '@shared/mood'
+import { MOOD_TAGS, type MoodTag } from '@shared/mood'
 
 /** What the similarity reads of a track. A value that is not known scores 0. */
 export interface SimilarityTrack {
@@ -153,7 +153,7 @@ export function buildProfile(tracks: readonly SimilarityTrack[]): PlaylistProfil
     // The most frequent first; a tie goes by the order of the list, so the same playlist
     // always has the same moods.
     moods: [...moodCounts.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .sort((a, b) => b[1] - a[1] || MOOD_TAGS.indexOf(a[0]) - MOOD_TAGS.indexOf(b[0]))
       .slice(0, 3)
       .map(([tag]) => tag)
   }

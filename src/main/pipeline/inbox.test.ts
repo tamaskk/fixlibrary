@@ -243,9 +243,9 @@ describe('the Inbox watcher', () => {
 })
 
 describe('inboxStages', () => {
-  it('runs every function but the stems and the hot cues', () => {
+  it('runs every function but the stems, the hot cues and the moods', () => {
     // Act
-    const stages = inboxStages(['bpmKey', 'stems', 'cues', 'lookup', 'organize'])
+    const stages = inboxStages(['bpmKey', 'stems', 'cues', 'mood', 'lookup', 'organize'])
 
     // Assert
     expect(stages).toEqual(['bpmKey', 'lookup', 'organize'])

@@ -5,6 +5,7 @@
 // sends no events, a folder made after the start).
 import { dirname, extname, join } from 'path'
 import { CUES_STAGE } from './stages/cues'
+import { MOOD_STAGE } from './stages/mood'
 import { STEMS_STAGE } from './stages/stems'
 import { logger } from '../services/logger'
 import { AUDIO_EXTENSIONS } from '@shared/file-names'
@@ -18,10 +19,11 @@ export const INBOX_RECHECK_MS = 60_000
 export const INBOX_RETRY_MS = 15_000
 
 // Stems take hours and would keep the preview away; hot cues need Rekordbox's grid,
-// which a new track gets only from the wizard. Both are run later, by hand.
-const LEFT_OUT_STAGES: readonly string[] = [STEMS_STAGE, CUES_STAGE]
+// which a new track gets only from the wizard; the moods would make every file a call
+// to Claude, whose limit must not hold an Inbox preview up. All run later, by hand.
+const LEFT_OUT_STAGES: readonly string[] = [STEMS_STAGE, CUES_STAGE, MOOD_STAGE]
 
-/** The functions an Inbox batch runs: every one the user could ask for, but those two. */
+/** The functions an Inbox batch runs: every one the user could ask for, but those three. */
 export function inboxStages(selectable: readonly string[]): string[] {
   return selectable.filter((name) => !LEFT_OUT_STAGES.includes(name))
 }

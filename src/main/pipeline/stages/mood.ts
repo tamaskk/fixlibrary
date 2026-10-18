@@ -21,6 +21,23 @@ export interface MoodStageDependencies {
   claude: () => Pick<Claude, 'ask'> | null
 }
 
+// Words a tag has no reason to hold and an instruction about moods does. Not "every"
+// or "all" alone: titles hold them.
+const TALKING_OF_MOODS = /\b(?:moods?|choose|every track|all tracks)\b/iu
+
+/**
+ * True for a track whose text reads like it talks to the model: the words of the style
+ * task, and those of this one. The style name counts: a new style was named by Claude.
+ */
+function talksToTheModel(input: MoodInput): boolean {
+  const style = { artist: input.style, title: null, mix: null, label: null }
+  const texts = [input.artist, input.title, input.mix, input.label, input.style]
+  return (
+    [input, style].some((each) => looksLikeInstructions(each)) ||
+    texts.some((text) => text !== null && TALKING_OF_MOODS.test(text))
+  )
+}
+
 function text(value: PreviewValue): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null
 }
@@ -61,7 +78,7 @@ export function createMoodStage(dependencies: MoodStageDependencies): Stage {
         energy: whole(fieldOf(track, proposal, 'energy', track.energy).value)
       }
       // A track whose text reads like instructions is asked about alone.
-      const task = createMoodTask(looksLikeInstructions(input) ? track.id : undefined)
+      const task = createMoodTask(talksToTheModel(input) ? track.id : undefined)
       const answer = await claude.ask(task, input, signal)
       // A run that was stopped keeps nothing of an answer that came after all.
       if (signal.aborted) throw new AppError('UNEXPECTED', 'the stage was stopped')

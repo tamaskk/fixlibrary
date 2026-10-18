@@ -19,9 +19,13 @@ type TrackInsert = typeof tracks.$inferInsert
 
 export type StageStatus = z.output<typeof stageStatusSchema>
 /** The volume is derived from the path, so it cannot be set on its own. */
-export type NewTrack = Omit<TrackInsert, 'stageStatus' | 'lockedFields' | 'volumeName'> & {
+export type NewTrack = Omit<
+  TrackInsert,
+  'stageStatus' | 'lockedFields' | 'volumeName' | 'moodTags'
+> & {
   stageStatus?: StageStatus
   lockedFields?: string[]
+  moodTags?: MoodTag[] | null
 }
 /** `originalPath` is where the file was first found; it never changes. */
 export type TrackChanges = Partial<
