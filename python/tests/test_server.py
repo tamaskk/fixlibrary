@@ -7,8 +7,11 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -468,3 +471,59 @@ def test_job_cancel_and_cancellable_refuse_an_id_of_the_wrong_kind(job_id: objec
     with pytest.raises(ValueError):
         with server.cancellable(job_id):  # type: ignore[arg-type]
             pass
+
+
+class _FakePool:
+    """Stands in for a process pool: hands out the futures a test prepared."""
+
+    def __init__(self, *futures: Future[Any]) -> None:
+        self.futures = list(futures)
+        self.shut_down = False
+
+    def submit(self, function: Any, *arguments: Any) -> Future[Any]:
+        return self.futures.pop(0)
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        self.shut_down = True
+
+
+def _done(result: Any = None, error: BaseException | None = None) -> Future[Any]:
+    future: Future[Any] = Future()
+    if error is None:
+        future.set_result(result)
+    else:
+        future.set_exception(error)
+    return future
+
+
+def test_a_cpu_job_whose_worker_died_is_tried_once_more_in_a_pool_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = _FakePool(_done(error=BrokenProcessPool("a worker died")))
+    alone = _FakePool(_done("result"))
+    discarded: list[Any] = []
+    monkeypatch.setattr(server, "cpu_pool", lambda: shared)
+    monkeypatch.setattr(server, "discard_cpu_pool", discarded.append)
+    monkeypatch.setattr(server, "new_worker_pool", lambda size: alone)
+
+    result = server.run_in_cpu_pool(threading.Event(), print, "track")
+
+    assert result == "result"
+    assert discarded == [shared]
+    assert alone.shut_down
+
+
+def test_a_cpu_job_fails_when_its_own_pool_breaks_as_well(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alone = _FakePool(_done(error=BrokenProcessPool("again")))
+    monkeypatch.setattr(
+        server, "cpu_pool", lambda: _FakePool(_done(error=BrokenProcessPool("a worker died")))
+    )
+    monkeypatch.setattr(server, "discard_cpu_pool", lambda pool: None)
+    monkeypatch.setattr(server, "new_worker_pool", lambda size: alone)
+
+    with pytest.raises(BrokenProcessPool):
+        server.run_in_cpu_pool(threading.Event(), print, "track")
+
+    assert alone.shut_down

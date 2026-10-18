@@ -5,6 +5,7 @@ Mirrored by `analysis.energy_features` in src/shared/rpc.ts.
 The track is cut into windows of ten seconds and each feature is measured per window.
 The result is the 75th percentile over the windows that are not silent, so the drops
 decide the value and a long intro, an outro or silence before the track do not.
+Only the first ten minutes are decoded (decode.MAX_SECONDS), the loudness included.
 """
 
 from __future__ import annotations
@@ -71,11 +72,17 @@ def _percussive_power(audio: Any) -> tuple[Any, Any]:
     del spectrum
     harmonic = ndimage.median_filter(magnitude, size=(1, HPSS_KERNEL))
     percussive = ndimage.median_filter(magnitude, size=(HPSS_KERNEL, 1))
-    power = magnitude**2
+    # In place from here: a worker holds three spectra of ten minutes, not six.
+    power = magnitude
+    power **= 2
     harmonic **= 2
     percussive **= 2
-    mask = percussive / numpy.maximum(harmonic + percussive, _TINY)
-    return (mask * power).sum(axis=0), power.sum(axis=0)
+    harmonic += percussive
+    numpy.maximum(harmonic, _TINY, out=harmonic)
+    percussive /= harmonic
+    del harmonic
+    percussive *= power
+    return percussive.sum(axis=0), power.sum(axis=0)
 
 
 def window_features(audio: Any) -> list[dict[str, float]]:
