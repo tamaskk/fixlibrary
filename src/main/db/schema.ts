@@ -105,6 +105,9 @@ export const tracks = sqliteTable(
     truePeakDbtp: real('true_peak_dbtp'),
     acoustId: text('acoust_id'),
     musicbrainzRecordingId: text('musicbrainz_recording_id'),
+    // Up to three mood words of a fixed list, as Claude judged them from the metadata
+    // (T-036); null until asked. Validated when read.
+    moodTags: text('mood_tags', { mode: 'json' }).$type<unknown>(),
     // Processing state per function, as { [stage]: status }. Validated when read.
     stageStatus: text('stage_status', { mode: 'json' }).$type<unknown>().notNull().default({}),
     // The names of the fields the user set by hand in a batch preview. No automatic
