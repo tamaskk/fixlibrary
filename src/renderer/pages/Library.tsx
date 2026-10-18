@@ -3,6 +3,7 @@ import { LibraryTable } from '@/components/features/library/LibraryTable'
 import { LibraryToolbar } from '@/components/features/library/LibraryToolbar'
 import { ScanProgressPanel } from '@/components/features/library/ScanProgressPanel'
 import { ScanResult } from '@/components/features/library/ScanResult'
+import { AddToPlaylist } from '@/components/features/library/AddToPlaylist'
 import { SelectionBar } from '@/components/features/library/SelectionBar'
 import { RunPanel } from '@/components/features/pipeline/RunPanel'
 import { RunResult } from '@/components/features/pipeline/RunResult'
@@ -213,6 +214,11 @@ export function Library(): React.JSX.Element {
                   lastRun?.ok && (runProgress !== null || runFinished !== null) ? null : lastRun
                 }
                 onRun={(scope) => void run(scope, chosenStages())}
+              />
+              <AddToPlaylist
+                trackIds={rows
+                  .filter((track) => selection.ids.has(track.id))
+                  .map((track) => track.id)}
               />
             </>
           )}

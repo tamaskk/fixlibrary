@@ -7,6 +7,7 @@ import { ProgressBar } from '@/components/ui/progress-bar'
 import { RadioGroup, RadioRow } from '@/components/ui/radio-group'
 import { StatusLine } from '@/components/ui/status-line'
 import { errorMessage } from '@/lib/messages'
+import { useTrackPlayer } from '@/lib/use-track-player'
 import { useAppStore } from '@/stores/app-store'
 import { useEnergyStore, type EnergyFailure } from '@/stores/energy-store'
 import { MIN_RATINGS_TO_FIT, type CalibrationItem } from '@shared/energy'
@@ -90,42 +91,14 @@ export function EnergyCalibration(): React.JSX.Element {
   const fit = useEnergyStore((state) => state.fit)
   const newSample = useEnergyStore((state) => state.newSample)
   const setPage = useAppStore((state) => state.setPage)
-  const [playingId, setPlayingId] = React.useState<number | null>(null)
-  const [playFailed, setPlayFailed] = React.useState(false)
-  const audio = React.useRef<HTMLAudioElement | null>(null)
+  const player = useTrackPlayer()
 
   React.useEffect(() => {
     void load()
-    return () => audio.current?.pause()
   }, [load])
 
-  function stop(): void {
-    audio.current?.pause()
-    audio.current = null
-    setPlayingId(null)
-  }
-
-  // One track plays at a time; playing the one that plays stops it.
-  function play(trackId: number): void {
-    const again = playingId === trackId
-    stop()
-    setPlayFailed(false)
-    if (again) return
-    const player = new Audio(`fixlib-audio://track/${trackId}`)
-    const failed = (): void => {
-      if (audio.current !== player) return
-      stop()
-      setPlayFailed(true)
-    }
-    player.addEventListener('ended', () => audio.current === player && stop())
-    player.addEventListener('error', failed)
-    audio.current = player
-    setPlayingId(trackId)
-    void player.play().catch(failed)
-  }
-
   function chooseNewSample(): void {
-    stop()
+    player.stop()
     void newSample()
   }
 
@@ -212,7 +185,7 @@ export function EnergyCalibration(): React.JSX.Element {
                 Az értékelés nem mentődött el: {failureText(failure)}
               </StatusLine>
             )}
-            {playFailed && (
+            {player.failed && (
               <StatusLine tone="danger">
                 A fájl nem játszható le. Lehet, hogy a lemeze nincs csatlakoztatva.
               </StatusLine>
@@ -223,8 +196,8 @@ export function EnergyCalibration(): React.JSX.Element {
               <SampleRow
                 key={item.trackId}
                 item={item}
-                playing={playingId === item.trackId}
-                onPlay={() => play(item.trackId)}
+                playing={player.playingId === item.trackId}
+                onPlay={() => player.toggle(item.trackId)}
                 onRate={(rating) => void rate(item.trackId, rating)}
               />
             ))}

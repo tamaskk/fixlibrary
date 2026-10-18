@@ -4,6 +4,7 @@ import { CueEditor } from '@/pages/CueEditor'
 import { Download } from '@/pages/Download'
 import { EnergyCalibration } from '@/pages/EnergyCalibration'
 import { Library } from '@/pages/Library'
+import { Playlists } from '@/pages/Playlists'
 import { RekordboxWizard } from '@/pages/RekordboxWizard'
 import { Settings } from '@/pages/Settings'
 import { useAppStore } from '@/stores/app-store'
@@ -25,6 +26,8 @@ export function App(): React.JSX.Element {
           <CueEditor />
         ) : page === 'energy' ? (
           <EnergyCalibration />
+        ) : page === 'playlists' ? (
+          <Playlists />
         ) : page === 'rekordbox' ? (
           <RekordboxWizard />
         ) : (

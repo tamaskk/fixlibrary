@@ -7,6 +7,7 @@ import {
   Gauge,
   Library,
   ListChecks,
+  ListMusic,
   Settings,
   type LucideIcon
 } from 'lucide-react'
@@ -21,6 +22,7 @@ const PAGES: { page: AppPage; label: string; icon: LucideIcon }[] = [
   { page: 'download', label: 'Letöltés', icon: Download },
   { page: 'cues', label: 'Cue-k', icon: AudioWaveform },
   { page: 'energy', label: 'Energy', icon: Gauge },
+  { page: 'playlists', label: 'Playlistek', icon: ListMusic },
   { page: 'rekordbox', label: 'Rekordbox', icon: Disc3 },
   { page: 'settings', label: 'Beállítások', icon: Settings }
 ]
