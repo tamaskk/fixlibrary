@@ -18,7 +18,8 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const api: FixLibraryApi = {
   app: {
-    getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion)
+    getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion),
+    audioReadToken: () => ipcRenderer.invoke(IPC_CHANNELS.appAudioReadToken)
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),

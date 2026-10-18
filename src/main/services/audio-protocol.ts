@@ -1,6 +1,7 @@
 // The `fixlib-audio:` protocol (T-030): how the sandboxed renderer plays a track. The
 // page names a track by its id, `fixlib-audio://track/<id>`, never by a path; the main
 // process looks the file up and serves it with byte ranges, so the player can seek.
+import { timingSafeEqual } from 'crypto'
 import { constants } from 'fs'
 import { open, type FileHandle } from 'fs/promises'
 import { extname } from 'path'
@@ -21,7 +22,7 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 }
 // What is read at a time while a response is sent.
 const PIECE_BYTES = 256 * 1024
-const TRACK_URL = /^fixlib-audio:\/\/track\/([1-9][0-9]{0,15})$/u
+const TRACK_URL = /^fixlib-audio:\/\/track\/([1-9][0-9]{0,15})(?:\?read=([0-9a-f]{32}))?$/u
 // No link anywhere in the path (macOS `O_NOFOLLOW_ANY`, which Node does not name), and
 // no wait on a file that is no file: a FIFO put in a track's place would hold a thread
 // of the file system forever.
@@ -36,6 +37,48 @@ const IDLE_CLOSE_MS = 30_000
 export interface AudioProtocolDependencies {
   /** The file of a track the page may play, or null: unknown, offline, missing or set aside. */
   pathOfTrack: (trackId: number) => string | null
+  /**
+   * The origin of the app's own page, as its requests name it (`null` for the page of a
+   * packaged app, which is a file). Only it may read the audio through Web Audio (T-033).
+   */
+  appOrigin: () => string | null
+  /**
+   * The token of this launch the app's page puts in the address to read the samples
+   * (`?read=`): the origin alone is `null` for every opaque document, not only the app's.
+   */
+  readToken: string
+}
+
+/**
+ * The headers that let the app's own page, and no other, read the audio it plays: the
+ * origin of its requests, and the token of this launch in the address.
+ */
+function corsHeadersOf(
+  request: Request,
+  token: string | undefined,
+  dependencies: Pick<AudioProtocolDependencies, 'appOrigin' | 'readToken'>
+): Record<string, string> {
+  const origin = request.headers.get('origin')
+  const appOrigin = dependencies.appOrigin()
+  const allowed =
+    origin !== null &&
+    appOrigin !== null &&
+    origin === appOrigin &&
+    token !== undefined &&
+    timingSafeEqual(Buffer.from(token), Buffer.from(dependencies.readToken))
+  return allowed ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : { Vary: 'Origin' }
+}
+
+/** The origin a request of the app's page names, from the address the page was loaded from. */
+export function originOfRendererUrl(entryUrl: string | null): string | null {
+  if (entryUrl === null) return null
+  try {
+    const url = new URL(entryUrl)
+    // A page loaded from a file has an opaque origin, which its requests call `null`.
+    return url.protocol === 'file:' ? 'null' : url.origin
+  } catch {
+    return null
+  }
 }
 
 function refuse(status: number): Response {
@@ -151,7 +194,8 @@ export function createAudioHandler(
         'Accept-Ranges': 'bytes',
         'Content-Length': String(end - start + 1),
         'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
+        'X-Content-Type-Options': 'nosniff',
+        ...corsHeadersOf(request, match[2], dependencies)
       }
       if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`
       if (request.method === 'HEAD' || size === 0) {
