@@ -62,6 +62,34 @@ export const MAX_PEAKS = 20 * 60 * 100 + 100
  */
 export const LOUDNESS_ANALYZER_VERSION = 'ffmpeg-ebur128-1'
 
+/**
+ * Names the features behind `analysis.energy_features`. It is stored with every result,
+ * and a track is analysed again only when it changes. The same text is
+ * ANALYZER_VERSION in fixlib_py/analysis/energy.py.
+ */
+export const ENERGY_ANALYZER_VERSION = 'essentia-windows10s-p75-1'
+
+/**
+ * The features the energy of a track is computed from (T-024): each the 75th
+ * percentile over the track's windows of ten seconds, the loudness over the whole.
+ */
+export const energyFeaturesResultSchema = z.object({
+  features: z.object({
+    integratedLufs: z.number().min(-200).max(30),
+    rmsDb: z.number().min(-300).max(30),
+    percussiveRatio: z.number().min(0).max(1),
+    onsetRate: z.number().nonnegative().max(100),
+    spectralCentroidHz: z.number().nonnegative().max(30_000),
+    spectralFlux: z.number().nonnegative().max(1000),
+    lowRatio: z.number().min(0).max(1)
+  }),
+  // A sidecar that runs another algorithm than this build expects is a bug of the
+  // build; its results must not be stored under this build's version.
+  analyzerVersion: z.literal(ENERGY_ANALYZER_VERSION)
+})
+
+export type EnergyFeaturesResult = z.output<typeof energyFeaturesResultSchema>
+
 /** What `analysis.loudness` found: the values, or why a file has none. */
 export const loudnessResultSchema = z.discriminatedUnion('status', [
   z.object({
@@ -431,6 +459,14 @@ export const RPC_SCHEMAS = {
         .nonnegative()
         .max(20 * 60 + 1)
     })
+  },
+  /** The energy features of one file. Reads the file only. */
+  'analysis.energy_features': {
+    params: z.object({
+      path: z.string().min(1),
+      jobId: z.string().min(1).max(64)
+    }),
+    result: energyFeaturesResultSchema
   },
   /** The loudness of one file by EBU R128. Reads the file only. */
   'analysis.loudness': {

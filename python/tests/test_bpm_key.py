@@ -166,7 +166,7 @@ def test_a_job_that_is_told_to_stop_answers_without_waiting_for_its_worker(
 ) -> None:
     never_done: Future[Any] = Future()
     monkeypatch.setattr(server, "cpu_pool", lambda: FakePool([never_done]))
-    monkeypatch.setattr(bpm_key, "_POLL_S", 0.01)
+    monkeypatch.setattr(server, "_POLL_S", 0.01)
     threading.Timer(0.05, lambda: server.cancel_job("job-1")).start()
 
     with pytest.raises(server.JobCancelled):
