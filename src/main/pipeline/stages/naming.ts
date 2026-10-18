@@ -126,8 +126,9 @@ export function createNamingStage(): Stage {
     // The name holds the key and the tempo, and the names a lookup found.
     dependsOn: [LOOKUP_STAGE, BPM_KEY_STAGE],
     // The name ends as the file will: a conversion in the batch says so first.
-    // The file name carries the energy the batch proposes.
-    after: [CONVERT_STAGE, ENERGY_STAGE],
+    after: [CONVERT_STAGE],
+    // The file name carries the energy the batch proposes, when it proposes one.
+    follows: [ENERGY_STAGE],
     selectable: true,
     timeoutMs: STAGE_TIMEOUTS_MS.naming,
     run: async ({ proposal }, track) => ({ proposal: propose(track, proposal) }),

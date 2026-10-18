@@ -23,7 +23,7 @@ export function createEnergyValueStage(dependencies: { db: AppDatabase }): Stage
     resource: 'cpu',
     dependsOn: [ENERGY_FEATURES_STAGE],
     // The scale is the style's: the one the batch proposes, when it classifies too.
-    after: [STYLE_STAGE],
+    follows: [STYLE_STAGE],
     selectable: true,
     timeoutMs: STAGE_TIMEOUTS_MS.energy,
     run: async ({ proposal }, track) => {

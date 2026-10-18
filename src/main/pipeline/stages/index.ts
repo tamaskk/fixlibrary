@@ -84,7 +84,7 @@ export function validateStages(stages: readonly Stage[]): void {
     byName.set(stage.name, stage)
   }
   for (const stage of stages) {
-    for (const name of stage.after ?? []) {
+    for (const name of [...(stage.after ?? []), ...(stage.follows ?? [])]) {
       const earlier = byName.get(name)
       // Only the order inside a phase is a stage's to ask for. A stage that is not
       // there is nothing to wait for.
@@ -112,7 +112,7 @@ export function validateStages(stages: readonly Stage[]): void {
       throw new Error(`Stages depend on each other in a circle: ${cycle.join(' -> ')}`)
     }
     following.push(stage.name)
-    for (const name of [...stage.dependsOn, ...(stage.after ?? [])]) {
+    for (const name of [...stage.dependsOn, ...(stage.after ?? []), ...(stage.follows ?? [])]) {
       const earlier = byName.get(name)
       if (earlier) follow(earlier)
     }
