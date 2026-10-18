@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
-export type AppPage = 'library' | 'preview' | 'download' | 'cues' | 'rekordbox' | 'settings'
+export type AppPage =
+  'library' | 'preview' | 'download' | 'cues' | 'energy' | 'rekordbox' | 'settings'
 
 interface AppState {
   page: AppPage

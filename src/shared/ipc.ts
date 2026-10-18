@@ -15,6 +15,7 @@ import type {
   DownloadSearchHit
 } from './download'
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
+import type { CalibrationRating, CalibrationView } from './energy'
 import type { Result } from './errors'
 import type {
   LibraryPage,
@@ -115,6 +116,10 @@ export const IPC_CHANNELS = {
   cueEditorTrack: 'cue-editor:track',
   cueEditorPeaks: 'cue-editor:peaks',
   cueEditorEdit: 'cue-editor:edit',
+  energyCalibration: 'energy:calibration',
+  energyRate: 'energy:rate',
+  energyFit: 'energy:fit',
+  energyNewSample: 'energy:newSample',
   downloadInspect: 'download:inspect',
   downloadStart: 'download:start',
   downloadSearch: 'download:search',
@@ -278,6 +283,16 @@ export interface FixLibraryApi {
      * which, the main process the path. False when asked again too soon.
      */
     copyPath: (which: CopyablePath) => Promise<boolean>
+  }
+  energy: {
+    /** The calibration sample, the ratings given, and the kept model. */
+    calibration: () => Promise<CalibrationView>
+    /** Keeps the user's 1–10 rating of a track of the sample; answers the count rated. */
+    rate: (rating: CalibrationRating) => Promise<Result<{ ratedCount: number }>>
+    /** Fits the model to the ratings and sets the scale of every style. */
+    fit: () => Promise<Result<CalibrationView>>
+    /** Chooses a new sample; the ratings given stay. */
+    newSample: () => Promise<CalibrationView>
   }
   cueEditor: {
     /** The tracks with Rekordbox's grid, as the filter asks, by file name. */

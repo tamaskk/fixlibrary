@@ -317,6 +317,25 @@ describe('a stage that looks at the tracks of a batch together', () => {
     expect(asked).toBe(4)
   })
 
+  it('runs a stage that follows another after it, also when that one failed or was skipped', async () => {
+    // Arrange
+    const [ok, broken] = addTracks(2) as [number, number]
+    const run = orchestrator([
+      fakeStage('energyFeatures', { ms: 20, fails: (id) => id === broken }),
+      fakeStage('energy', { dependsOn: ['energyFeatures'], ms: 20 }),
+      { ...fakeStage('naming', { ms: 5 }), follows: ['energy'] }
+    ])
+
+    // Act
+    run.start({ trackIds: [ok, broken], stages: ['energy', 'naming'] })
+    await vi.runAllTimersAsync()
+
+    // Assert
+    expect(finished.indexOf(`energy:${ok}`)).toBeLessThan(finished.indexOf(`naming:${ok}`))
+    expect(finished).toContain(`naming:${broken}`)
+    expect(finished).not.toContain(`energy:${broken}`)
+  })
+
   it('makes a stage wait for another of its phase only when that one is in the batch', async () => {
     // Arrange
     const trackIds = addTracks(3)

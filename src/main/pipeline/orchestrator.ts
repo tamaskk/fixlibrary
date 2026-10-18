@@ -325,6 +325,16 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     )
   }
 
+  /** The jobs that wait for this one to be over, whatever becomes of it (`follows`). */
+  function followersOf(active: Run, job: RunJob): RunJob[] {
+    const ofTrack = active.byTrack.get(job.trackId)
+    if (!ofTrack) return []
+    return [...ofTrack.values()].filter(
+      (other) =>
+        other.stage.phase === active.phase && (other.stage.follows ?? []).includes(job.stage.name)
+    )
+  }
+
   /** Marks a job, and every job that waits for it, as not going to run. */
   function skipWithDependents(active: Run, job: RunJob): void {
     const skipped: RunJob[] = []
@@ -339,6 +349,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       db,
       skipped.map((each) => each.id)
     )
+    // What only follows a skipped job runs anyway, now that it is over.
+    for (const each of skipped) {
+      for (const follower of followersOf(active, each)) resolve(active, follower)
+    }
   }
 
   /** Lines a queued job up if what it depends on is done, or skips it if that failed. */
@@ -349,13 +363,19 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     const waitsFor = [...job.stage.dependsOn, ...(job.stage.after ?? [])]
       .map((name) => ofTrack?.get(name))
       .filter((dependency): dependency is RunJob => dependency !== undefined)
+    const follows = (job.stage.follows ?? [])
+      .map((name) => ofTrack?.get(name))
+      .filter((earlier): earlier is RunJob => earlier !== undefined)
     if (
       waitsFor.some(
         (dependency) => dependency.status === 'failed' || dependency.status === 'skipped'
       )
     ) {
       skipWithDependents(active, job)
-    } else if (waitsFor.every((dependency) => dependency.status === 'done')) {
+    } else if (
+      waitsFor.every((dependency) => dependency.status === 'done') &&
+      follows.every((earlier) => ['done', 'failed', 'skipped'].includes(earlier.status))
+    ) {
       queue.add(job)
     }
   }
@@ -369,6 +389,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     setStatus(active, job, 'failed')
     active.failedTracks.add(job.trackId)
     for (const dependent of dependentsOf(active, job)) skipWithDependents(active, dependent)
+    for (const follower of followersOf(active, job)) resolve(active, follower)
   }
 
   // The timer that lets the steps that need Claude go on again, or null.
@@ -412,7 +433,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
    * rows stay `queued`, and the batch is the place to look.
    */
   function releaseDependents(active: Run, job: RunJob): void {
-    const dependents = dependentsOf(active, job)
+    const dependents = [...dependentsOf(active, job), ...followersOf(active, job)]
     try {
       for (const dependent of dependents) resolve(active, dependent)
     } catch (error) {

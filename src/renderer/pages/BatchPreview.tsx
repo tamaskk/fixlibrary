@@ -155,9 +155,6 @@ export function BatchPreview(): React.JSX.Element {
             Új trackek az Inboxból. Jóváhagyás után a stílusmappájukba kerülnek, a hot cue-khoz
             utána a Rekordbox varázsló A és B fázisa kell.
           </StatusLine>
-          <StatusLine tone="warning">
-            Energy nem kerül rájuk: ahhoz előbb kalibráció kell, ami még nem érhető el.
-          </StatusLine>
         </div>
       )}
 

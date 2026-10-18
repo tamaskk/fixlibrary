@@ -154,6 +154,7 @@ Radio buttons
 - For the choice of exactly one among the rows of a group (which copy of a duplicate stays). A 16px circle, surface with a text-muted border; chosen: primary with a white 8px dot. The whole row is the click target, at least 28px high, surface on hover. Hover: border text when not chosen, primary-hover when chosen. Focus: a 2px primary ring inside the row. Disabled: 50% opacity, and no answer to the pointer.
 - The group is one Tab stop and is named with an `aria-label` that says what the choice is for, and for which group; arrow keys move between the rows and choose the row they reach. Each row has an `aria-label` that spells out what it holds.
 - The component is `ui/radio-group.tsx`.
+- A row of short choices may lie side by side (`flex-row`, wrapping, space-3 apart), each its circle and a number in the Data role: the 1–10 rating of the energy calibration. A slider is not used: there is none in the design system, and the radios name each value.
 
 Tabs
 
@@ -171,7 +172,7 @@ Icon buttons
 
 Navigation
 
-- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Letöltés, Cue-k, Rekordbox, Beállítások.
+- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Letöltés, Cue-k, Energy, Rekordbox, Beállítások.
 - Current page: surface-hover background, text color and a straight 2px primary left edge, marked with `aria-current="page"`. Focus ring as for buttons.
 
 Rekordbox wizard
@@ -190,6 +191,12 @@ Cue editor
 - Deleting a cue is not confirmed, by the owner's choice: an exception to the rule of §06 Buttons, because a cue is no file and is put back with one click. After a delete "<letter> visszavonása" (ghost) puts it back where it was, until the next edit or another track.
 - States: "Betöltés…", "A waveform készül…" while the sidecar makes the peaks, "A waveform nem készíthető el." with the reason and "Próbáld újra", "Ez a track most nem szerkeszthető. Lehet, hogy a lemeze nincs csatlakoztatva."; with no track with a grid, "Nincs track Rekordbox griddel. Előbb a Rekordbox varázsló A fázisa kell." and "A Rekordbox varázsló" (Secondary). An edit refused says "Ez a hely nincs a griden. Próbáld a track hosszán belül.", and the cue goes back where it is saved. The XML button before phase A is done says "Előbb fejezd be a Rekordbox varázsló A fázisát, utána frissítheted az XML-t." in warning.
 - In the batch preview, Enter or a double click on a cell of the "Cue-k" column opens that track on this page.
+
+Energy calibration
+
+- The page "Energy" (H1 "Energy kalibráció", in the form width) holds two cards. "Modell": before a fit, what to do in Body text-muted; after one, "Átlagos eltérés: 0,9 pont (24 értékelés alapján)" with the numbers in the Data role; a warning when the model was fitted to features of another measure; "A mintából értékelve: n / m" in Small text-muted over a progress bar; then, on the right, "Új minta" (Secondary, with its loading state) and "Kalibrálás" (Primary, the one of the page, disabled under 10 ratings, with "Összesen n értékelés, legalább 10 kell." in Small text-muted on its left).
+- "Minta": up to 30 rows, not virtualized, each with a play button (ghost icon, "<név> lejátszása"/"megállítása"; one track plays at a time), artist - title (or the file name) cut short, the style in Small text-muted ("Nincs stílus"), and under them the 1–10 radios side by side. A rating is saved when it is chosen; arrow keys choose on every step, and only the last choice of a row is sent.
+- States: "Betöltés…"; "A kalibráció nem tölthető be." with "Próbáld újra"; with no measured track the empty state "Még nincs mért track. Futtasd az „Energy jellemzők mérése” funkciót a Könyvtárban." and "Könyvtár megnyitása". A rating that was not saved, and a track that cannot be played, are said at the top of "Minta"; a fit that failed in "Modell", one refused for its ratings as "A kalibráláshoz legalább 10 értékelés kell, és nem lehet mind egyforma."
 
 A/B player
 

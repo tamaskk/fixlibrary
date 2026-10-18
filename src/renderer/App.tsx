@@ -2,6 +2,7 @@ import { AppSidebar } from '@/components/features/AppSidebar'
 import { BatchPreview } from '@/pages/BatchPreview'
 import { CueEditor } from '@/pages/CueEditor'
 import { Download } from '@/pages/Download'
+import { EnergyCalibration } from '@/pages/EnergyCalibration'
 import { Library } from '@/pages/Library'
 import { RekordboxWizard } from '@/pages/RekordboxWizard'
 import { Settings } from '@/pages/Settings'
@@ -22,6 +23,8 @@ export function App(): React.JSX.Element {
           <Download />
         ) : page === 'cues' ? (
           <CueEditor />
+        ) : page === 'energy' ? (
+          <EnergyCalibration />
         ) : page === 'rekordbox' ? (
           <RekordboxWizard />
         ) : (

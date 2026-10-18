@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
-import { getAnalysis, saveAnalysis } from '../../db/analyses'
+import { getAnalysis, saveAnalysis, type StoredAnalysis } from '../../db/analyses'
 import type { AppDatabase } from '../../db/connection'
 import type { Track } from '../../db/tracks'
 import { describeError } from '../../services/error-text'
@@ -31,28 +31,35 @@ const storedFeaturesSchema = z.object({
   fileMtimeMs: z.number().nullable()
 })
 
+/** The features kept in `stored`, if this analyzer made them for the file as it is. */
+export function currentEnergyFeatures(
+  stored: StoredAnalysis<unknown> | undefined,
+  track: Pick<Track, 'fileSizeBytes' | 'fileMtimeMs'>
+): EnergyFeaturesResult['features'] | null {
+  if (stored?.analyzerVersion !== ENERGY_ANALYZER_VERSION) return null
+  const parsed = storedFeaturesSchema.safeParse(stored.result)
+  if (!parsed.success) return null
+  // Features kept without the time of their file are never taken for one that is.
+  const same =
+    parsed.data.fileMtimeMs !== null &&
+    parsed.data.fileSizeBytes === track.fileSizeBytes &&
+    parsed.data.fileMtimeMs === track.fileMtimeMs
+  return same ? parsed.data.features : null
+}
+
 /** The kept features of a track, if this analyzer made them for the file as it is. */
 export function keptEnergyFeatures(
   db: AppDatabase,
   track: Pick<Track, 'id' | 'fileSizeBytes' | 'fileMtimeMs'>
 ): EnergyFeaturesResult['features'] | null {
-  let stored
   try {
-    stored = getAnalysis(db, track.id, 'energy_features', z.unknown())
+    return currentEnergyFeatures(getAnalysis(db, track.id, 'energy_features', z.unknown()), track)
   } catch (error) {
     logger.warn(
       `The kept energy features of track ${track.id} are unreadable: ${describeError(error)}`
     )
     return null
   }
-  if (stored?.analyzerVersion !== ENERGY_ANALYZER_VERSION) return null
-  const parsed = storedFeaturesSchema.safeParse(stored.result)
-  if (!parsed.success) return null
-  const same =
-    parsed.data.fileMtimeMs !== null &&
-    parsed.data.fileSizeBytes === track.fileSizeBytes &&
-    parsed.data.fileMtimeMs === track.fileMtimeMs
-  return same ? parsed.data.features : null
 }
 
 /**

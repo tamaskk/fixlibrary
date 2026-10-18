@@ -42,7 +42,7 @@ export function organizeDetailsOf(after: unknown): OrganizeDetails | null {
 }
 
 /** A field as the batch holds it for the track: the proposal, unless the track's own value is locked. */
-function fieldOf(
+export function fieldOf(
   track: Track,
   proposal: Proposal,
   field: PreviewField,

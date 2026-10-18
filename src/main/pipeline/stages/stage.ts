@@ -55,6 +55,13 @@ export interface Stage {
    * If such a stage fails for a track, this one does not run for it.
    */
   after?: readonly string[]
+  /**
+   * Stages of the same phase that must be over for the same track first when they are
+   * part of the batch, and are not brought into it otherwise. Unlike `after`, this one
+   * runs whatever became of them: for a stage that reads what they propose if there is
+   * any, such as the file name that carries the energy.
+   */
+  follows?: readonly string[]
   /** True for a stage the user can ask for by itself in the function chooser. */
   selectable: boolean
   timeoutMs: number

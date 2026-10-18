@@ -278,6 +278,7 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
       manual.length === 0 &&
       !fields.bpm &&
       !fields.key &&
+      !fields.energy &&
       !fields.styleId &&
       !fields.secondaryStyleId &&
       !fields.genre &&
@@ -344,7 +345,7 @@ export function commitApprovedValues(db: AppDatabase, batchId: number, trackId: 
     if (fields.artist?.source === 'manual') changes.artist = fields.artist.value
     if (fields.title?.source === 'manual') changes.title = fields.title.value
     if (fields.mix?.source === 'manual') changes.mix = fields.mix.value
-    if (fields.energy?.source === 'manual') changes.energy = fields.energy.value
+    if (fields.energy && free('energy')) changes.energy = fields.energy.value
     // The styles: what the user chose, or what the classification decided, where the
     // field is not locked. A style the classification named that the list does not
     // have is created now, with a color of its own; one the user chose that was

@@ -4,6 +4,7 @@ import {
   AudioWaveform,
   Disc3,
   Download,
+  Gauge,
   Library,
   ListChecks,
   Settings,
@@ -19,6 +20,7 @@ const PAGES: { page: AppPage; label: string; icon: LucideIcon }[] = [
   { page: 'preview', label: 'Előnézet', icon: ListChecks },
   { page: 'download', label: 'Letöltés', icon: Download },
   { page: 'cues', label: 'Cue-k', icon: AudioWaveform },
+  { page: 'energy', label: 'Energy', icon: Gauge },
   { page: 'rekordbox', label: 'Rekordbox', icon: Disc3 },
   { page: 'settings', label: 'Beállítások', icon: Settings }
 ]
