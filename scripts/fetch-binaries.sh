@@ -207,14 +207,16 @@ build_ffmpeg() {
   # Audio only, and only what the app converts between. Without --enable-gpl and
   # --enable-nonfree the result is LGPL 2.1 or later and may be redistributed.
   # No network protocols: ffmpeg reads untrusted files, and must not be talked
-  # into opening a URL by one.
+  # into opening a URL by one. The mp4 muxer is there only for its options: yt-dlp
+  # passes `-movflags +faststart` to every conversion, and ffmpeg refuses an option
+  # no muxer of its build knows.
   ./configure --prefix="${PREFIX}" \
     --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug \
     --disable-ffplay --disable-ffprobe --disable-avdevice --disable-swscale \
     --enable-static --disable-shared \
     --enable-protocol=file,pipe \
     --enable-demuxer=mp3,wav,aiff,flac,ogg,matroska,mov,aac \
-    --enable-muxer=mp3,wav,aiff,flac,null \
+    --enable-muxer=mp3,wav,aiff,flac,mp4,null \
     --enable-decoder=mp3,mp3float,flac,aac,opus,vorbis,alac,pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,pcm_s16be,pcm_s24be,pcm_s32be,pcm_f32be,pcm_f64be \
     --enable-encoder=libmp3lame,flac,pcm_s16le,pcm_s24le,pcm_s16be,pcm_s24be \
     --enable-parser=mpegaudio,aac,flac,opus,vorbis \

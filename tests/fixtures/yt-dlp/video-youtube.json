@@ -1,0 +1,180 @@
+{
+  "_type": "video",
+  "id": "jNQXAC9IVRw",
+  "title": "Me at the zoo",
+  "uploader": "jawed",
+  "duration": 19,
+  "extractor_key": "Youtube",
+  "webpage_url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+  "abr": 106.064,
+  "formats": [
+    {
+      "format_id": "233",
+      "abr": null,
+      "acodec": null,
+      "vcodec": "none",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "234",
+      "abr": null,
+      "acodec": null,
+      "vcodec": "none",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "139-drc",
+      "abr": 49.127,
+      "acodec": "mp4a.40.5",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "249-drc",
+      "abr": 50.012,
+      "acodec": "opus",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "250-drc",
+      "abr": 63.755,
+      "acodec": "opus",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "139",
+      "abr": 49.14,
+      "acodec": "mp4a.40.5",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "249",
+      "abr": 47.356,
+      "acodec": "opus",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "250",
+      "abr": 60.478,
+      "acodec": "opus",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "140-drc",
+      "abr": 129.757,
+      "acodec": "mp4a.40.2",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "251-drc",
+      "abr": 107.429,
+      "acodec": "opus",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "140",
+      "abr": 129.796,
+      "acodec": "mp4a.40.2",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "251",
+      "abr": 106.064,
+      "acodec": "opus",
+      "vcodec": "none",
+      "protocol": "https"
+    },
+    {
+      "format_id": "269",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "avc1.4D400B",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "160",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "avc1.4D400B",
+      "protocol": "https"
+    },
+    {
+      "format_id": "602",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "vp09.00.10.08",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "603",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "vp09.00.11.08.01.05.01.06.00",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "278",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "vp9",
+      "protocol": "https"
+    },
+    {
+      "format_id": "229",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "avc1.4D400C",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "230",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "avc1.4D400C",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "134",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "avc1.4D400C",
+      "protocol": "https"
+    },
+    {
+      "format_id": "133",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "avc1.4D400C",
+      "protocol": "https"
+    },
+    {
+      "format_id": "604",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "vp09.00.20.08.01.05.01.06.00",
+      "protocol": "m3u8_native"
+    },
+    {
+      "format_id": "242",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "vp9",
+      "protocol": "https"
+    },
+    {
+      "format_id": "395",
+      "abr": 0,
+      "acodec": "none",
+      "vcodec": "av01.0.00M.08.0.110.05.01.06.0",
+      "protocol": "https"
+    }
+  ]
+}

@@ -124,6 +124,7 @@ export function BatchPreview(): React.JSX.Element {
       : columnsFor(batch.type, {
           covers: batch.findsCovers,
           folders: batch.organizes,
+          inbox: batch.inbox,
           cues: batch.placesCues,
           loudness: batch.normalizes
         })
@@ -147,6 +148,18 @@ export function BatchPreview(): React.JSX.Element {
           </Button>
         )}
       </div>
+
+      {batch?.inbox && (
+        <div className="flex flex-col gap-1">
+          <StatusLine tone="neutral">
+            Új trackek az Inboxból. Jóváhagyás után a stílusmappájukba kerülnek, a hot cue-khoz
+            utána a Rekordbox varázsló A és B fázisa kell.
+          </StatusLine>
+          <StatusLine tone="warning">
+            Energy nem kerül rájuk: ahhoz előbb kalibráció kell, ami még nem érhető el.
+          </StatusLine>
+        </div>
+      )}
 
       {/* In the page before there is anything to say, so that it is announced. */}
       {/* It takes no room of its own: only what it holds is a row of the page. */}
@@ -430,6 +443,7 @@ export function BatchPreview(): React.JSX.Element {
                 newStylesLeft={newStyles.left}
                 stylesFull={newStyles.full}
                 organizes={batch.organizes}
+                inbox={batch.inbox}
                 busy={busy}
                 onApprove={async () => {
                   // The run panel of the Library page shows the apply phase.

@@ -41,6 +41,16 @@ export function errorMessage(code: ErrorCode): string {
       return 'A normalizálás után mért hangerő eltér a tervezettől. A fájl módosult, a batch visszavonható.'
     case 'NOTHING_TO_UNDO':
       return 'Nincs visszavonható batch.'
+    case 'DOWNLOAD_UNSUPPORTED':
+      return 'Ez nem egy YouTube- vagy SoundCloud-track címe.'
+    case 'DOWNLOAD_PLAYLIST':
+      return 'Ez a cím több tracket jelöl (playlist, set vagy profil). Csak egyes trackek tölthetők le.'
+    case 'DOWNLOAD_FAILED':
+      return 'A letöltés nem sikerült. Ellenőrizd a címet és a hálózatot.'
+    case 'DOWNLOAD_EXTRACT_FAILED':
+      return 'A yt-dlp nem tudta olvasni a szolgáltatás oldalát. Valószínűleg frissíteni kell a yt-dlp-t.'
+    case 'TOOL_MISSING':
+      return 'Hiányzik a yt-dlp vagy az ffmpeg ebből a telepítésből.'
     case 'PYTHON_CRASHED':
     case 'PYTHON_ERROR':
     case 'TIMEOUT':

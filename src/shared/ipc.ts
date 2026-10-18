@@ -8,6 +8,12 @@ import type {
   CueEditorPeaks,
   CueEditorTrack
 } from './cue-editor'
+import type {
+  DownloadInspection,
+  DownloadItem,
+  DownloadSearch,
+  DownloadSearchHit
+} from './download'
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { Result } from './errors'
 import type {
@@ -108,13 +114,18 @@ export const IPC_CHANNELS = {
   cueEditorTracks: 'cue-editor:tracks',
   cueEditorTrack: 'cue-editor:track',
   cueEditorPeaks: 'cue-editor:peaks',
-  cueEditorEdit: 'cue-editor:edit'
+  cueEditorEdit: 'cue-editor:edit',
+  downloadInspect: 'download:inspect',
+  downloadStart: 'download:start',
+  downloadSearch: 'download:search',
+  downloadList: 'download:list'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
 export const IPC_EVENTS = {
   libraryScanProgress: 'library:scanProgress',
-  pipelineProgress: 'pipeline:progress'
+  pipelineProgress: 'pipeline:progress',
+  downloadChanged: 'download:changed'
 } as const
 
 export interface FixLibraryApi {
@@ -277,5 +288,19 @@ export interface FixLibraryApi {
     peaks: (trackId: number) => Promise<Result<CueEditorPeaks>>
     /** Places, deletes or releases one cue; the main process snaps it to the grid. */
     edit: (action: CueEditAction) => Promise<Result<CueEditorTrack>>
+  }
+  download: {
+    /**
+     * Asks yt-dlp what one address is: its title, its bitrate, and a track of the
+     * library it may be a copy of. Only a single YouTube or SoundCloud track.
+     */
+    inspect: (url: string) => Promise<Result<DownloadInspection>>
+    /** Puts an address that was inspected in line; resolves with the whole list. */
+    start: (url: string) => Promise<Result<DownloadItem[]>>
+    /** Ten hits of the service, not downloaded. */
+    search: (request: DownloadSearch) => Promise<Result<DownloadSearchHit[]>>
+    list: () => Promise<DownloadItem[]>
+    /** Calls the listener whenever a download changes. */
+    onChange: (listener: (items: DownloadItem[]) => void) => () => void
   }
 }

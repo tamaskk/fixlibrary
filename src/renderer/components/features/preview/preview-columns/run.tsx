@@ -72,6 +72,16 @@ export const FOLDER_COLUMN: PreviewColumn = {
   text: (row) => diffText(row.cells.folder)
 }
 
+/** The folder of a batch of the Inbox (T-035): where each new track goes, at every width. */
+export const TARGET_FOLDER_COLUMN: PreviewColumn = {
+  id: 'folder',
+  header: 'Célmappa',
+  track: '128px',
+  minWidth: 128,
+  render: (row) => <DiffValue cell={row.cells.folder} />,
+  text: (row) => diffText(row.cells.folder)
+}
+
 /** The column of a batch that places hot cues: the slots filled before and after, by letter. */
 export const CUES_COLUMN: PreviewColumn = {
   id: 'cues',

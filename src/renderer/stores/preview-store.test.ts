@@ -66,7 +66,8 @@ const WAITING: PreviewState = {
     findsCovers: false,
     organizes: false,
     placesCues: false,
-    normalizes: false
+    normalizes: false,
+    inbox: false
   },
   canUndo: false
 }

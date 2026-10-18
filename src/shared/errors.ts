@@ -40,6 +40,15 @@ export const ERROR_CODES = [
   'XML_NOT_FOUND',
   // The export is no Rekordbox XML the app can read, or too large.
   'XML_UNREADABLE',
+  // An address that is not one track of YouTube or SoundCloud.
+  'DOWNLOAD_UNSUPPORTED',
+  // An address that names a playlist, a set or a profile: only single tracks are downloaded.
+  'DOWNLOAD_PLAYLIST',
+  'DOWNLOAD_FAILED',
+  // yt-dlp could not read the service's page; a newer yt-dlp usually can (task 43).
+  'DOWNLOAD_EXTRACT_FAILED',
+  // This installation has no yt-dlp or no ffmpeg.
+  'TOOL_MISSING',
   // Something failed that no code above describes; the detail is in the log.
   'UNEXPECTED'
 ] as const
@@ -109,5 +118,10 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   XML_BUSY: 'The Rekordbox XML is being written or read',
   XML_NOT_FOUND: 'No Rekordbox export was found',
   XML_UNREADABLE: 'The Rekordbox export cannot be read',
+  DOWNLOAD_UNSUPPORTED: 'The address is not a single YouTube or SoundCloud track',
+  DOWNLOAD_PLAYLIST: 'The address names more than one track',
+  DOWNLOAD_FAILED: 'The download failed',
+  DOWNLOAD_EXTRACT_FAILED: 'yt-dlp could not read the page of the service',
+  TOOL_MISSING: 'A tool the app needs is missing',
   UNEXPECTED: 'Unexpected error'
 }

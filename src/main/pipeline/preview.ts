@@ -11,6 +11,7 @@ import {
   getBatchItem,
   countApprovedBatchItems,
   listBatchItems,
+  listBatchItemsBefore,
   mergeBatchItemProposal,
   setBatchItemProposal,
   setBatchItemsExcluded,
@@ -19,7 +20,13 @@ import {
 import type { AppDatabase } from '../db/connection'
 import { listJobStageNames } from '../db/jobs'
 import { addStyle, listStyles } from '../db/styles'
-import { getTrackById, updateTrack, type Track, type TrackChanges } from '../db/tracks'
+import {
+  getTrackById,
+  pathOfSnapshot,
+  updateTrack,
+  type Track,
+  type TrackChanges
+} from '../db/tracks'
 import type { CoverStore } from '../services/covers'
 import type { PythonBridge } from '../services/python-bridge'
 import { describeError } from '../services/error-text'
@@ -76,6 +83,7 @@ import { NORMALIZE_STAGE } from './stages/normalize'
 import { cuesEntryOf, writeTrackCues } from './cues'
 import { normalizeEntryOf } from './normalize'
 import { readSettings } from './settings'
+import { isInInbox } from './inbox'
 import { styleTagsFor } from './stages/style-tags'
 import { createsStyle } from './new-styles'
 import { identifiersSchema } from './stages/lookup'
@@ -496,6 +504,19 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
     return { ok: true, value: batch }
   }
 
+  /** True for a batch of the Inbox (T-035): every track of it came from there. */
+  function isInboxBatch(batchId: number): boolean {
+    const root = readSettings(db).library.rootFolder
+    const items = listBatchItemsBefore(db, batchId)
+    return (
+      items.length > 0 &&
+      items.every(({ before }) => {
+        const path = pathOfSnapshot(before)
+        return path !== null && isInInbox(path, root)
+      })
+    )
+  }
+
   function state(): PreviewState {
     const batch = findPreviewBatch(db)
     return {
@@ -510,7 +531,8 @@ export function createPreview(dependencies: PreviewDependencies): Preview {
             findsCovers: listJobStageNames(db, batch.id).includes(COVER_STAGE),
             organizes: listJobStageNames(db, batch.id).includes(ORGANIZE_STAGE),
             placesCues: listJobStageNames(db, batch.id).includes(CUES_STAGE),
-            normalizes: listJobStageNames(db, batch.id).includes(NORMALIZE_STAGE)
+            normalizes: listJobStageNames(db, batch.id).includes(NORMALIZE_STAGE),
+            inbox: isInboxBatch(batch.id)
           }
         : null,
       canUndo: batchFiles.lastUndoable() !== null

@@ -58,6 +58,8 @@ export const FIELD_SOURCES = [
   'discogs',
   'itunes',
   'coverartarchive',
+  // The thumbnail of a YouTube or SoundCloud download (T-034).
+  'thumbnail',
   'placeholder',
   'organize',
   'id3',
@@ -377,6 +379,8 @@ export interface PreviewBatch {
   placesCues: boolean
   /** True when the batch normalizes the loudness: its columns are shown. */
   normalizes: boolean
+  /** True for a batch of new tracks from the Inbox (T-035): the target folder is always shown. */
+  inbox: boolean
 }
 
 /** How many rows one `preview:coverThumbs` call may ask about: about two screens. */
