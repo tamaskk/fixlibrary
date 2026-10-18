@@ -3,7 +3,7 @@ import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { addStyle } from '../db/styles'
 import { insertTracks, updateTrack } from '../db/tracks'
 import { listPlaylistsWithTracks } from '../db/playlists'
-import { editPlaylist, movedOne, playlistView, type PlaylistDependencies } from './playlists'
+import { editPlaylist, neighbourOf, playlistView, type PlaylistDependencies } from './playlists'
 import type { PlaylistEditResult } from '@shared/playlists'
 import type { Result } from '@shared/errors'
 
@@ -106,19 +106,56 @@ describe('editing playlists', () => {
   })
 })
 
-describe('movedOne', () => {
+describe('neighbourOf', () => {
   it.each([
-    [[1, 2, 3], 2, -1, [2, 1, 3]],
-    [[1, 2, 3], 2, 1, [1, 3, 2]],
-    [[1, 2, 3], 1, -1, [1, 2, 3]],
-    [[1, 2, 3], 3, 1, [1, 2, 3]],
-    [[1, 2, 3], 9, 1, [1, 2, 3]]
-  ] as const)('moves %o: track %i by %i gives %o', (order, trackId, direction, expected) => {
+    [[1, 2, 3], 2, -1, 1],
+    [[1, 2, 3], 2, 1, 3],
+    [[1, 2, 3], 1, -1, null],
+    [[1, 2, 3], 3, 1, null],
+    [[1, 2, 3], 9, 1, null]
+  ] as const)(
+    'in %o, track %i moved by %i swaps with %s',
+    (order, trackId, direction, expected) => {
+      // Act
+      const other = neighbourOf(order, trackId, direction)
+
+      // Assert
+      expect(other).toBe(expected)
+    }
+  )
+})
+
+describe('the limits', () => {
+  it('keeps the order of a playlist of more than one chunk of rows', () => {
+    // Arrange
+    const id = newPlaylist()
+    const ids = insertTracks(
+      testDatabase.db,
+      Array.from({ length: 1200 }, (_, index) => ({
+        path: `/Music/${index}.mp3`,
+        originalPath: `/Music/${index}.mp3`,
+        format: 'mp3' as const
+      }))
+    )
+    const shuffled = [...ids].reverse()
+
     // Act
-    const moved = movedOne(order, trackId, direction)
+    editPlaylist(dependencies, { action: 'add', playlistId: id, trackIds: shuffled.slice(0, 700) })
+    editPlaylist(dependencies, { action: 'add', playlistId: id, trackIds: shuffled.slice(700) })
 
     // Assert
-    expect(moved).toEqual(expected)
+    expect(listPlaylistsWithTracks(testDatabase.db)[0]?.trackIds).toEqual(shuffled)
+  })
+
+  it('makes no more than 500 playlists', () => {
+    // Arrange
+    for (let index = 0; index < 500; index += 1) newPlaylist(`P ${index}`)
+
+    // Act
+    const result = editPlaylist(dependencies, { action: 'create', name: 'One more' })
+
+    // Assert
+    expect(result).toEqual({ ok: false, code: 'INVALID_INPUT' })
   })
 })
 
@@ -158,12 +195,12 @@ describe('the playlist view', () => {
     const view = playlistView(dependencies, id)
 
     // Assert
-    const recommended = view?.recommendations.map((item) => item.trackId) ?? []
+    const recommended = view?.recommendations?.map((item) => item.trackId) ?? []
     expect(recommended).toHaveLength(10)
     expect(recommended[0]).toBe(good[0])
     expect(recommended).not.toContain(member)
     for (const left of [poor, offline, missing, setAside]) expect(recommended).not.toContain(left)
-    const scores = view?.recommendations.map((item) => item.score) ?? []
+    const scores = view?.recommendations?.map((item) => item.score) ?? []
     expect([...scores].sort((x, y) => y - x)).toEqual(scores)
   })
 

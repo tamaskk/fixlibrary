@@ -4,6 +4,9 @@ import { z } from 'zod'
 
 export const MAX_PLAYLIST_NAME = 100
 export const RECOMMENDATION_COUNT = 10
+// Far above a set or a crate; they keep one edit from scanning without end.
+export const MAX_PLAYLISTS = 500
+export const MAX_PLAYLIST_TRACKS = 5000
 
 /** A playlist name: one line, trimmed, its runs of spaces made one. */
 export const playlistNameSchema = z
@@ -72,8 +75,11 @@ export interface PlaylistView {
   bpmRange: [number, number] | null
   /** The Camelot keys of its tracks, each once, in the order they first come. */
   keys: string[]
-  /** Up to ten tracks of the library that fit it best, the best first, with their score. */
-  recommendations: (PlaylistTrackItem & { score: number })[]
+  /**
+   * Up to ten tracks of the library that fit it best, the best first, with their score;
+   * null after an edit that leaves them as they were (a move or a rename).
+   */
+  recommendations: (PlaylistTrackItem & { score: number })[] | null
 }
 
 /** What an edit answers: the list of playlists, and the one it was about. */
@@ -81,6 +87,9 @@ export interface PlaylistEditResult {
   playlists: PlaylistSummary[]
   /** The playlist the edit was about, or null after a delete. */
   view: PlaylistView | null
-  /** For an add: the tracks that were in the playlist already, or could not be added. */
+  /**
+   * For an add: the tracks that were in the playlist already, are not in the library
+   * (gone, or set aside as a duplicate), or did not fit under MAX_PLAYLIST_TRACKS.
+   */
   skipped: number
 }

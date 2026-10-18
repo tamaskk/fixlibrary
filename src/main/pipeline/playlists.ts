@@ -2,19 +2,24 @@
 // playlist at a time; what it holds and what is recommended for it is worked out here.
 import { basename } from 'path'
 import {
+  appendPlaylistTracks,
   createPlaylist,
   deletePlaylist,
   getPlaylist,
   listPlaylists,
+  removePlaylistTrack,
   renamePlaylist,
-  setPlaylistTracks
+  swapPlaylistTracks
 } from '../db/playlists'
 import type { AppDatabase } from '../db/connection'
 import { listStyles } from '../db/styles'
 import { getTracksByIds, listLibraryTracks, type Track } from '../db/tracks'
 import { buildProfile, profileSimilarity } from './similarity'
+import { isSetAsidePath } from '@shared/duplicates'
 import type { Result } from '@shared/errors'
 import {
+  MAX_PLAYLIST_TRACKS,
+  MAX_PLAYLISTS,
   RECOMMENDATION_COUNT,
   type PlaylistAction,
   type PlaylistEditResult,
@@ -49,7 +54,8 @@ function itemOf(track: Track, styles: ReadonlyMap<number, string>): PlaylistTrac
     energy: track.energy,
     styleName: track.primaryStyleId === null ? null : (styles.get(track.primaryStyleId) ?? null),
     durationMs: track.durationMs,
-    unavailable: track.offline || track.fileMissing
+    // A copy set aside as a duplicate is not played: the audio protocol refuses it.
+    unavailable: track.offline || track.fileMissing || isSetAsidePath(track.path)
   }
 }
 
@@ -72,10 +78,15 @@ export function recommendFor(
     .slice(0, RECOMMENDATION_COUNT)
 }
 
-/** One playlist as the page shows it, or null when there is no such playlist. */
+/**
+ * One playlist as the page shows it, or null when there is no such playlist. The
+ * recommendations read the whole library; `recommend: false` leaves them out (null) for
+ * an edit that cannot change them.
+ */
 export function playlistView(
   dependencies: PlaylistDependencies,
-  playlistId: number
+  playlistId: number,
+  { recommend = true }: { recommend?: boolean } = {}
 ): PlaylistView | null {
   const { db } = dependencies
   const playlist = getPlaylist(db, playlistId)
@@ -94,77 +105,81 @@ export function playlistView(
     keys: [
       ...new Set(members.flatMap((track) => (track.camelotKey === null ? [] : [track.camelotKey])))
     ],
-    recommendations: recommendFor(members, listLibraryTracks(db, mounted)).map(
-      ({ track, score }) => ({ ...itemOf(track, styles), score })
-    )
+    recommendations: recommend
+      ? recommendFor(members, listLibraryTracks(db, mounted)).map(({ track, score }) => ({
+          ...itemOf(track, styles),
+          score
+        }))
+      : null
   }
 }
 
-/** The order of a playlist with one track moved a place up (-1) or down (1). */
-export function movedOne(
+/** The track a move swaps places with: the one before (-1) or after (1), or null at an end. */
+export function neighbourOf(
   trackIds: readonly number[],
   trackId: number,
   direction: -1 | 1
-): number[] {
-  const from = trackIds.indexOf(trackId)
-  const to = from + direction
-  if (from === -1 || to < 0 || to >= trackIds.length) return [...trackIds]
-  const order = [...trackIds]
-  order[from] = order[to] as number
-  order[to] = trackId
-  return order
+): number | null {
+  const at = trackIds.indexOf(trackId)
+  return at === -1 ? null : (trackIds[at + direction] ?? null)
 }
 
 /**
- * Applies one edit of the page. Tracks are added at the end, each once: a track the
- * playlist holds, or one that is not in the library (gone, or set aside as a
- * duplicate), is skipped and counted.
+ * Applies one edit of the page. Tracks are added at the end, each once, MAX_PLAYLIST_TRACKS
+ * at most: a track the playlist holds, one that is not in the library (gone, or set aside
+ * as a duplicate), or one beyond the limit is skipped and counted.
  */
 export function editPlaylist(
   dependencies: PlaylistDependencies,
   action: PlaylistAction
 ): Result<PlaylistEditResult> {
   const { db } = dependencies
-  const answer = (playlistId: number | null, skipped = 0): Result<PlaylistEditResult> => ({
+  const answer = (
+    playlistId: number | null,
+    { skipped = 0, recommend = true }: { skipped?: number; recommend?: boolean } = {}
+  ): Result<PlaylistEditResult> => ({
     ok: true,
     value: {
       playlists: listPlaylists(db),
-      view: playlistId === null ? null : playlistView(dependencies, playlistId),
+      view: playlistId === null ? null : playlistView(dependencies, playlistId, { recommend }),
       skipped
     }
   })
-  if (action.action === 'create') return answer(createPlaylist(db, action.name))
+  if (action.action === 'create') {
+    if (listPlaylists(db).length >= MAX_PLAYLISTS) return { ok: false, code: 'INVALID_INPUT' }
+    return answer(createPlaylist(db, action.name))
+  }
   const playlist = getPlaylist(db, action.playlistId)
   if (!playlist) return { ok: false, code: 'INVALID_INPUT' }
   switch (action.action) {
     case 'rename':
       renamePlaylist(db, playlist.id, action.name)
-      return answer(playlist.id)
+      return answer(playlist.id, { recommend: false })
     case 'delete':
       deletePlaylist(db, playlist.id)
       return answer(null)
     case 'add': {
       const held = new Set(playlist.trackIds)
+      const asked = [...new Set(action.trackIds)].filter((id) => !held.has(id))
+      // Only the tracks asked for are read: the library is not walked for an add.
       const inLibrary = new Set(
-        listLibraryTracks(db, dependencies.listMountedVolumes()).map((track) => track.id)
+        getTracksByIds(db, asked, dependencies.listMountedVolumes())
+          .filter((track) => !isSetAsidePath(track.path))
+          .map((track) => track.id)
       )
-      const added = [...new Set(action.trackIds)].filter((id) => !held.has(id) && inLibrary.has(id))
-      setPlaylistTracks(db, playlist.id, [...playlist.trackIds, ...added])
-      return answer(playlist.id, action.trackIds.length - added.length)
+      const room = Math.max(0, MAX_PLAYLIST_TRACKS - playlist.trackIds.length)
+      const added = asked.filter((id) => inLibrary.has(id)).slice(0, room)
+      appendPlaylistTracks(db, playlist.id, added)
+      return answer(playlist.id, { skipped: action.trackIds.length - added.length })
     }
     case 'remove':
-      setPlaylistTracks(
-        db,
-        playlist.id,
-        playlist.trackIds.filter((id) => id !== action.trackId)
-      )
+      removePlaylistTrack(db, playlist.id, action.trackId)
       return answer(playlist.id)
-    case 'move':
-      setPlaylistTracks(
-        db,
-        playlist.id,
-        movedOne(playlist.trackIds, action.trackId, action.direction)
-      )
-      return answer(playlist.id)
+    case 'move': {
+      // The tracks stay the same, and so does what fits them.
+      const other = neighbourOf(playlist.trackIds, action.trackId, action.direction)
+      if (other !== null) swapPlaylistTracks(db, playlist.id, action.trackId, other)
+      return answer(playlist.id, { recommend: false })
+    }
   }
 }

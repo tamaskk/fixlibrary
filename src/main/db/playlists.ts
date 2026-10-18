@@ -1,4 +1,4 @@
-import { asc, count, eq } from 'drizzle-orm'
+import { and, asc, count, desc, eq } from 'drizzle-orm'
 import type { AppDatabase } from './connection'
 import { playlists, playlistTracks } from './schema'
 
@@ -80,16 +80,64 @@ export function deletePlaylist(db: AppDatabase, id: number): void {
   db.delete(playlists).where(eq(playlists.id, id)).run()
 }
 
-/** Makes the playlist hold these tracks in this order, and nothing else. In one step. */
-export function setPlaylistTracks(db: AppDatabase, id: number, trackIds: readonly number[]): void {
+/** Swaps the places of two tracks of a playlist; the rest stay where they are. */
+export function swapPlaylistTracks(db: AppDatabase, id: number, a: number, b: number): void {
   db.transaction((tx) => {
-    tx.delete(playlistTracks).where(eq(playlistTracks.playlistId, id)).run()
-    // In chunks: three bound parameters a row, far below SQLite's limit per statement.
-    for (let start = 0; start < trackIds.length; start += INSERT_CHUNK_SIZE) {
-      const chunk = trackIds.slice(start, start + INSERT_CHUNK_SIZE)
+    const entryOf = (trackId: number): { id: number; position: number } | undefined =>
+      tx
+        .select({ id: playlistTracks.id, position: playlistTracks.position })
+        .from(playlistTracks)
+        .where(and(eq(playlistTracks.playlistId, id), eq(playlistTracks.trackId, trackId)))
+        .get()
+    const first = entryOf(a)
+    const second = entryOf(b)
+    if (!first || !second) return
+    tx.update(playlistTracks)
+      .set({ position: second.position })
+      .where(eq(playlistTracks.id, first.id))
+      .run()
+    tx.update(playlistTracks)
+      .set({ position: first.position })
+      .where(eq(playlistTracks.id, second.id))
+      .run()
+    tx.update(playlists).set({ updatedAt: new Date() }).where(eq(playlists.id, id)).run()
+  })
+}
+
+/** Takes one track out of a playlist; the order of the rest stays. */
+export function removePlaylistTrack(db: AppDatabase, id: number, trackId: number): void {
+  db.transaction((tx) => {
+    tx.delete(playlistTracks)
+      .where(and(eq(playlistTracks.playlistId, id), eq(playlistTracks.trackId, trackId)))
+      .run()
+    tx.update(playlists).set({ updatedAt: new Date() }).where(eq(playlists.id, id)).run()
+  })
+}
+
+/** Appends tracks at the end of a playlist, after the last place it has. */
+export function appendPlaylistTracks(
+  db: AppDatabase,
+  id: number,
+  trackIds: readonly number[]
+): void {
+  db.transaction((tx) => {
+    const last = tx
+      .select({ position: playlistTracks.position })
+      .from(playlistTracks)
+      .where(eq(playlistTracks.playlistId, id))
+      .orderBy(desc(playlistTracks.position))
+      .limit(1)
+      .get()
+    const start = (last?.position ?? -1) + 1
+    for (let from = 0; from < trackIds.length; from += INSERT_CHUNK_SIZE) {
+      const chunk = trackIds.slice(from, from + INSERT_CHUNK_SIZE)
       tx.insert(playlistTracks)
         .values(
-          chunk.map((trackId, index) => ({ playlistId: id, trackId, position: start + index }))
+          chunk.map((trackId, index) => ({
+            playlistId: id,
+            trackId,
+            position: start + from + index
+          }))
         )
         .run()
     }
