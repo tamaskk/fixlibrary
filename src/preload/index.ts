@@ -91,6 +91,12 @@ const api: FixLibraryApi = {
     wizardCueCheck: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardCueCheck),
     copyPath: (which) => ipcRenderer.invoke(IPC_CHANNELS.rekordboxCopyPath, which)
   },
+  energy: {
+    calibration: () => ipcRenderer.invoke(IPC_CHANNELS.energyCalibration),
+    rate: (rating) => ipcRenderer.invoke(IPC_CHANNELS.energyRate, rating),
+    fit: () => ipcRenderer.invoke(IPC_CHANNELS.energyFit),
+    newSample: () => ipcRenderer.invoke(IPC_CHANNELS.energyNewSample)
+  },
   cueEditor: {
     tracks: (filter) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorTracks, filter),
     track: (trackId) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorTrack, trackId),
