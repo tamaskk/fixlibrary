@@ -19,7 +19,8 @@ import signal
 import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -55,6 +56,8 @@ _cancelled_early: dict[str, None] = {}
 MAX_CANCELLED_EARLY = 256
 # The same limit as in src/shared/rpc.ts.
 MAX_JOB_ID_LENGTH = 64
+# How often a job waiting for a pool worker looks whether it was told to stop.
+_POLL_S = 0.2
 
 
 class JobCancelled(Exception):
@@ -220,6 +223,41 @@ def raise_if_cancelled(event: threading.Event) -> None:
     """Ends the job with JobCancelled if the app has asked it to stop."""
     if event.is_set():
         raise JobCancelled()
+
+
+def _run_in(
+    pool: ProcessPoolExecutor, stop: threading.Event, function: Callable[..., Any], *arguments: Any
+) -> Any:
+    """Runs one call in a worker of `pool`, and stops waiting when told to stop.
+
+    Essentia cannot be interrupted. A job that is told to stop answers at once and
+    leaves its worker to finish the track; it only reads.
+    """
+    future = pool.submit(function, *arguments)
+    while not wait([future], timeout=_POLL_S).done:
+        if stop.is_set():
+            future.cancel()
+        raise_if_cancelled(stop)
+    return future.result()
+
+
+def run_in_cpu_pool(stop: threading.Event, function: Callable[..., Any], *arguments: Any) -> Any:
+    """Runs a CPU analysis of one file in the shared pool, for a job made `cancellable`."""
+    raise_if_cancelled(stop)
+    pool = cpu_pool()
+    try:
+        return _run_in(pool, stop, function, *arguments)
+    except BrokenProcessPool:
+        discard_cpu_pool(pool)
+    # A worker that dies takes every job of its pool with it, and nothing says which
+    # file did it. So each of them is tried once more in a pool of its own: the file
+    # that kills its worker fails alone, and the others get their result.
+    raise_if_cancelled(stop)
+    alone = new_worker_pool(1)
+    try:
+        return _run_in(alone, stop, function, *arguments)
+    finally:
+        alone.shutdown(wait=False, cancel_futures=True)
 
 
 @rpc("job.cancel")
@@ -421,7 +459,7 @@ def main() -> None:
         tag_write,
         tags,
     )
-    from fixlib_py.analysis import bpm_key, loudness, peaks, stems, structure  # noqa: F401
+    from fixlib_py.analysis import bpm_key, energy, loudness, peaks, stems, structure  # noqa: F401
 
     protocol_output = claim_stdout()
     protocol_input = claim_stdin()

@@ -7,15 +7,12 @@ from __future__ import annotations
 
 import math
 import os
-from concurrent.futures import ProcessPoolExecutor, wait
-from concurrent.futures.process import BrokenProcessPool
-from threading import Event
 from typing import Any
 
 from fixlib_py import server
 from fixlib_py.analysis.decode import SAMPLE_RATE, decode_mono
 from fixlib_py.keys import SCALES, key_of
-from fixlib_py.server import cancellable, raise_if_cancelled, rpc
+from fixlib_py.server import cancellable, rpc
 
 # Stored with every result: a track is analysed again only when this changes. Change
 # it with the algorithm or its settings, together with BPM_KEY_ANALYZER_VERSION in
@@ -29,8 +26,6 @@ BPM_MAX_LIMITS = (80, 300)
 
 # Shorter than this there is no tempo to speak of.
 MIN_SECONDS = 5
-# How often a waiting call looks whether it was told to stop.
-_POLL_S = 0.2
 
 
 def check_bpm_range(bpm_min: object, bpm_max: object) -> tuple[float, float]:
@@ -108,20 +103,6 @@ def analyze_file(path: str, bpm_min: float, bpm_max: float) -> dict[str, Any]:
     return analyze_samples(decode_mono(path), bpm_min, bpm_max)
 
 
-def _run_in(pool: ProcessPoolExecutor, stop: Event, *arguments: Any) -> dict[str, Any]:
-    """Analyses one file in a worker of `pool`, and stops waiting when told to stop.
-
-    Essentia cannot be interrupted. A job that is told to stop answers at once and
-    leaves its worker to finish the track; it only reads.
-    """
-    future = pool.submit(analyze_file, *arguments)
-    while not wait([future], timeout=_POLL_S).done:
-        if stop.is_set():
-            future.cancel()
-        raise_if_cancelled(stop)
-    return future.result()
-
-
 @rpc("analysis.bpm_key")
 def bpm_key(path: str, job_id: str, bpm_min: float, bpm_max: float) -> dict[str, Any]:
     """Measure the tempo and key of one file. Reads the file and changes nothing."""
@@ -129,18 +110,4 @@ def bpm_key(path: str, job_id: str, bpm_min: float, bpm_max: float) -> dict[str,
         raise ValueError("path must be an absolute path")
     low, high = check_bpm_range(bpm_min, bpm_max)
     with cancellable(job_id) as stop:
-        raise_if_cancelled(stop)
-        pool = server.cpu_pool()
-        try:
-            return _run_in(pool, stop, path, low, high)
-        except BrokenProcessPool:
-            server.discard_cpu_pool(pool)
-        # A worker that dies takes every job of its pool with it, and nothing says
-        # which file did it. So each of them is tried once more in a pool of its own:
-        # the file that kills its worker fails alone, and the others get their result.
-        raise_if_cancelled(stop)
-        alone = server.new_worker_pool(1)
-        try:
-            return _run_in(alone, stop, path, low, high)
-        finally:
-            alone.shutdown(wait=False, cancel_futures=True)
+        return server.run_in_cpu_pool(stop, analyze_file, path, low, high)
