@@ -669,3 +669,19 @@ def test_gives_no_parser_a_wav_of_packed_samples(
         convert.wav_to_aiff(str(src), str(dst), "job-1")
 
     assert not dst.exists()
+
+
+@needs_ffmpeg
+def test_refuses_a_file_whose_tag_holds_too_many_frames(ffmpeg: None, tmp_path: Path) -> None:
+    # Six thousand empty text frames: a reader would cut the tag anew for each.
+    src = tmp_path / "track.wav"
+    write_wav(src, 44_100, "PCM_16")
+    add_id3_chunk(src, id3v23((b"TXXX" + struct.pack(">I", 1) + b"\x00\x00" + b"\x00") * 6000))
+    before = sha256(src)
+    dst = temp_for(src)
+
+    with pytest.raises(convert.ConvertError):
+        convert.wav_to_aiff(str(src), str(dst), "job-1")
+
+    assert not dst.exists()
+    assert sha256(src) == before

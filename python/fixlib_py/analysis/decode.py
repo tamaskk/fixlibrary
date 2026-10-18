@@ -96,6 +96,11 @@ def run_tool(
         return subprocess.CompletedProcess(command, process.returncode, output, errors)
 
 
+def demuxer_for(path: str) -> str | None:
+    """The demuxer ffmpeg reads a file with, by its name; None for no audio file of the app."""
+    return _DEMUXERS.get(os.path.splitext(path)[1].lower())
+
+
 def tool_path(variable: str) -> str:
     """A tool the app ships, named by the app in the environment.
 
@@ -142,7 +147,7 @@ def decode_wav(
     """
     if channels not in (1, 2) or not 1 <= seconds <= MAX_DECODE_SECONDS:
         raise ValueError("unsupported decoding request")
-    demuxer = _DEMUXERS.get(os.path.splitext(path)[1].lower())
+    demuxer = demuxer_for(path)
     if demuxer is None:
         raise DecodeError("not one of the app's audio formats")
     command = [

@@ -53,6 +53,69 @@ export const BPM_KEY_ANALYZER_VERSION = 'essentia-2.1b6-multifeature-edma-1'
  */
 export const STEMS_ANALYZER_VERSION = 'htdemucs-8726e21a-rms100ms-1'
 
+/** The most peaks `analysis.peaks` makes: twenty minutes, a hundred a second. */
+export const MAX_PEAKS = 20 * 60 * 100 + 100
+
+/**
+ * Names the measure behind `analysis.loudness`: EBU R128 by ffmpeg's `ebur128`. It is
+ * stored with every result, and a track is measured again only when it changes.
+ */
+export const LOUDNESS_ANALYZER_VERSION = 'ffmpeg-ebur128-1'
+
+/** What `analysis.loudness` found: the values, or why a file has none. */
+export const loudnessResultSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('measured'),
+    /** The integrated loudness, in LUFS; above the gate of −70 LUFS. */
+    integratedLufs: z.number().gt(-70).max(10),
+    /** The true peak, in dBTP. */
+    truePeakDbtp: z.number().min(-200).max(30),
+    /** The loudness range, in LU. */
+    lra: z.number().nonnegative().max(100)
+  }),
+  z.object({
+    status: z.literal('unreadable'),
+    /** Silent, not decodable, no regular file, or no audio format of the app. */
+    reason: z.enum(['silent', 'decode', 'file', 'format'])
+  })
+])
+
+export type LoudnessResult = z.output<typeof loudnessResultSchema>
+
+/** How the sidecar is to change a file's loudness (src/shared/normalize.ts plans it). */
+export const normalizeApplyPlanSchema = z.discriminatedUnion('kind', [
+  /** An MP3 in steps of 1.5 dB by mp3gain, the audio not encoded again. */
+  z.object({
+    kind: z.literal('mp3gain'),
+    steps: z
+      .number()
+      .int()
+      .min(-26)
+      .max(26)
+      .refine((steps) => steps !== 0)
+  }),
+  /** The samples of an AIFF or a WAV, by the exact gain. */
+  z.object({
+    kind: z.literal('pcm'),
+    gainDb: z
+      .number()
+      .min(-40)
+      .max(40)
+      .refine((gain) => gain !== 0)
+  }),
+  /** An MP3 encoded again at 320 kbps with the exact gain, its tag carried over. */
+  z.object({
+    kind: z.literal('reencode'),
+    gainDb: z
+      .number()
+      .min(-40)
+      .max(40)
+      .refine((gain) => gain !== 0)
+  })
+])
+
+export type NormalizeApplyPlan = z.output<typeof normalizeApplyPlanSchema>
+
 export const stemsResultSchema = z.object({
   /** The name of the envelopes in the stems folder: the track's id. */
   file: z.string().regex(/^[1-9][0-9]{0,15}\.npz$/u),
@@ -346,6 +409,49 @@ export const RPC_SCHEMAS = {
       bpmMax: z.number()
     }),
     result: bpmKeyResultSchema
+  },
+  /**
+   * The waveform of one file for the cue editor: a hundred peaks a second, written as
+   * `<trackId>.json` into the peaks folder. Reads the file, writes only that file.
+   */
+  'analysis.peaks': {
+    params: z.object({
+      path: z.string().min(1),
+      trackId: z.number().int().positive(),
+      jobId: z.string().min(1).max(64),
+      fileSizeBytes: z.number().int().nonnegative().nullable(),
+      fileMtimeMs: z.number().int().nonnegative().nullable()
+    }),
+    result: z.object({
+      file: z.string().regex(/^[1-9][0-9]{0,15}\.json$/u),
+      count: z.number().int().nonnegative().max(MAX_PEAKS),
+      bytes: z.number().int().positive(),
+      durationSeconds: z
+        .number()
+        .nonnegative()
+        .max(20 * 60 + 1)
+    })
+  },
+  /** The loudness of one file by EBU R128. Reads the file only. */
+  'analysis.loudness': {
+    params: z.object({
+      path: z.string().min(1),
+      jobId: z.string().min(1).max(64)
+    }),
+    result: loudnessResultSchema
+  },
+  /**
+   * Writes `src` with its loudness changed by the plan into `dst`, a temp file the file
+   * rules of the app named. A linear gain only, never a limiter.
+   */
+  'normalize.apply': {
+    params: z.object({
+      src: z.string().min(1),
+      dst: z.string().min(1),
+      plan: normalizeApplyPlanSchema,
+      jobId: z.string().min(1).max(64)
+    }),
+    result: z.object({ written: z.literal(true) })
   },
   /**
    * Writes a WAV as an AIFF to `dst`, a temp file the file rules of the app named.

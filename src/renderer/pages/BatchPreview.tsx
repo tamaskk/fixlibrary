@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { AbPlayer } from '@/components/features/preview/AbPlayer'
 import { BatchPreviewTable } from '@/components/features/preview/BatchPreviewTable'
 import { DuplicateGroups } from '@/components/features/preview/DuplicateGroups'
 import { columnsFor, ERROR_COLUMNS } from '@/components/features/preview/preview-columns'
@@ -16,6 +17,7 @@ import { useAppStore } from '@/stores/app-store'
 import { usePipelineStore } from '@/stores/pipeline-store'
 import { countRows, shownRows, usePreviewStore, type PreviewTab } from '@/stores/preview-store'
 import { DUPLICATES_FOLDER } from '@shared/duplicates'
+import { canListen } from '@shared/ab-player'
 import { PREVIEW_FILTERS, type PreviewFilter } from '@shared/preview'
 import { MAX_STYLES, newStylesTaken, styleKey } from '@shared/settings'
 
@@ -51,6 +53,9 @@ export function BatchPreview(): React.JSX.Element {
   const discard = usePreviewStore((state) => state.discard)
   const undo = usePreviewStore((state) => state.undo)
   const setPage = useAppStore((state) => state.setPage)
+  const openCueEditor = useAppStore((state) => state.openCueEditor)
+  // The track whose A/B player is open (T-033); its row is the one the preview shows now.
+  const [listeningTo, setListeningTo] = React.useState<number | null>(null)
   const runActive = usePipelineStore((state) => state.progress !== null)
   const loadPipeline = usePipelineStore((state) => state.load)
   const [confirmingUndo, setConfirmingUndo] = React.useState(false)
@@ -107,13 +112,20 @@ export function BatchPreview(): React.JSX.Element {
     else heading.current?.focus()
   }
 
+  // A row that is gone, or has no gain any more, closes the player.
+  const listening =
+    listeningTo === null
+      ? null
+      : (shown.find((each) => each.trackId === listeningTo && canListen(each)) ?? null)
+
   const columns =
     batch === null || tab === 'errors'
       ? ERROR_COLUMNS
       : columnsFor(batch.type, {
           covers: batch.findsCovers,
           folders: batch.organizes,
-          cues: batch.placesCues
+          cues: batch.placesCues,
+          loudness: batch.normalizes
         })
 
   return (
@@ -399,6 +411,11 @@ export function BatchPreview(): React.JSX.Element {
                       onCursorRowChange={setCursorTrackId}
                       onActivate={(trackId, columnId) => {
                         if (columnId === 'cover') void chooseCover(trackId)
+                        if (columnId === 'cues') openCueEditor(trackId)
+                        if (columnId === 'listen') {
+                          const row = shown.find((each) => each.trackId === trackId)
+                          if (row && canListen(row)) setListeningTo(trackId)
+                        }
                       }}
                     />
                   )}
@@ -453,6 +470,7 @@ export function BatchPreview(): React.JSX.Element {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AbPlayer row={listening} onClose={() => setListeningTo(null)} />
     </main>
   )
 }

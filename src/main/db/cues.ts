@@ -44,3 +44,19 @@ export function replaceTrackCues(
       .run()
   }
 }
+
+/** Puts this cue in one slot of a track, or empties the slot with null. */
+export function setTrackCue(
+  db: AppDatabase,
+  trackId: number,
+  slot: number,
+  cue: Omit<NewCue, 'slot'> | null
+): void {
+  db.delete(cues)
+    .where(and(eq(cues.trackId, trackId), eq(cues.slot, slot)))
+    .run()
+  if (cue)
+    db.insert(cues)
+      .values({ ...cue, slot, trackId })
+      .run()
+}

@@ -18,7 +18,8 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const api: FixLibraryApi = {
   app: {
-    getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion)
+    getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.appGetVersion),
+    audioReadToken: () => ipcRenderer.invoke(IPC_CHANNELS.appAudioReadToken)
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.settingsGet),
@@ -89,6 +90,12 @@ const api: FixLibraryApi = {
     wizardCheck: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardCheck),
     wizardCueCheck: () => ipcRenderer.invoke(IPC_CHANNELS.rekordboxWizardCueCheck),
     copyPath: (which) => ipcRenderer.invoke(IPC_CHANNELS.rekordboxCopyPath, which)
+  },
+  cueEditor: {
+    tracks: (filter) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorTracks, filter),
+    track: (trackId) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorTrack, trackId),
+    peaks: (trackId) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorPeaks, trackId),
+    edit: (action) => ipcRenderer.invoke(IPC_CHANNELS.cueEditorEdit, action)
   }
 }
 

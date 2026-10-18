@@ -11,6 +11,8 @@ export const ERROR_CODES = [
   // Not a failure of the track: the Claude subscription has no room now. The job waits.
   'CLAUDE_LIMIT',
   'WRITE_FAILED',
+  // A file was normalized, and measured afterwards farther from its plan than allowed.
+  'OFF_TARGET',
   // Other expected failures.
   'PYTHON_ERROR',
   'INVALID_INPUT',
@@ -90,6 +92,7 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   CLAUDE_FAILED: 'Claude gave no usable answer',
   CLAUDE_LIMIT: 'The Claude usage limit is reached',
   WRITE_FAILED: 'The file could not be written',
+  OFF_TARGET: 'The loudness after the normalization is off its plan',
   PYTHON_ERROR: 'The audio engine reported an error',
   INVALID_INPUT: 'The stage was given invalid input',
   STYLE_IN_USE: 'A style is still in use',

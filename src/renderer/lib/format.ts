@@ -69,3 +69,12 @@ const dateTime = new Intl.DateTimeFormat('hu-HU', { dateStyle: 'short', timeStyl
 export function formatDateTime(ms: number): string {
   return dateTime.format(new Date(ms))
 }
+
+/** `1:01,5`: the place of a cue, in minutes and seconds to a tenth. */
+export function formatCueTime(ms: number): string {
+  // Rounded first: 59,96 s is 1:00,0, never 0:60,0.
+  const tenths = Math.round(ms / 100)
+  const minutes = Math.floor(tenths / 600)
+  const seconds = (tenths % 600) / 10
+  return `${minutes}:${seconds < 10 ? '0' : ''}${formatDecimal(seconds)}`
+}

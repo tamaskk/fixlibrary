@@ -1,6 +1,13 @@
 // Single source of truth for the renderer <-> main contract.
 // Every channel is listed here; preload and main both derive their types from it.
 import type { ClaudeStatus, ClaudeTestResult } from './claude'
+import type {
+  CueEditAction,
+  CueEditorFilter,
+  CueEditorListItem,
+  CueEditorPeaks,
+  CueEditorTrack
+} from './cue-editor'
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { Result } from './errors'
 import type {
@@ -51,6 +58,7 @@ import type { ToolCheck } from './tools'
 
 export const IPC_CHANNELS = {
   appGetVersion: 'app:getVersion',
+  appAudioReadToken: 'app:audioReadToken',
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
   settingsPickFolder: 'settings:pickFolder',
@@ -96,7 +104,11 @@ export const IPC_CHANNELS = {
   rekordboxWizardAction: 'rekordbox:wizardAction',
   rekordboxWizardCheck: 'rekordbox:wizardCheck',
   rekordboxWizardCueCheck: 'rekordbox:wizardCueCheck',
-  rekordboxCopyPath: 'rekordbox:copyPath'
+  rekordboxCopyPath: 'rekordbox:copyPath',
+  cueEditorTracks: 'cue-editor:tracks',
+  cueEditorTrack: 'cue-editor:track',
+  cueEditorPeaks: 'cue-editor:peaks',
+  cueEditorEdit: 'cue-editor:edit'
 } as const
 
 /** Channels on which the main process tells the renderer something without being asked. */
@@ -108,6 +120,11 @@ export const IPC_EVENTS = {
 export interface FixLibraryApi {
   app: {
     getVersion: () => Promise<string>
+    /**
+     * The token of this launch that lets the A/B player read the samples it plays
+     * (`fixlib-audio://track/<id>?read=<token>`, T-033). Given to the app's own page only.
+     */
+    audioReadToken: () => Promise<string>
   }
   settings: {
     get: () => Promise<SettingsSnapshot>
@@ -250,5 +267,15 @@ export interface FixLibraryApi {
      * which, the main process the path. False when asked again too soon.
      */
     copyPath: (which: CopyablePath) => Promise<boolean>
+  }
+  cueEditor: {
+    /** The tracks with Rekordbox's grid, as the filter asks, by file name. */
+    tracks: (filter: CueEditorFilter) => Promise<CueEditorListItem[]>
+    /** One track's grid and cues. The audio is played from `fixlib-audio://track/<id>`. */
+    track: (trackId: number) => Promise<Result<CueEditorTrack>>
+    /** The waveform of a track, made by the sidecar the first time. */
+    peaks: (trackId: number) => Promise<Result<CueEditorPeaks>>
+    /** Places, deletes or releases one cue; the main process snaps it to the grid. */
+    edit: (action: CueEditAction) => Promise<Result<CueEditorTrack>>
   }
 }

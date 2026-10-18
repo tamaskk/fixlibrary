@@ -26,7 +26,14 @@ export const STAGE_TIMEOUTS_MS = {
   writeTags: 6 * MINUTE,
   // The backup or the copy of the whole file, and then the conversion of it.
   convertFile: 6 * MINUTE,
+  // One measure by ffmpeg of a whole file.
+  loudness: 120 * SECOND,
+  // The plan of a gain from what was measured; no file is read.
+  normalizePlan: 10 * SECOND,
+  // One call to the sidecar that copies a file and changes its gain.
   normalize: 120 * SECOND,
+  // The backup or the copy of the whole file, its gain changed, and measured again.
+  normalizeFile: 8 * MINUTE,
   // Up to three services asked, a picture downloaded and a cover made of it.
   cover: 60 * SECOND,
   // The backup or the copy of the whole file, and then the writing of its cover.
@@ -40,6 +47,9 @@ export const STAGE_TIMEOUTS_MS = {
 } as const
 
 export type TimedStage = keyof typeof STAGE_TIMEOUTS_MS
+
+/** For one `analysis.peaks` call of the cue editor: a whole file decoded once. */
+export const PEAKS_RPC_TIMEOUT_MS = 120 * SECOND
 
 /** For one `cover.inspect` or `cover.prepare` call: one picture decoded and resized. */
 export const COVER_RPC_TIMEOUT_MS = 20 * SECOND

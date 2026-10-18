@@ -1,4 +1,5 @@
-import { app, dialog, powerSaveBlocker, shell, BrowserWindow } from 'electron'
+import { randomBytes } from 'crypto'
+import { app, dialog, powerSaveBlocker, protocol, shell, BrowserWindow } from 'electron'
 import { existsSync, realpathSync } from 'fs'
 import { cpus, homedir, tmpdir, userInfo } from 'os'
 import { join, sep } from 'path'
@@ -8,6 +9,7 @@ import { registerAppIpc } from './ipc/app'
 import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
+import { registerCueEditorIpc } from './ipc/cue-editor'
 import { registerRekordboxIpc } from './ipc/rekordbox'
 import { parseExportInWorker } from './services/rekordbox-xml-read'
 import rekordboxXmlWorkerPath from './services/rekordbox-xml-worker?modulePath'
@@ -48,6 +50,10 @@ import { createSleepBlocker } from './services/power'
 import { createTimedCache } from './services/timed-cache'
 import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
+import { AUDIO_SCHEME, createAudioHandler, originOfRendererUrl } from './services/audio-protocol'
+import { createPeaksStore } from './services/peaks-store'
+import { getTrackById } from './db/tracks'
+import { isSetAsidePath } from '@shared/duplicates'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
 import {
   createMountedVolumesCache,
@@ -244,8 +250,10 @@ function startPythonSidecar(): void {
     // The sidecar decodes and fingerprints with the app's own tools and with nothing else.
     ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command,
     fpcalcPath: resolveToolCommand('fpcalc', locations)?.command,
+    mp3gainPath: resolveToolCommand('mp3gain', locations)?.command,
     coversDir: coversFolder(),
     stemsDir: stemsFolder(),
+    peaksDir: peaksFolder(),
     modelsDir: modelsFolder(),
     // Nothing of the app downloads into it; set so that no part of torch ever writes to
     // `~/.cache` instead.
@@ -283,6 +291,10 @@ function stemsFolder(): string {
   return join(app.getPath('userData'), 'stems')
 }
 
+function peaksFolder(): string {
+  return join(app.getPath('userData'), 'peaks')
+}
+
 /** `resources/models` in development; the packaged app gets its models with T-041. */
 function modelsFolder(): string {
   return app.isPackaged
@@ -306,6 +318,7 @@ function availableStages(db: AppDatabase): Stage[] {
       db,
       python: () => pythonBridge,
       bpmRange: () => readSettings(db).analysis,
+      loudnessSettings: () => readSettings(db).loudness,
       cache,
       // Without an AcoustID key a fingerprint has nowhere to go.
       wanted: () => secret('acoustid') !== undefined,
@@ -455,6 +468,29 @@ function registerLibraryAndPipeline(): void {
     // An export is untrusted and may be large: its parse costs a worker, not the app.
     parseExport: (bytes) => parseExportInWorker(rekordboxXmlWorkerPath, bytes)
   })
+  // Asked on every range a player reads, and every edit: not of the drives each time.
+  const cachedVolumes = createMountedVolumesCache(1000)
+  const cueEditor = {
+    db,
+    listMountedVolumes: cachedVolumes,
+    python: () => pythonBridge,
+    peaks: createPeaksStore(peaksFolder())
+  }
+  registerCueEditorIpc(cueEditor)
+  // The page plays a track by its id; the main process looks the file up.
+  protocol.handle(
+    AUDIO_SCHEME,
+    createAudioHandler({
+      appOrigin: () => originOfRendererUrl(getRendererEntryUrl()),
+      readToken: audioReadToken,
+      pathOfTrack: (trackId) => {
+        const track = getTrackById(db, trackId, cachedVolumes())
+        return track && !track.offline && !track.fileMissing && !isSetAsidePath(track.path)
+          ? track.path
+          : null
+      }
+    })
+  )
   registerPreviewIpc(
     createPreview({
       db,
@@ -547,6 +583,11 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('will-navigate', stayOnApp)
   contents.on('will-redirect', stayOnApp)
   contents.on('will-attach-webview', (event) => event.preventDefault())
+  // No document of a frame: the page has none of its own, and one put in by anything
+  // else must not run beside it.
+  contents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame) event.preventDefault()
+  })
 })
 
 // Two instances would share one database and could process the same library twice.
@@ -559,6 +600,21 @@ app.on('second-instance', () => {
   if (window.isMinimized()) window.restore()
   window.focus()
 })
+
+// The token of this launch that lets the app's page read the samples it plays (T-033).
+const audioReadToken = randomBytes(16).toString('hex')
+
+// Before the app is ready, as Electron asks: the scheme the page plays tracks from, with
+// byte ranges so the player can seek. It serves audio only (T-030).
+protocol.registerSchemesAsPrivileged([
+  // CORS for the app's own page only (the handler names it), so that the A/B player of
+  // T-033 can read the audio through Web Audio; fetch stays refused (no supportFetchAPI,
+  // and the CSP's connect-src).
+  {
+    scheme: AUDIO_SCHEME,
+    privileges: { standard: true, secure: true, stream: true, corsEnabled: true }
+  }
+])
 
 app.whenReady().then(() => {
   if (!isOnlyInstance) return
@@ -578,7 +634,7 @@ app.whenReady().then(() => {
     app.quit()
     return
   }
-  registerAppIpc()
+  registerAppIpc({ audioReadToken })
   registerSettingsAndSystemIpc()
   startPythonSidecar()
   registerLibraryAndPipeline()

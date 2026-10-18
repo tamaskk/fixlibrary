@@ -27,6 +27,7 @@ from fixlib_py.files import open_regular_file
 from fixlib_py.safe_files import (
     Refused,
     Stopped,
+    check_frame_count,
     check_temp_target,
     copy_stream,
     create_made,
@@ -245,6 +246,9 @@ def convert_file(
         # Looked at before anything is written: a file whose tags cannot be carried
         # is refused whole, not converted without them.
         tag = _id3_chunk(source)
+        if tag is not None:
+            # A tag of a million empty frames would keep the reader busy for minutes.
+            check_frame_count(tag)
         tagged = None if tag is None else read_id3(tag)
         frames = math.ceil(info.frames * rate / info.samplerate) + rate
         command = [

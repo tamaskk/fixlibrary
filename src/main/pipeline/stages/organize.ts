@@ -11,6 +11,7 @@ import { APP_FOLDER_NAMES, UNSORTED_STYLE_NAME } from '@shared/settings'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { CONVERT_FILE_STAGE } from './convert'
 import { EMBED_COVER_STAGE, REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
+import { NORMALIZE_FILE_STAGE } from './normalize'
 import { RENAME_STAGE } from './rename'
 import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage } from './stage'
@@ -172,6 +173,7 @@ export function createOrganizeFileStage(dependencies: OrganizeStageDependencies)
       REDRAW_PLACEHOLDER_STAGE,
       WRITE_TAGS_STAGE,
       EMBED_COVER_STAGE,
+      NORMALIZE_FILE_STAGE,
       RENAME_STAGE
     ],
     selectable: false,
