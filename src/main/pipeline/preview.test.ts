@@ -494,6 +494,24 @@ describe('approving', () => {
   })
 })
 
+describe('the energy a batch proposes', () => {
+  it("becomes the track's own when the batch is approved, unless the user locked it", () => {
+    // Arrange
+    const [free, locked] = trackIds as [number, number]
+    updateTrack(testDatabase.db, locked, { energy: 3, lockedFields: ['energy'] })
+    propose(free, { fields: { energy: { value: 7, source: 'analysis' } } })
+    propose(locked, { fields: { energy: { value: 9, source: 'analysis' } } })
+    testDatabase.db.update(batchItems).set({ approved: true }).run()
+
+    // Act
+    for (const trackId of trackIds) commitApprovedValues(testDatabase.db, batchId, trackId)
+
+    // Assert
+    expect(track(free)).toMatchObject({ energy: 7, lockedFields: [] })
+    expect(track(locked)).toMatchObject({ energy: 3, lockedFields: ['energy'] })
+  })
+})
+
 describe('what the user set by hand', () => {
   it("becomes the track's own and is locked when the batch is applied", () => {
     // Arrange

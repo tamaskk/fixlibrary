@@ -1,6 +1,7 @@
 // The main <-> Python sidecar contract: JSON-RPC 2.0, one JSON document per line.
 // python/fixlib_py mirrors these methods by hand; change both sides in the same commit.
 import { z } from 'zod'
+import { energyModelSchema } from './energy'
 import { COVER_NAMES } from './covers'
 import { CAMELOT_KEYS, KEY_SCALES, keyOf } from './keys'
 
@@ -467,6 +468,21 @@ export const RPC_SCHEMAS = {
       jobId: z.string().min(1).max(64)
     }),
     result: energyFeaturesResultSchema
+  },
+  /** Fits the energy model to the tracks the user rated (T-024). Reads nothing. */
+  'energy.fit': {
+    params: z.object({
+      samples: z
+        .array(
+          z.object({
+            features: z.record(z.string(), z.number()),
+            rating: z.number().int().min(1).max(10)
+          })
+        )
+        .min(5)
+        .max(1000)
+    }),
+    result: energyModelSchema
   },
   /** The loudness of one file by EBU R128. Reads the file only. */
   'analysis.loudness': {

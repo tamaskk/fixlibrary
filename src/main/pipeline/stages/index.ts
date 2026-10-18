@@ -12,6 +12,7 @@ import {
 } from './convert'
 import { createCuesStage, type CuesStageDependencies } from './cues'
 import { createEnergyStage, type EnergyStageDependencies } from './energy'
+import { createEnergyValueStage } from './energy-value'
 import { createDuplicatesStage, type DuplicatesStageDependencies } from './duplicates'
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
@@ -52,6 +53,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createEnergyStage(dependencies),
     createCuesStage(dependencies),
     createStyleStage(dependencies),
+    createEnergyValueStage(dependencies),
     createCoverStage(dependencies),
     createLoudnessStage(dependencies),
     createNormalizeStage(dependencies),

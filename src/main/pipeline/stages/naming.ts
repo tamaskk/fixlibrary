@@ -7,6 +7,7 @@ import { extensionOf } from '@shared/file-names'
 import { BPM_KEY_STAGE } from './bpm-key'
 import { CONVERT_STAGE, convertedName, wantsConversion } from './convert'
 import { LOOKUP_STAGE } from './lookup'
+import { ENERGY_STAGE } from './energy-value'
 import type { Stage } from './stage'
 
 export const NAMING_STAGE = 'naming'
@@ -125,7 +126,8 @@ export function createNamingStage(): Stage {
     // The name holds the key and the tempo, and the names a lookup found.
     dependsOn: [LOOKUP_STAGE, BPM_KEY_STAGE],
     // The name ends as the file will: a conversion in the batch says so first.
-    after: [CONVERT_STAGE],
+    // The file name carries the energy the batch proposes.
+    after: [CONVERT_STAGE, ENERGY_STAGE],
     selectable: true,
     timeoutMs: STAGE_TIMEOUTS_MS.naming,
     run: async ({ proposal }, track) => ({ proposal: propose(track, proposal) }),
