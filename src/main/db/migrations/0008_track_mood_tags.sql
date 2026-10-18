@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `mood_tags` text;

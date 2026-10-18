@@ -1,6 +1,7 @@
 import { basename, dirname } from 'path'
 import { and, asc, count, eq, gte, inArray, lt, sql } from 'drizzle-orm'
 import { z } from 'zod'
+import { moodTagsSchema, type MoodTag } from '@shared/mood'
 import type { AppDatabase } from './connection'
 import { AUDIO_FORMATS, COVER_STATUSES, styles, tracks } from './schema'
 import { normalizeTrackPath, volumeNameOfPath } from './track-paths'
@@ -18,16 +19,22 @@ type TrackInsert = typeof tracks.$inferInsert
 
 export type StageStatus = z.output<typeof stageStatusSchema>
 /** The volume is derived from the path, so it cannot be set on its own. */
-export type NewTrack = Omit<TrackInsert, 'stageStatus' | 'lockedFields' | 'volumeName'> & {
+export type NewTrack = Omit<
+  TrackInsert,
+  'stageStatus' | 'lockedFields' | 'volumeName' | 'moodTags'
+> & {
   stageStatus?: StageStatus
   lockedFields?: string[]
+  moodTags?: MoodTag[] | null
 }
 /** `originalPath` is where the file was first found; it never changes. */
 export type TrackChanges = Partial<
   Omit<NewTrack, 'id' | 'originalPath' | 'createdAt' | 'updatedAt'>
 >
-export type Track = Omit<TrackRow, 'stageStatus' | 'lockedFields'> & {
+export type Track = Omit<TrackRow, 'stageStatus' | 'lockedFields' | 'moodTags'> & {
   stageStatus: StageStatus
+  /** The moods Claude gave the track (T-036), or null while it was not asked. */
+  moodTags: MoodTag[] | null
   /** The fields the user set by hand; an automatic run proposes nothing for them. */
   lockedFields: string[]
   /** True while the track's volume is not mounted; such a track must not be processed. */
@@ -53,6 +60,8 @@ function toTrack(row: TrackRow, mountedVolumes: ReadonlySet<string>): Track {
     stageStatus: readStageStatus(row.id, row.stageStatus),
     // Unreadable reads as "nothing locked": the track stays usable.
     lockedFields: lockedFieldsSchema.safeParse(row.lockedFields).data ?? [],
+    // Unreadable reads as "not asked yet": the next run asks again.
+    moodTags: moodTagsSchema.safeParse(row.moodTags).data ?? null,
     offline: row.volumeName !== null && !mountedVolumes.has(row.volumeName)
   }
 }

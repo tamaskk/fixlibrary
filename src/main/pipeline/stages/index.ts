@@ -17,6 +17,7 @@ import { createDuplicatesStage, type DuplicatesStageDependencies } from './dupli
 import { createFingerprintStage, type FingerprintStageDependencies } from './fingerprint'
 import { createLookupStage, type LookupStageDependencies } from './lookup'
 import { createLoudnessStage } from './loudness'
+import { createMoodStage } from './mood'
 import { createNamingStage } from './naming'
 import {
   createNormalizeFileStage,
@@ -54,6 +55,7 @@ export function createStages(dependencies: StageDependencies): Stage[] {
     createCuesStage(dependencies),
     createStyleStage(dependencies),
     createEnergyValueStage(dependencies),
+    createMoodStage(dependencies),
     createCoverStage(dependencies),
     createLoudnessStage(dependencies),
     createNormalizeStage(dependencies),

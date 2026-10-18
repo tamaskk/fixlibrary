@@ -171,7 +171,9 @@ const TALKING =
  * record: such a track is asked about alone. A long genre counts too: a genre is a
  * word or two.
  */
-export function looksLikeInstructions(input: StyleInput): boolean {
+export function looksLikeInstructions(
+  input: Pick<StyleInput, 'artist' | 'title' | 'mix' | 'label' | 'genres'>
+): boolean {
   const texts = [
     input.artist,
     input.title,
