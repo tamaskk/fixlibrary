@@ -171,7 +171,7 @@ Icon buttons
 
 Navigation
 
-- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Letöltés, Cue-k, Rekordbox, Beállítások.
+- The left sidebar lists the pages as rows of 32px: icon plus label, Small 500, text-muted. The pages: Könyvtár, Előnézet, Letöltés, Cue-k, Energy, Rekordbox, Beállítások.
 - Current page: surface-hover background, text color and a straight 2px primary left edge, marked with `aria-current="page"`. Focus ring as for buttons.
 
 Rekordbox wizard
