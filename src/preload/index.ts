@@ -98,8 +98,8 @@ const api: FixLibraryApi = {
     onlineLast: (playlistId) => ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineLast, playlistId),
     onlineRequest: (playlistId) =>
       ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineRequest, playlistId),
-    onlineDownload: (playlistId, url) =>
-      ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineDownload, playlistId, url)
+    onlineDownload: (playlistId, url, confirmed) =>
+      ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineDownload, playlistId, url, confirmed)
   },
   energy: {
     calibration: () => ipcRenderer.invoke(IPC_CHANNELS.energyCalibration),

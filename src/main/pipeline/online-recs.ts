@@ -14,7 +14,7 @@ import type { OnlineRecCandidate, OnlineRecsInput } from '../services/claude-pro
 import { createOnlineRecsTask } from '../services/claude-prompts/online-recs'
 import { looksLikeInstructions } from '../services/claude-prompts/style'
 import { searchArgs, type YtDlp } from '../services/downloader'
-import { similarity } from '../services/lookup/confidence'
+import { normalizeForComparison, similarity } from '../services/lookup/confidence'
 import { logger } from '../services/logger'
 import type { Claude } from './claude'
 import { findLibraryCopy, type Downloads } from './download'
@@ -27,7 +27,9 @@ import { AppError, type Result } from '@shared/errors'
 import {
   MAX_PLAYLIST_TRACKS,
   RECOMMENDATION_COUNT,
-  type OnlineRecommendation
+  type OnlineDownloadOutcome,
+  type OnlineRecommendation,
+  type OnlineRecsState
 } from '@shared/playlists'
 import { toOneLine } from '@shared/text'
 import { DOWNLOAD_SEARCH_TIMEOUT_MS } from '@shared/timeouts'
@@ -43,6 +45,11 @@ const MAX_SEARCH_LENGTH = 200
 const NEUTRAL = 0.5
 const PENDING_KEY = 'pendingPlaylistAdds'
 const MAX_PENDING = 200
+// A download that has not reached the Inbox by then failed or was removed.
+const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000
+// Each request is a Claude call and up to 20 YouTube searches: YouTube answers a burst
+// with a bot check, which would also stop the Letöltés page.
+const MIN_REQUEST_INTERVAL_MS = 30_000
 
 export interface OnlineRecsDependencies {
   db: AppDatabase
@@ -51,6 +58,7 @@ export interface OnlineRecsDependencies {
   claude: () => Pick<Claude, 'ask'> | null
   ytDlp: Pick<YtDlp, 'json'>
   downloads: () => Pick<Downloads, 'inspect' | 'start'> | null
+  now?: () => number
 }
 
 /** Up to 20 tracks spread over the playlist, none whose text reads like it talks to the model. */
@@ -119,6 +127,10 @@ export function onlineScore(profile: PlaylistProfile, styleId: number | null): n
   return weightedScore({ style, bpm: NEUTRAL, key: NEUTRAL, energy: NEUTRAL, mood: NEUTRAL })
 }
 
+function namesOf(artist: string, title: string): string {
+  return normalizeForComparison(`${artist} ${title}`)
+}
+
 /** Runs `work` on every item, `limit` at a time, keeping the order of the items. */
 async function eachLimited<T, R>(
   items: readonly T[],
@@ -153,29 +165,47 @@ const pendingSchema = z
       videoId: z.string(),
       playlistId: z.number().int(),
       /** Set once the download is a track of the Inbox. */
-      trackId: z.number().int().nullable()
+      trackId: z.number().int().nullable(),
+      /** When the download started, in ms since the epoch. */
+      at: z.number()
     })
   )
   .catch([])
 type PendingAdd = z.output<typeof pendingSchema>[number]
 
-function readPending(db: AppDatabase): PendingAdd[] {
-  return getSetting(db, PENDING_KEY, pendingSchema) ?? []
+/** The pending adds, less the downloads that never became a track within a week. */
+function readPending(db: AppDatabase, now: number): PendingAdd[] {
+  return (getSetting(db, PENDING_KEY, pendingSchema) ?? []).filter(
+    (entry) => entry.trackId !== null || now - entry.at < PENDING_TTL_MS
+  )
 }
 
 /** Notes that the download of this video should join this playlist once approved. */
-export function notePendingAdd(db: AppDatabase, videoId: string, playlistId: number): void {
-  const pending = readPending(db).filter(
+export function notePendingAdd(
+  db: AppDatabase,
+  videoId: string,
+  playlistId: number,
+  now = Date.now()
+): void {
+  const pending = readPending(db, now).filter(
     (entry) => !(entry.videoId === videoId && entry.playlistId === playlistId)
   )
-  pending.push({ videoId, playlistId, trackId: null })
+  pending.push({ videoId, playlistId, trackId: null, at: now })
   setSetting(db, PENDING_KEY, pending.slice(-MAX_PENDING))
 }
 
-/** The Inbox file of a download became a track: yt-dlp named the file by the video id. */
-export function noteInboxTrack(db: AppDatabase, path: string, trackId: number): void {
+/**
+ * The Inbox file of a download became a track. yt-dlp names the file by the video id,
+ * and the watcher sees it under that name before its batch renames it.
+ */
+export function noteInboxTrack(
+  db: AppDatabase,
+  path: string,
+  trackId: number,
+  now = Date.now()
+): void {
   const videoId = basename(path, extname(path))
-  const pending = readPending(db)
+  const pending = readPending(db, now)
   if (!pending.some((entry) => entry.videoId === videoId && entry.trackId === null)) return
   setSetting(
     db,
@@ -193,11 +223,14 @@ export function noteInboxTrack(db: AppDatabase, path: string, trackId: number): 
  */
 export function addDownloadedTracks(
   db: AppDatabase,
-  listMountedVolumes: () => ReadonlySet<string>
+  listMountedVolumes: () => ReadonlySet<string>,
+  now = Date.now()
 ): void {
-  const pending = readPending(db)
+  const pending = readPending(db, now)
   if (!pending.some((entry) => entry.trackId !== null)) return
   const root = readSettings(db).library.rootFolder
+  // Without a library folder the Inbox is not known: nothing can be told approved.
+  if (root === null) return
   const mounted = listMountedVolumes()
   const kept: PendingAdd[] = []
   for (const entry of pending) {
@@ -224,19 +257,30 @@ export function addDownloadedTracks(
 }
 
 export interface OnlineRecs {
-  /** The last recommendations of this playlist in this session, or null. */
-  last: (playlistId: number) => OnlineRecommendation[] | null
-  /** Asks Claude and checks its candidates; one playlist at a time. */
+  last: (playlistId: number) => OnlineRecsState
+  /** Asks Claude and checks its candidates; one request at a time, 30 s apart. */
   request: (playlistId: number) => Promise<Result<OnlineRecommendation[]>>
-  /** Downloads a recommendation into the Inbox; its track joins the playlist after approval. */
-  download: (playlistId: number, url: string) => Promise<Result<null>>
+  /**
+   * Downloads a recommendation into the Inbox; its track joins the playlist after
+   * approval. A low bitrate or a copy in the library is asked about first, as on the
+   * Letöltés page: the download starts only when `confirmed`.
+   */
+  download: (
+    playlistId: number,
+    url: string,
+    confirmed: boolean
+  ) => Promise<Result<OnlineDownloadOutcome>>
+  /** Quitting: the request that runs is stopped, and none starts after. */
   stop: () => void
 }
 
 export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRecs {
   const { db } = dependencies
+  const now = dependencies.now ?? Date.now
   const kept = new Map<number, OnlineRecommendation[]>()
-  let running: AbortController | null = null
+  let running: { playlistId: number; controller: AbortController } | null = null
+  let lastStartedAt = -Infinity
+  let stopped = false
 
   async function verify(
     candidate: OnlineRecCandidate,
@@ -249,6 +293,7 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
       )
       return verifiedHit(candidate, readSearchHits(answer, 'youtube'))
     } catch (error) {
+      if (signal.aborted) return null
       // One search that fails drops its candidate, not the rest.
       logger.warn(`An online recommendation could not be checked: ${String(error)}`)
       return null
@@ -302,10 +347,20 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
       if (error instanceof AppError) return { ok: false, code: error.code }
       throw error
     }
+    const library = listLibraryTracks(db, mounted)
+    // A track the library has by its exact names is not searched: its names stay here.
+    const owned = new Set(
+      library.flatMap((track) =>
+        track.artist === null || track.title === null ? [] : [namesOf(track.artist, track.title)]
+      )
+    )
+    candidates = candidates.filter(
+      (candidate) => !owned.has(namesOf(candidate.artist, candidate.title))
+    )
     const hits = await eachLimited(candidates, PARALLEL_SEARCHES, (candidate) =>
       signal.aborted ? Promise.resolve(null) : verify(candidate, signal)
     )
-    const library = listLibraryTracks(db, mounted)
+    if (signal.aborted) return { ok: false, code: 'UNEXPECTED' }
     const seen = new Set<string>()
     const found = candidates.flatMap((candidate, rank) => {
       const hit = hits[rank]
@@ -352,12 +407,19 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
   }
 
   return {
-    last: (playlistId) => kept.get(playlistId) ?? null,
+    last: (playlistId) => ({
+      items: kept.get(playlistId) ?? null,
+      running: running?.playlistId === playlistId
+    }),
 
     async request(playlistId) {
-      if (running !== null) return { ok: false, code: 'RUN_ACTIVE' }
+      if (stopped) return { ok: false, code: 'UNEXPECTED' }
+      if (running !== null || now() - lastStartedAt < MIN_REQUEST_INTERVAL_MS) {
+        return { ok: false, code: 'ONLINE_RECS_BUSY' }
+      }
       const controller = new AbortController()
-      running = controller
+      running = { playlistId, controller }
+      lastStartedAt = now()
       try {
         const result = await recommend(playlistId, controller.signal)
         if (result.ok) kept.set(playlistId, result.value)
@@ -367,7 +429,7 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
       }
     },
 
-    async download(playlistId, url) {
+    async download(playlistId, url, confirmed) {
       const known = kept.get(playlistId)?.some((recommendation) => recommendation.url === url)
       const videoId = videoIdOf(url)
       const downloads = dependencies.downloads()
@@ -377,14 +439,21 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
       }
       const inspected = await downloads.inspect(url)
       if (!inspected.ok) return inspected
+      if (!confirmed && inspected.value.lowBitrate) {
+        return { ok: true, value: { kind: 'lowBitrate', kbps: inspected.value.bitrateKbps } }
+      }
+      if (!confirmed && inspected.value.duplicate !== null) {
+        return { ok: true, value: { kind: 'duplicate' } }
+      }
       const started = downloads.start(url)
       if (!started.ok) return started
-      notePendingAdd(db, videoId, playlistId)
-      return { ok: true, value: null }
+      notePendingAdd(db, videoId, playlistId, now())
+      return { ok: true, value: { kind: 'started' } }
     },
 
     stop() {
-      running?.abort()
+      stopped = true
+      running?.controller.abort()
     }
   }
 }

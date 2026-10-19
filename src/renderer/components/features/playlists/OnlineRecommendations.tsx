@@ -2,17 +2,47 @@ import * as React from 'react'
 import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusLine } from '@/components/ui/status-line'
-import { formatElapsed } from '@/lib/format'
+import { formatCount, formatElapsed } from '@/lib/format'
 import { errorMessage } from '@/lib/messages'
-import { usePlaylistsStore } from '@/stores/playlists-store'
+import { usePlaylistsStore, type OnlineRowState } from '@/stores/playlists-store'
+import { Data } from './DataText'
 import type { OnlineRecommendation } from '@shared/playlists'
 
 function nameOf(item: OnlineRecommendation): string {
   return `${item.artist} - ${item.title}${item.mix === null ? '' : ` (${item.mix})`}`
 }
 
-function Data({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <span className="font-mono text-data tabular-nums">{children}</span>
+function RowNote({ row }: { row: OnlineRowState }): React.JSX.Element {
+  switch (row.kind) {
+    case 'started':
+      return (
+        <span className="text-small text-text-muted">
+          Letöltés indult. Az Inbox jóváhagyása után a playlist végére kerül.
+        </span>
+      )
+    case 'lowBitrate':
+      return (
+        <span className="text-small text-text-muted">
+          Gyenge minőség
+          {row.kbps === null ? (
+            ''
+          ) : (
+            <>
+              : <Data>{formatCount(row.kbps)}</Data> kbps
+            </>
+          )}
+          . Letöltöd így is?
+        </span>
+      )
+    case 'duplicate':
+      return (
+        <span className="text-small text-text-muted">
+          Úgy tűnik, ez megvan a könyvtárban. Letöltöd mégis?
+        </span>
+      )
+    case 'failed':
+      return <span className="text-small text-danger-text">{errorMessage(row.code)}</span>
+  }
 }
 
 /**
@@ -40,9 +70,9 @@ export function OnlineRecommendations({
   const shown = online.playlistId === playlistId ? online : null
   const items = shown?.items ?? null
 
-  async function download(url: string): Promise<void> {
+  async function download(url: string, confirmed: boolean): Promise<void> {
     setDownloading(url)
-    await downloadOnline(playlistId, url)
+    await downloadOnline(playlistId, url, confirmed)
     setDownloading(null)
   }
 
@@ -75,8 +105,8 @@ export function OnlineRecommendations({
       {items !== null && items.length > 0 && (
         <ul className="flex flex-col">
           {items.map((item) => {
-            const started = shown?.started.includes(item.url) ?? false
-            const refused = shown?.refused[item.url]
+            const row = shown?.rows[item.url]
+            const asking = row?.kind === 'lowBitrate' || row?.kind === 'duplicate'
             return (
               <li
                 key={item.url}
@@ -89,14 +119,7 @@ export function OnlineRecommendations({
                   <span title={item.videoTitle} className="truncate text-small text-text-muted">
                     Claude · {item.styleName ?? 'Nincs stílus'} · YouTube: {item.videoTitle}
                   </span>
-                  {started && (
-                    <span className="text-small text-text-muted">
-                      Letöltés indult. Az Inbox jóváhagyása után a playlist végére kerül.
-                    </span>
-                  )}
-                  {refused && (
-                    <span className="text-small text-danger-text">{errorMessage(refused)}</span>
-                  )}
+                  <span role="status">{row && <RowNote row={row} />}</span>
                 </span>
                 <span className="shrink-0 text-text-muted">
                   <Data>{formatElapsed(item.durationS * 1000)}</Data>
@@ -104,20 +127,26 @@ export function OnlineRecommendations({
                 <span className="w-10 shrink-0 text-right text-text-muted">
                   <Data>{Math.round(item.score * 100)}%</Data>
                 </span>
-                {started ? (
-                  <span className="w-28 shrink-0 text-small text-text-muted">Elindult</span>
-                ) : (
-                  <Button
-                    className="w-28"
-                    aria-label={`${nameOf(item)} letöltése`}
-                    loading={downloading === item.url}
-                    disabled={downloading !== null}
-                    onClick={() => void download(item.url)}
-                  >
-                    <Download />
-                    Letöltés
-                  </Button>
-                )}
+                <Button
+                  className="w-28"
+                  aria-label={`${row?.kind === 'started' ? 'Elindult' : asking ? (row.kind === 'lowBitrate' ? 'Letöltés így is' : 'Letöltés mégis') : 'Letöltés'}: ${nameOf(item)}`}
+                  loading={downloading === item.url}
+                  disabled={downloading !== null || row?.kind === 'started'}
+                  onClick={() => void download(item.url, asking)}
+                >
+                  {row?.kind === 'started' ? (
+                    'Elindult'
+                  ) : (
+                    <>
+                      <Download />
+                      {row?.kind === 'lowBitrate'
+                        ? 'Így is'
+                        : row?.kind === 'duplicate'
+                          ? 'Mégis'
+                          : 'Letöltés'}
+                    </>
+                  )}
+                </Button>
               </li>
             )
           })}

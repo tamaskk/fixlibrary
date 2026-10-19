@@ -53,10 +53,7 @@
       "indexes": {
         "analyses_track_type_idx": {
           "name": "analyses_track_type_idx",
-          "columns": [
-            "track_id",
-            "type"
-          ],
+          "columns": ["track_id", "type"],
           "isUnique": true
         }
       },
@@ -65,12 +62,8 @@
           "name": "analyses_track_id_tracks_id_fk",
           "tableFrom": "analyses",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -133,16 +126,12 @@
       "indexes": {
         "backups_batch_id_idx": {
           "name": "backups_batch_id_idx",
-          "columns": [
-            "batch_id"
-          ],
+          "columns": ["batch_id"],
           "isUnique": false
         },
         "backups_track_id_idx": {
           "name": "backups_track_id_idx",
-          "columns": [
-            "track_id"
-          ],
+          "columns": ["track_id"],
           "isUnique": false
         }
       },
@@ -151,12 +140,8 @@
           "name": "backups_batch_id_batches_id_fk",
           "tableFrom": "backups",
           "tableTo": "batches",
-          "columnsFrom": [
-            "batch_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["batch_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -164,12 +149,8 @@
           "name": "backups_track_id_tracks_id_fk",
           "tableFrom": "backups",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -227,17 +208,12 @@
       "indexes": {
         "batch_files_batch_path_idx": {
           "name": "batch_files_batch_path_idx",
-          "columns": [
-            "batch_id",
-            "path"
-          ],
+          "columns": ["batch_id", "path"],
           "isUnique": true
         },
         "batch_files_track_id_idx": {
           "name": "batch_files_track_id_idx",
-          "columns": [
-            "track_id"
-          ],
+          "columns": ["track_id"],
           "isUnique": false
         }
       },
@@ -246,12 +222,8 @@
           "name": "batch_files_batch_id_batches_id_fk",
           "tableFrom": "batch_files",
           "tableTo": "batches",
-          "columnsFrom": [
-            "batch_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["batch_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         },
@@ -259,12 +231,8 @@
           "name": "batch_files_track_id_tracks_id_fk",
           "tableFrom": "batch_files",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -338,17 +306,12 @@
       "indexes": {
         "batch_items_batch_track_idx": {
           "name": "batch_items_batch_track_idx",
-          "columns": [
-            "batch_id",
-            "track_id"
-          ],
+          "columns": ["batch_id", "track_id"],
           "isUnique": true
         },
         "batch_items_track_id_idx": {
           "name": "batch_items_track_id_idx",
-          "columns": [
-            "track_id"
-          ],
+          "columns": ["track_id"],
           "isUnique": false
         }
       },
@@ -357,12 +320,8 @@
           "name": "batch_items_batch_id_batches_id_fk",
           "tableFrom": "batch_items",
           "tableTo": "batches",
-          "columnsFrom": [
-            "batch_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["batch_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -370,12 +329,8 @@
           "name": "batch_items_track_id_tracks_id_fk",
           "tableFrom": "batch_items",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -502,10 +457,7 @@
       "indexes": {
         "cues_track_slot_idx": {
           "name": "cues_track_slot_idx",
-          "columns": [
-            "track_id",
-            "slot"
-          ],
+          "columns": ["track_id", "slot"],
           "isUnique": true
         }
       },
@@ -514,12 +466,8 @@
           "name": "cues_track_id_tracks_id_fk",
           "tableFrom": "cues",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -568,12 +516,8 @@
           "name": "energy_calibration_track_id_tracks_id_fk",
           "tableFrom": "energy_calibration",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -673,26 +617,17 @@
       "indexes": {
         "jobs_batch_track_stage_idx": {
           "name": "jobs_batch_track_stage_idx",
-          "columns": [
-            "batch_id",
-            "track_id",
-            "stage"
-          ],
+          "columns": ["batch_id", "track_id", "stage"],
           "isUnique": true
         },
         "jobs_batch_status_idx": {
           "name": "jobs_batch_status_idx",
-          "columns": [
-            "batch_id",
-            "status"
-          ],
+          "columns": ["batch_id", "status"],
           "isUnique": false
         },
         "jobs_track_id_idx": {
           "name": "jobs_track_id_idx",
-          "columns": [
-            "track_id"
-          ],
+          "columns": ["track_id"],
           "isUnique": false
         }
       },
@@ -701,12 +636,8 @@
           "name": "jobs_batch_id_batches_id_fk",
           "tableFrom": "jobs",
           "tableTo": "batches",
-          "columnsFrom": [
-            "batch_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["batch_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -714,12 +645,8 @@
           "name": "jobs_track_id_tracks_id_fk",
           "tableFrom": "jobs",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -783,10 +710,7 @@
       "indexes": {
         "lookup_cache_source_key_idx": {
           "name": "lookup_cache_source_key_idx",
-          "columns": [
-            "source",
-            "query_key"
-          ],
+          "columns": ["source", "query_key"],
           "isUnique": true
         }
       },
@@ -830,17 +754,12 @@
       "indexes": {
         "playlist_tracks_playlist_position_idx": {
           "name": "playlist_tracks_playlist_position_idx",
-          "columns": [
-            "playlist_id",
-            "position"
-          ],
+          "columns": ["playlist_id", "position"],
           "isUnique": false
         },
         "playlist_tracks_track_id_idx": {
           "name": "playlist_tracks_track_id_idx",
-          "columns": [
-            "track_id"
-          ],
+          "columns": ["track_id"],
           "isUnique": false
         }
       },
@@ -849,12 +768,8 @@
           "name": "playlist_tracks_playlist_id_playlists_id_fk",
           "tableFrom": "playlist_tracks",
           "tableTo": "playlists",
-          "columnsFrom": [
-            "playlist_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["playlist_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -862,12 +777,8 @@
           "name": "playlist_tracks_track_id_tracks_id_fk",
           "tableFrom": "playlist_tracks",
           "tableTo": "tracks",
-          "columnsFrom": [
-            "track_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["track_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -989,9 +900,7 @@
       "indexes": {
         "styles_name_unique": {
           "name": "styles_name_unique",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         }
       },
@@ -1249,30 +1158,22 @@
       "indexes": {
         "tracks_path_unique": {
           "name": "tracks_path_unique",
-          "columns": [
-            "path"
-          ],
+          "columns": ["path"],
           "isUnique": true
         },
         "tracks_volume_name_idx": {
           "name": "tracks_volume_name_idx",
-          "columns": [
-            "volume_name"
-          ],
+          "columns": ["volume_name"],
           "isUnique": false
         },
         "tracks_primary_style_id_idx": {
           "name": "tracks_primary_style_id_idx",
-          "columns": [
-            "primary_style_id"
-          ],
+          "columns": ["primary_style_id"],
           "isUnique": false
         },
         "tracks_acoust_id_idx": {
           "name": "tracks_acoust_id_idx",
-          "columns": [
-            "acoust_id"
-          ],
+          "columns": ["acoust_id"],
           "isUnique": false
         }
       },
@@ -1281,12 +1182,8 @@
           "name": "tracks_primary_style_id_styles_id_fk",
           "tableFrom": "tracks",
           "tableTo": "styles",
-          "columnsFrom": [
-            "primary_style_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["primary_style_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1294,12 +1191,8 @@
           "name": "tracks_secondary_style_id_styles_id_fk",
           "tableFrom": "tracks",
           "tableTo": "styles",
-          "columnsFrom": [
-            "secondary_style_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["secondary_style_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }

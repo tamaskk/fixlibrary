@@ -774,10 +774,11 @@ function tellWorkToStop(): void {
   } catch (error) {
     logger.error('The call to Claude could not be stopped', error)
   }
+  // It only aborts and sets a flag: nothing in it can throw.
+  onlineRecs?.stop()
   try {
     // A download stopped half way leaves only files of the app's own temp folder.
     downloads?.stopAll()
-    onlineRecs?.stop()
   } catch (error) {
     logger.error('The downloads could not be stopped', error)
   }

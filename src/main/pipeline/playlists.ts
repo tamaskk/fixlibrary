@@ -92,6 +92,7 @@ export function playlistView(
   { recommend = true }: { recommend?: boolean } = {}
 ): PlaylistView | null {
   const { db } = dependencies
+  addDownloadedTracks(db, dependencies.listMountedVolumes)
   const playlist = getPlaylist(db, playlistId)
   if (!playlist) return null
   const mounted = dependencies.listMountedVolumes()

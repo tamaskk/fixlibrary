@@ -40,6 +40,8 @@ export const ERROR_CODES = [
   'XML_NOT_FOUND',
   // The export is no Rekordbox XML the app can read, or too large.
   'XML_UNREADABLE',
+  // Online recommendations are being asked for, or were just asked for: one at a time.
+  'ONLINE_RECS_BUSY',
   // An address that is not one track of YouTube or SoundCloud.
   'DOWNLOAD_UNSUPPORTED',
   // An address that names a playlist, a set or a profile: only single tracks are downloaded.
@@ -118,6 +120,7 @@ export const TRACK_ERROR_MESSAGES: Record<ErrorCode, string> = {
   XML_BUSY: 'The Rekordbox XML is being written or read',
   XML_NOT_FOUND: 'No Rekordbox export was found',
   XML_UNREADABLE: 'The Rekordbox export cannot be read',
+  ONLINE_RECS_BUSY: 'Online recommendations are being asked for, or were just asked for',
   DOWNLOAD_UNSUPPORTED: 'The address is not a single YouTube or SoundCloud track',
   DOWNLOAD_PLAYLIST: 'The address names more than one track',
   DOWNLOAD_FAILED: 'The download failed',

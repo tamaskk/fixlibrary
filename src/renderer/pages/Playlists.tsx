@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { StatusLine } from '@/components/ui/status-line'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Data } from '@/components/features/playlists/DataText'
 import { OnlineRecommendations } from '@/components/features/playlists/OnlineRecommendations'
 import { cn } from '@/lib/cn'
 import { formatCount, formatElapsed } from '@/lib/format'
@@ -27,10 +28,6 @@ import {
 
 function nameOf(item: PlaylistTrackItem): string {
   return item.artist && item.title ? `${item.artist} - ${item.title}` : item.fileName
-}
-
-function Data({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <span className="font-mono text-data tabular-nums">{children}</span>
 }
 
 /** Tempo, key and energy of a track in the Data role, en dashes for what is not known. */

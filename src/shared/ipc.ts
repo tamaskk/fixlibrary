@@ -17,7 +17,9 @@ import type {
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
 import type {
+  OnlineDownloadOutcome,
   OnlineRecommendation,
+  OnlineRecsState,
   PlaylistAction,
   PlaylistEditResult,
   PlaylistSummary,
@@ -304,12 +306,19 @@ export interface FixLibraryApi {
     view: (playlistId: number) => Promise<PlaylistView | null>
     /** Creates, renames, deletes or changes the tracks of a playlist. */
     edit: (action: PlaylistAction) => Promise<Result<PlaylistEditResult>>
-    /** The online recommendations last found for a playlist in this session, or null. */
-    onlineLast: (playlistId: number) => Promise<OnlineRecommendation[] | null>
+    /** The online recommendations last found for a playlist in this session, and whether they are being asked for. */
+    onlineLast: (playlistId: number) => Promise<OnlineRecsState>
     /** Asks Claude for tracks that fit and checks each on YouTube; takes a minute or so. */
     onlineRequest: (playlistId: number) => Promise<Result<OnlineRecommendation[]>>
-    /** Downloads a recommendation; its track joins the playlist once its Inbox batch is approved. */
-    onlineDownload: (playlistId: number, url: string) => Promise<Result<null>>
+    /**
+     * Downloads a recommendation; its track joins the playlist once its Inbox batch is
+     * approved. A low bitrate or a copy in the library is asked about unless `confirmed`.
+     */
+    onlineDownload: (
+      playlistId: number,
+      url: string,
+      confirmed: boolean
+    ) => Promise<Result<OnlineDownloadOutcome>>
   }
   energy: {
     /** The calibration sample, the ratings given, and the kept model. */

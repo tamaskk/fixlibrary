@@ -32,7 +32,7 @@ export function registerPlaylistsIpc(
   )
   handleIpc(
     IPC_CHANNELS.playlistsOnlineDownload,
-    z.tuple([playlistId, z.string().max(MAX_URL_LENGTH)]),
-    (_event, id, url) => onlineRecs.download(id, url)
+    z.tuple([playlistId, z.string().max(MAX_URL_LENGTH), z.boolean()]),
+    (_event, id, url, confirmed) => onlineRecs.download(id, url, confirmed)
   )
 }

@@ -116,3 +116,15 @@ export interface OnlineRecommendation {
   /** How well it fits the playlist, 0 to 1; what is not known of it counts as half. */
   score: number
 }
+
+/** What is known in this session of the online recommendations of a playlist. */
+export interface OnlineRecsState {
+  /** The last found, or null when none were asked for. */
+  items: OnlineRecommendation[] | null
+  /** True while they are being asked for. */
+  running: boolean
+}
+
+/** What "Letöltés" came to: started, or a question for the user first. */
+export type OnlineDownloadOutcome =
+  { kind: 'started' } | { kind: 'lowBitrate'; kbps: number | null } | { kind: 'duplicate' }
