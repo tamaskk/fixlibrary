@@ -22,6 +22,7 @@ import { isInInbox } from './inbox'
 import { readSettings } from './settings'
 import { buildProfile, styleScore, weightedScore, type PlaylistProfile } from './similarity'
 import { readSearchHits, type DownloadSearchHit } from '@shared/download'
+import type { GapTarget } from '@shared/generator'
 import { isSetAsidePath } from '@shared/duplicates'
 import { AppError, type Result } from '@shared/errors'
 import {
@@ -125,6 +126,24 @@ export function onlineScore(profile: PlaylistProfile, styleId: number | null): n
           0
         )
   return weightedScore({ style, bpm: NEUTRAL, key: NEUTRAL, energy: NEUTRAL, mood: NEUTRAL })
+}
+
+function gapKey(target: GapTarget): string {
+  return `gap:${JSON.stringify([target.styleId, target.bpm, target.camelotKey, target.energy])}`
+}
+
+/** The profile of one missing track: its style, tempo, key and energy. */
+export function profileOfTarget(target: GapTarget): PlaylistProfile {
+  return {
+    styles:
+      target.styleId === null
+        ? []
+        : [{ primaryStyleId: target.styleId, secondaryStyleId: null, share: 1 }],
+    bpm: target.bpm,
+    keys: target.camelotKey === null ? [] : [target.camelotKey],
+    energy: target.energy,
+    moods: []
+  }
 }
 
 function namesOf(artist: string, title: string): string {
@@ -270,6 +289,10 @@ export interface OnlineRecs {
     url: string,
     confirmed: boolean
   ) => Promise<Result<OnlineDownloadOutcome>>
+  /** The same for a gap of the generator, by what the missing track should be like. */
+  requestGap: (target: GapTarget) => Promise<Result<OnlineRecommendation[]>>
+  /** Downloads a recommendation for a gap into the Inbox; it joins no playlist. */
+  downloadGap: (url: string, confirmed: boolean) => Promise<Result<OnlineDownloadOutcome>>
   /** Quitting: the request that runs is stopped, and none starts after. */
   stop: () => void
 }
@@ -277,8 +300,9 @@ export interface OnlineRecs {
 export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRecs {
   const { db } = dependencies
   const now = dependencies.now ?? Date.now
-  const kept = new Map<number, OnlineRecommendation[]>()
-  let running: { playlistId: number; controller: AbortController } | null = null
+  // By `playlist:<id>`, or `gap:<target>` for a gap of the generator.
+  const kept = new Map<string, OnlineRecommendation[]>()
+  let running: { key: string; controller: AbortController } | null = null
   let lastStartedAt = -Infinity
   let stopped = false
 
@@ -300,19 +324,26 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
     }
   }
 
+  /** For a playlist, by its tracks; for a gap of the generator (T-039), by its target alone. */
   async function recommend(
-    playlistId: number,
+    source: { playlistId: number } | { target: GapTarget },
     signal: AbortSignal
   ): Promise<Result<OnlineRecommendation[]>> {
-    const playlist = getPlaylist(db, playlistId)
-    if (playlist === undefined) return { ok: false, code: 'INVALID_INPUT' }
     const mounted = dependencies.listMountedVolumes()
-    const members = getTracksByIds(db, playlist.trackIds, mounted)
-    if (members.length === 0) return { ok: true, value: [] }
+    let members: Track[] = []
+    let profile: PlaylistProfile
+    if ('playlistId' in source) {
+      const playlist = getPlaylist(db, source.playlistId)
+      if (playlist === undefined) return { ok: false, code: 'INVALID_INPUT' }
+      members = getTracksByIds(db, playlist.trackIds, mounted)
+      if (members.length === 0) return { ok: true, value: [] }
+      profile = buildProfile(members)
+    } else {
+      profile = profileOfTarget(source.target)
+    }
     const styles = listStyles(db)
     const styleName = new Map(styles.map((style) => [style.id, style.name]))
     const styleId = new Map(styles.map((style) => [style.name.toLowerCase(), style.id]))
-    const profile = buildProfile(members)
     const input: OnlineRecsInput = {
       styles: [...profile.styles]
         .sort((a, b) => b.share - a.share)
@@ -406,50 +437,82 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
     }
   }
 
+  async function run(
+    key: string,
+    source: { playlistId: number } | { target: GapTarget }
+  ): Promise<Result<OnlineRecommendation[]>> {
+    if (stopped) return { ok: false, code: 'UNEXPECTED' }
+    if (running !== null || now() - lastStartedAt < MIN_REQUEST_INTERVAL_MS) {
+      return { ok: false, code: 'ONLINE_RECS_BUSY' }
+    }
+    const controller = new AbortController()
+    running = { key, controller }
+    lastStartedAt = now()
+    try {
+      const result = await recommend(source, controller.signal)
+      if (result.ok) kept.set(key, result.value)
+      return result
+    } finally {
+      running = null
+    }
+  }
+
+  /**
+   * Downloads an address that was recommended. `playlistOf` names the playlist the
+   * download joins for the key it was recommended under: null for none, undefined when
+   * that key does not count.
+   */
+  async function startDownload(
+    url: string,
+    confirmed: boolean,
+    playlistOf: (key: string) => number | null | undefined
+  ): Promise<Result<OnlineDownloadOutcome>> {
+    const known = [...kept].find(
+      ([key, items]) =>
+        playlistOf(key) !== undefined && items.some((recommendation) => recommendation.url === url)
+    )
+    const videoId = videoIdOf(url)
+    const downloads = dependencies.downloads()
+    // Only an address main recommended there: the page names it, main checked it.
+    if (known === undefined || videoId === null || downloads === null) {
+      return { ok: false, code: 'INVALID_INPUT' }
+    }
+    const inspected = await downloads.inspect(url)
+    if (!inspected.ok) return inspected
+    if (!confirmed && inspected.value.lowBitrate) {
+      return { ok: true, value: { kind: 'lowBitrate', kbps: inspected.value.bitrateKbps } }
+    }
+    if (!confirmed && inspected.value.duplicate !== null) {
+      return { ok: true, value: { kind: 'duplicate' } }
+    }
+    const started = downloads.start(url)
+    if (!started.ok) return started
+    const playlistId = playlistOf(known[0])
+    if (playlistId !== null && playlistId !== undefined) {
+      notePendingAdd(db, videoId, playlistId, now())
+    }
+    return { ok: true, value: { kind: 'started' } }
+  }
+
   return {
     last: (playlistId) => ({
-      items: kept.get(playlistId) ?? null,
-      running: running?.playlistId === playlistId
+      items: kept.get(`playlist:${playlistId}`) ?? null,
+      running: running?.key === `playlist:${playlistId}`
     }),
 
-    async request(playlistId) {
-      if (stopped) return { ok: false, code: 'UNEXPECTED' }
-      if (running !== null || now() - lastStartedAt < MIN_REQUEST_INTERVAL_MS) {
-        return { ok: false, code: 'ONLINE_RECS_BUSY' }
-      }
-      const controller = new AbortController()
-      running = { playlistId, controller }
-      lastStartedAt = now()
-      try {
-        const result = await recommend(playlistId, controller.signal)
-        if (result.ok) kept.set(playlistId, result.value)
-        return result
-      } finally {
-        running = null
-      }
-    },
+    request: (playlistId) => run(`playlist:${playlistId}`, { playlistId }),
 
-    async download(playlistId, url, confirmed) {
-      const known = kept.get(playlistId)?.some((recommendation) => recommendation.url === url)
-      const videoId = videoIdOf(url)
-      const downloads = dependencies.downloads()
-      // Only an address this playlist was recommended: the page names it, main checked it.
-      if (!known || videoId === null || downloads === null) {
-        return { ok: false, code: 'INVALID_INPUT' }
-      }
-      const inspected = await downloads.inspect(url)
-      if (!inspected.ok) return inspected
-      if (!confirmed && inspected.value.lowBitrate) {
-        return { ok: true, value: { kind: 'lowBitrate', kbps: inspected.value.bitrateKbps } }
-      }
-      if (!confirmed && inspected.value.duplicate !== null) {
-        return { ok: true, value: { kind: 'duplicate' } }
-      }
-      const started = downloads.start(url)
-      if (!started.ok) return started
-      notePendingAdd(db, videoId, playlistId, now())
-      return { ok: true, value: { kind: 'started' } }
-    },
+    requestGap: (target) => run(gapKey(target), { target }),
+
+    download: (playlistId, url, confirmed) =>
+      startDownload(url, confirmed, (recommended) =>
+        recommended === `playlist:${playlistId}` ? playlistId : undefined
+      ),
+
+    downloadGap: (url, confirmed) =>
+      startDownload(url, confirmed, (recommended) =>
+        recommended.startsWith('gap:') ? null : undefined
+      ),
 
     stop() {
       stopped = true

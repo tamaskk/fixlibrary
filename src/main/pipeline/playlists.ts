@@ -45,7 +45,7 @@ export function listPlaylistSummaries(dependencies: PlaylistDependencies): Playl
   return listPlaylists(dependencies.db)
 }
 
-function itemOf(track: Track, styles: ReadonlyMap<number, string>): PlaylistTrackItem {
+export function itemOf(track: Track, styles: ReadonlyMap<number, string>): PlaylistTrackItem {
   return {
     trackId: track.id,
     // For display only: a file name may hold characters that turn the reading around.
