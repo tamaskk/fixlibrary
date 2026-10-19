@@ -93,3 +93,26 @@ export interface PlaylistEditResult {
    */
   skipped: number
 }
+
+/** How many candidates Claude is asked for: some fail the check, ten are shown. */
+export const ONLINE_CANDIDATE_COUNT = 20
+
+/**
+ * A track that is not in the library, proposed by Claude and found on YouTube (T-038).
+ * Its names are Claude's; the address, title and length are those of the video found.
+ */
+export interface OnlineRecommendation {
+  artist: string
+  title: string
+  mix: string | null
+  /** The style of the user's list Claude put it in, or null. */
+  styleName: string | null
+  /** Where the proposal came from. Beatport is no source (PRD §08). */
+  source: 'claude'
+  /** The address of the video the check found: what "Letöltés" downloads. */
+  url: string
+  videoTitle: string
+  durationS: number
+  /** How well it fits the playlist, 0 to 1; what is not known of it counts as half. */
+  score: number
+}

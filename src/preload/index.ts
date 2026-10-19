@@ -94,7 +94,12 @@ const api: FixLibraryApi = {
   playlists: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.playlistsList),
     view: (playlistId) => ipcRenderer.invoke(IPC_CHANNELS.playlistsView, playlistId),
-    edit: (action) => ipcRenderer.invoke(IPC_CHANNELS.playlistsEdit, action)
+    edit: (action) => ipcRenderer.invoke(IPC_CHANNELS.playlistsEdit, action),
+    onlineLast: (playlistId) => ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineLast, playlistId),
+    onlineRequest: (playlistId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineRequest, playlistId),
+    onlineDownload: (playlistId, url) =>
+      ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineDownload, playlistId, url)
   },
   energy: {
     calibration: () => ipcRenderer.invoke(IPC_CHANNELS.energyCalibration),
