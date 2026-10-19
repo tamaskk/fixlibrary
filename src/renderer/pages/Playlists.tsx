@@ -7,6 +7,8 @@ import { Dialog, DialogClose, DialogContent, DialogFooter } from '@/components/u
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { StatusLine } from '@/components/ui/status-line'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { OnlineRecommendations } from '@/components/features/playlists/OnlineRecommendations'
 import { cn } from '@/lib/cn'
 import { formatCount, formatElapsed } from '@/lib/format'
 import { errorMessage } from '@/lib/messages'
@@ -337,41 +339,52 @@ function PlaylistBody({
       </Card>
 
       <Card>
-        <CardTitle>Ajánlott a könyvtárból</CardTitle>
-        {recommendations.length === 0 ? (
-          <p className="text-body text-text-muted">
-            {tracks.length === 0
-              ? 'Ajánlás az első track hozzáadása után jelenik meg.'
-              : 'Nincs több track a könyvtárban, ami ajánlható lenne.'}
-          </p>
-        ) : (
-          <ul className="flex flex-col">
-            {recommendations.map((item) => (
-              <li
-                key={item.trackId}
-                className="flex min-h-12 items-center gap-2 border-b border-border py-1 last:border-b-0"
-              >
-                <PlayButton item={item} player={player} />
-                <TrackName item={item} />
-                <TrackFacts item={item} />
-                <span className="w-10 shrink-0 text-right text-text-muted">
-                  <Data>{Math.round(item.score * 100)}%</Data>
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`${nameOf(item)} hozzáadása a playlisthez`}
-                  disabled={editing}
-                  onClick={() =>
-                    void edit({ action: 'add', playlistId: view.id, trackIds: [item.trackId] })
-                  }
-                >
-                  <Plus />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <CardTitle>Ajánlások</CardTitle>
+        <Tabs defaultValue="library" className="flex flex-col gap-4">
+          <TabsList aria-label="Ajánlások">
+            <TabsTrigger value="library">Könyvtárból</TabsTrigger>
+            <TabsTrigger value="online">Online ajánlás</TabsTrigger>
+          </TabsList>
+          <TabsContent value="library">
+            {recommendations.length === 0 ? (
+              <p className="text-body text-text-muted">
+                {tracks.length === 0
+                  ? 'Ajánlás az első track hozzáadása után jelenik meg.'
+                  : 'Nincs több track a könyvtárban, ami ajánlható lenne.'}
+              </p>
+            ) : (
+              <ul className="flex flex-col">
+                {recommendations.map((item) => (
+                  <li
+                    key={item.trackId}
+                    className="flex min-h-12 items-center gap-2 border-b border-border py-1 last:border-b-0"
+                  >
+                    <PlayButton item={item} player={player} />
+                    <TrackName item={item} />
+                    <TrackFacts item={item} />
+                    <span className="w-10 shrink-0 text-right text-text-muted">
+                      <Data>{Math.round(item.score * 100)}%</Data>
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`${nameOf(item)} hozzáadása a playlisthez`}
+                      disabled={editing}
+                      onClick={() =>
+                        void edit({ action: 'add', playlistId: view.id, trackIds: [item.trackId] })
+                      }
+                    >
+                      <Plus />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </TabsContent>
+          <TabsContent value="online">
+            <OnlineRecommendations playlistId={view.id} empty={tracks.length === 0} />
+          </TabsContent>
+        </Tabs>
       </Card>
 
       <NameDialog

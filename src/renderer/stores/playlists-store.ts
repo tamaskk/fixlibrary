@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import type { ErrorCode } from '@shared/errors'
-import type { PlaylistAction, PlaylistSummary, PlaylistView } from '@shared/playlists'
+import type {
+  OnlineRecommendation,
+  PlaylistAction,
+  PlaylistSummary,
+  PlaylistView
+} from '@shared/playlists'
 
 /** What the last edit said: tracks it skipped, or why it failed. */
 export type PlaylistNotice =
@@ -8,6 +13,27 @@ export type PlaylistNotice =
 
 /** What an edit came to, for the place that asked for it. */
 export type PlaylistEditOutcome = { ok: true; skipped: number } | { ok: false; code: ErrorCode }
+
+/** The online recommendations of the playlist shown (T-038). */
+export interface OnlineState {
+  playlistId: number | null
+  /** Null until asked for in this session. */
+  items: OnlineRecommendation[] | null
+  loading: boolean
+  failure: ErrorCode | null
+  /** The addresses whose download started, and those that could not start, with why. */
+  started: string[]
+  refused: Record<string, ErrorCode>
+}
+
+const NO_ONLINE: OnlineState = {
+  playlistId: null,
+  items: null,
+  loading: false,
+  failure: null,
+  started: [],
+  refused: {}
+}
 
 interface PlaylistsState {
   playlists: PlaylistSummary[]
@@ -22,6 +48,11 @@ interface PlaylistsState {
   editing: boolean
   /** What the last edit made on the Playlists page said. */
   notice: PlaylistNotice | null
+  online: OnlineState
+  /** Shows what was found for this playlist earlier in this session, if anything. */
+  loadOnline: (playlistId: number) => Promise<void>
+  requestOnline: (playlistId: number) => Promise<void>
+  downloadOnline: (playlistId: number, url: string) => Promise<void>
   load: () => Promise<void>
   select: (playlistId: number) => Promise<void>
   /**
@@ -45,6 +76,52 @@ export const usePlaylistsStore = create<PlaylistsState>((set, get) => ({
   viewFailed: false,
   editing: false,
   notice: null,
+  online: NO_ONLINE,
+  loadOnline: async (playlistId) => {
+    if (get().online.playlistId === playlistId) return
+    set({ online: { ...NO_ONLINE, playlistId } })
+    try {
+      const items = await window.api.playlists.onlineLast(playlistId)
+      if (get().online.playlistId === playlistId) set({ online: { ...get().online, items } })
+    } catch {
+      // Nothing was found earlier: the page offers to ask.
+    }
+  },
+  requestOnline: async (playlistId) => {
+    set({ online: { ...NO_ONLINE, playlistId, items: get().online.items, loading: true } })
+    let next: Pick<OnlineState, 'items' | 'failure'>
+    try {
+      const result = await window.api.playlists.onlineRequest(playlistId)
+      next = result.ok
+        ? { items: result.value, failure: null }
+        : { items: get().online.items, failure: result.code }
+    } catch {
+      next = { items: get().online.items, failure: 'UNEXPECTED' }
+    }
+    // An answer for a playlist left meanwhile is kept by main, not shown here.
+    if (get().online.playlistId === playlistId) {
+      set({ online: { ...get().online, ...next, loading: false } })
+    }
+  },
+  downloadOnline: async (playlistId, url) => {
+    let code: ErrorCode | null
+    try {
+      const result = await window.api.playlists.onlineDownload(playlistId, url)
+      code = result.ok ? null : result.code
+    } catch {
+      code = 'UNEXPECTED'
+    }
+    const online = get().online
+    if (online.playlistId !== playlistId) return
+    const refused = { ...online.refused }
+    delete refused[url]
+    set({
+      online:
+        code === null
+          ? { ...online, started: [...online.started, url], refused }
+          : { ...online, refused: { ...refused, [url]: code } }
+    })
+  },
   load: async () => {
     try {
       const playlists = await window.api.playlists.list()

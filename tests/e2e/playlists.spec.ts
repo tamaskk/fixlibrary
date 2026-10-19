@@ -119,6 +119,10 @@ test('a playlist is made, filled from the library, takes a recommendation and is
     await expect(
       page.getByRole('button', { name: 'Artist 6 - Title 6 mozgatása feljebb' })
     ).toBeDisabled()
+
+    // The online recommendations are asked for by hand: nothing is asked on opening.
+    await page.getByRole('tab', { name: 'Online ajánlás' }).click()
+    await expect(page.getByRole('button', { name: 'Ajánlás kérése' })).toBeEnabled()
   } finally {
     await app.close()
   }
