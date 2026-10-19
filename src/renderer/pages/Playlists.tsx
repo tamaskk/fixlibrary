@@ -139,7 +139,7 @@ function TrackList({
       aria-label="A playlist trackjei"
       className="max-h-96 overflow-auto rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
     >
-      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+      <div role="presentation" className="relative" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((row) => {
           const item = tracks[row.index]
           if (!item) return null

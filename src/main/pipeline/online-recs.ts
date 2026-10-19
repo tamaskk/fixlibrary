@@ -22,7 +22,7 @@ import { isInInbox } from './inbox'
 import { readSettings } from './settings'
 import { buildProfile, styleScore, weightedScore, type PlaylistProfile } from './similarity'
 import { readSearchHits, type DownloadSearchHit } from '@shared/download'
-import type { GapTarget } from '@shared/generator'
+import type { GapRequest } from '@shared/generator'
 import { isSetAsidePath } from '@shared/duplicates'
 import { AppError, type Result } from '@shared/errors'
 import {
@@ -51,6 +51,7 @@ const PENDING_TTL_MS = 7 * 24 * 60 * 60 * 1000
 // Each request is a Claude call and up to 20 YouTube searches: YouTube answers a burst
 // with a bot check, which would also stop the Letöltés page.
 const MIN_REQUEST_INTERVAL_MS = 30_000
+const MAX_KEPT_GAPS = 20
 
 export interface OnlineRecsDependencies {
   db: AppDatabase
@@ -128,12 +129,12 @@ export function onlineScore(profile: PlaylistProfile, styleId: number | null): n
   return weightedScore({ style, bpm: NEUTRAL, key: NEUTRAL, energy: NEUTRAL, mood: NEUTRAL })
 }
 
-function gapKey(target: GapTarget): string {
+function gapKey(target: GapRequest): string {
   return `gap:${JSON.stringify([target.styleId, target.bpm, target.camelotKey, target.energy])}`
 }
 
 /** The profile of one missing track: its style, tempo, key and energy. */
-export function profileOfTarget(target: GapTarget): PlaylistProfile {
+export function profileOfTarget(target: GapRequest): PlaylistProfile {
   return {
     styles:
       target.styleId === null
@@ -290,7 +291,7 @@ export interface OnlineRecs {
     confirmed: boolean
   ) => Promise<Result<OnlineDownloadOutcome>>
   /** The same for a gap of the generator, by what the missing track should be like. */
-  requestGap: (target: GapTarget) => Promise<Result<OnlineRecommendation[]>>
+  requestGap: (target: GapRequest) => Promise<Result<OnlineRecommendation[]>>
   /** Downloads a recommendation for a gap into the Inbox; it joins no playlist. */
   downloadGap: (url: string, confirmed: boolean) => Promise<Result<OnlineDownloadOutcome>>
   /** Quitting: the request that runs is stopped, and none starts after. */
@@ -326,7 +327,7 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
 
   /** For a playlist, by its tracks; for a gap of the generator (T-039), by its target alone. */
   async function recommend(
-    source: { playlistId: number } | { target: GapTarget },
+    source: { playlistId: number } | { target: GapRequest },
     signal: AbortSignal
   ): Promise<Result<OnlineRecommendation[]>> {
     const mounted = dependencies.listMountedVolumes()
@@ -439,7 +440,7 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
 
   async function run(
     key: string,
-    source: { playlistId: number } | { target: GapTarget }
+    source: { playlistId: number } | { target: GapRequest }
   ): Promise<Result<OnlineRecommendation[]>> {
     if (stopped) return { ok: false, code: 'UNEXPECTED' }
     if (running !== null || now() - lastStartedAt < MIN_REQUEST_INTERVAL_MS) {
@@ -450,7 +451,13 @@ export function createOnlineRecs(dependencies: OnlineRecsDependencies): OnlineRe
     lastStartedAt = now()
     try {
       const result = await recommend(source, controller.signal)
-      if (result.ok) kept.set(key, result.value)
+      if (result.ok) {
+        kept.delete(key)
+        kept.set(key, result.value)
+        // Each gap asked about is a key of its own: the oldest go.
+        const gaps = [...kept.keys()].filter((each) => each.startsWith('gap:'))
+        for (const old of gaps.slice(0, Math.max(0, gaps.length - MAX_KEPT_GAPS))) kept.delete(old)
+      }
       return result
     } finally {
       running = null

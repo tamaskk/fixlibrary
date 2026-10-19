@@ -23,6 +23,8 @@ export function errorMessage(code: ErrorCode): string {
       return 'A backup mappa most nem változhat: az utolsó batch még innen vonható vissza.'
     case 'XML_BUSY':
       return 'Egy XML-művelet már folyamatban van, vagy az imént fejeződött be. Próbáld újra pár másodperc múlva.'
+    case 'GENERATOR_BUSY':
+      return 'Egy prompt értelmezése már folyamatban van. Várd meg a végét.'
     case 'ONLINE_RECS_BUSY':
       return 'Egy ajánláskérés már fut, vagy az imént fejeződött be. Próbáld újra fél perc múlva.'
     case 'XML_NOT_FOUND':

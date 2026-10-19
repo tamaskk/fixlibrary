@@ -43,7 +43,7 @@ export function OnlineRecommendations({
           {empty
             ? 'Ajánlás az első track hozzáadása után kérhető.'
             : shown?.loading
-              ? 'A Claude javasol, a YouTube-on ellenőrzöm. Ez egy percig is tarthat.'
+              ? 'Claude javaslatai, a YouTube-on ellenőrizve. Ez egy percig is tarthat.'
               : 'A Claude javasol trackeket, és csak az jelenik meg, ami megvan a YouTube-on.'}
         </span>
       </div>

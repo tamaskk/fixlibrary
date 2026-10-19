@@ -5,6 +5,7 @@ import { addStyle } from '../db/styles'
 import { insertTracks, updateTrack } from '../db/tracks'
 import {
   alternativesAt,
+  createMixIndex,
   generateList,
   mixesWith,
   parsePrompt,
@@ -155,6 +156,48 @@ describe('generateList', () => {
   })
 })
 
+describe('the edges', () => {
+  it('gives only gaps for an empty library, and ends', () => {
+    // Act
+    const places = generateList([], params({ length: { unit: 'minutes', value: 30 } }))
+
+    // Assert
+    expect(places.length).toBeGreaterThan(0)
+    expect(places.every((place) => place.kind === 'gap')).toBe(true)
+  })
+
+  it.each([
+    [{ bpm: 120, camelotKey: '8A' }, { bpm: 123, camelotKey: '8A' }, true],
+    [{ bpm: 120, camelotKey: '8A' }, { bpm: 123.1, camelotKey: '8A' }, false],
+    [{ bpm: 120, camelotKey: '8A' }, { bpm: 120, camelotKey: '8B' }, true],
+    [{ bpm: 120, camelotKey: '12A' }, { bpm: 120, camelotKey: '1A' }, true],
+    [{ bpm: 120, camelotKey: '8A' }, { bpm: 120, camelotKey: '10A' }, false]
+  ])('%o and %o mix: %s', (a, b, expected) => {
+    // Act
+    const mixes = mixesWith(a, b)
+
+    // Assert
+    expect(mixes).toBe(expected)
+  })
+
+  it('places the same tracks with the key index as by walking the library', () => {
+    // Arrange
+    const library = syntheticLibrary()
+    const last = library[0] as GeneratorTrack
+
+    // Act
+    const indexed = [...createMixIndex(library).after(last)].map((track) => track.id).sort()
+
+    // Assert
+    expect(indexed).toEqual(
+      library
+        .filter((track) => mixesWith(last, track))
+        .map((track) => track.id)
+        .sort()
+    )
+  })
+})
+
 describe('stylesAt', () => {
   it.each([
     [0.1, [1]],
@@ -177,7 +220,7 @@ describe('alternativesAt', () => {
     const list = tracksOf(generateList(library, given)).map((track) => track.id)
 
     // Act
-    const offered = alternativesAt(library, given, list, 4)
+    const offered = alternativesAt(library, library, given, list, 4)
 
     // Assert
     expect(offered.length).toBeGreaterThan(0)
@@ -193,6 +236,26 @@ describe('alternativesAt', () => {
       }))
       expectMixable(places, given.bpmRange)
     }
+  })
+})
+
+describe('alternatives across a gap and out of range', () => {
+  it('judges a place against the nearest track over a gap, and keeps only tracks in range', () => {
+    // Arrange
+    const base = syntheticLibrary(1)[0] as GeneratorTrack
+    const known: GeneratorTrack[] = [
+      { ...base, id: 1, bpm: 120, camelotKey: '8A' },
+      { ...base, id: 2, bpm: 140, camelotKey: '8A' },
+      { ...base, id: 3, bpm: 121, camelotKey: '8A' },
+      { ...base, id: 4, bpm: 121, camelotKey: '3B' }
+    ]
+    const inRange = known.filter((track) => track.bpm <= 126)
+
+    // Act
+    const offered = alternativesAt(inRange, known, params(), [1, null, 99], 1)
+
+    // Assert
+    expect(offered.map((track) => track.id)).toEqual([3])
   })
 })
 
@@ -256,6 +319,40 @@ describe('with the database', () => {
 
     // Assert
     expect(result).toEqual({ ok: false, code: 'CLAUDE_FAILED' })
+  })
+
+  it('reads one prompt at a time, and takes five styles at most', async () => {
+    // Arrange
+    const ids = ['A', 'B', 'C', 'D', 'E', 'F'].map(
+      (name, index) => addStyle(testDatabase.db, name, `#00000${index}`)?.id
+    )
+    let answer: () => void = () => undefined
+    const ask = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answer = () =>
+            resolve({
+              styles: ['A', 'B', 'C', 'D', 'E', 'F'],
+              minutes: null,
+              tracks: null,
+              bpmMin: null,
+              bpmMax: null,
+              energyProfile: null,
+              moods: []
+            })
+        })
+    )
+    dependencies.claude = () => ({ ask }) as never
+
+    // Act
+    const first = parsePrompt(dependencies, 'a')
+    const second = await parsePrompt(dependencies, 'b')
+    answer()
+    const result = await first
+
+    // Assert
+    expect(second).toEqual({ ok: false, code: 'GENERATOR_BUSY' })
+    expect(result.ok && result.value.params.styleIds).toEqual(ids.slice(0, 5))
   })
 
   it('saves the tracks as a playlist in their order', () => {

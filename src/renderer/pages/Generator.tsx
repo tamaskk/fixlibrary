@@ -19,7 +19,7 @@ import { nameOf } from '@/lib/track-name'
 import { formatCount, formatDecimal, formatElapsed, parseDecimal } from '@/lib/format'
 import { errorMessage } from '@/lib/messages'
 import { useTrackPlayer, type TrackPlayer } from '@/lib/use-track-player'
-import { useGeneratorStore } from '@/stores/generator-store'
+import { paramsChanged, useGeneratorStore } from '@/stores/generator-store'
 import { DEFAULT_CUSTOM_CURVE, type EnergyProfile } from '@shared/energy-curves'
 import {
   MAX_BPM,
@@ -28,6 +28,8 @@ import {
   MAX_SET_MINUTES,
   MAX_SET_TRACKS,
   MIN_BPM,
+  MIN_SET_MINUTES,
+  MIN_SET_TRACKS,
   type GapTarget,
   type GeneratedEntry
 } from '@shared/generator'
@@ -53,6 +55,29 @@ function gapText(target: GapTarget): string {
   ]
     .filter((part) => part !== null)
     .join(' · ')
+}
+
+/** What a gap should be like, its numbers in the Data role. */
+function GapFacts({ target }: { target: GapTarget }): React.JSX.Element {
+  return (
+    <>
+      {target.styleName ?? 'bármilyen stílus'}
+      {target.bpm !== null && (
+        <>
+          {' · '}
+          <Data>{Math.round(target.bpm)}</Data> BPM
+        </>
+      )}
+      {target.camelotKey !== null && (
+        <>
+          {' · '}
+          <Data>{target.camelotKey}</Data>
+        </>
+      )}
+      {' · '}
+      <Data>E{formatDecimal(target.energy)}</Data>
+    </>
+  )
 }
 
 /** A whole number typed in a field, or null while it is not one. */
@@ -175,7 +200,11 @@ function StyleOrder(): React.JSX.Element {
           if (id > 0) setParams({ styleIds: [...styleIds, id] })
         }}
       >
-        <option value="">Válassz…</option>
+        <option value="">
+          {styleIds.length >= MAX_GENERATOR_STYLES
+            ? `Legfeljebb ${MAX_GENERATOR_STYLES} stílus`
+            : 'Válassz…'}
+        </option>
         {left.map((style) => (
           <option key={style.id} value={style.id}>
             {style.name}
@@ -233,6 +262,8 @@ function ParamsCard(): React.JSX.Element {
   const generate = useGeneratorStore((state) => state.generate)
   const generating = useGeneratorStore((state) => state.generating)
   const stylesFailed = useGeneratorStore((state) => state.stylesFailed)
+  const styles = useGeneratorStore((state) => state.styles)
+  const loadStyles = useGeneratorStore((state) => state.loadStyles)
   const { length, bpmRange } = params
   const minutes = length.unit === 'minutes'
 
@@ -241,7 +272,12 @@ function ParamsCard(): React.JSX.Element {
       <CardTitle>Paraméterek</CardTitle>
       <div className="flex flex-col gap-4">
         {stylesFailed ? (
-          <StatusLine tone="danger">A stílusok nem tölthetők be.</StatusLine>
+          <div role="status" className="flex flex-col items-start gap-2">
+            <StatusLine tone="danger">A stílusok nem tölthetők be.</StatusLine>
+            <Button onClick={() => void loadStyles()}>Próbáld újra</Button>
+          </div>
+        ) : styles === null ? (
+          <p className="text-small text-text-muted">Betöltés…</p>
         ) : (
           <StyleOrder />
         )}
@@ -264,14 +300,14 @@ function ParamsCard(): React.JSX.Element {
           <NumberField
             label={minutes ? 'Perc' : 'Track'}
             value={length.value}
-            min={minutes ? 10 : 2}
+            min={minutes ? MIN_SET_MINUTES : MIN_SET_TRACKS}
             max={minutes ? MAX_SET_MINUTES : MAX_SET_TRACKS}
             onValue={(value) => setParams({ length: { unit: length.unit, value } })}
           />
+          {minutes && (
+            <p className="col-span-2 text-small text-text-muted">A trackek teljes hossza számít.</p>
+          )}
         </div>
-        {minutes && (
-          <p className="-mt-2 text-small text-text-muted">A trackek teljes hossza számít.</p>
-        )}
         <div className="grid grid-cols-2 gap-2">
           <NumberField
             label="BPM-től"
@@ -358,7 +394,9 @@ function EntryRow({
         <span className="w-8 shrink-0" />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="text-body text-warning">Hiány</span>
-          <span className="truncate text-small text-text-muted">{gapText(entry.target)}</span>
+          <span className="truncate text-small text-text-muted">
+            <GapFacts target={entry.target} />
+          </span>
         </span>
         <Button onClick={() => void requestGap(index)}>Online ajánlás</Button>
       </>
@@ -402,7 +440,7 @@ function EntryList({
       aria-label="A generált lista"
       className="max-h-96 overflow-auto rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
     >
-      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+      <div role="presentation" className="relative" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((row) => {
           const entry = entries[row.index]
           if (!entry) return null
@@ -491,7 +529,7 @@ function GapDialog(): React.JSX.Element {
         title="Online ajánlás a hiányra"
         description={
           entry?.kind === 'gap'
-            ? `Ilyen track kellene: ${gapText(entry.target)}. A Claude javasol, a YouTube-on ellenőrzöm.`
+            ? `Ilyen track kellene: ${gapText(entry.target)}. Claude javaslatai, a YouTube-on ellenőrizve.`
             : ''
         }
       >
@@ -566,53 +604,51 @@ function SaveForm(): React.JSX.Element {
 
 function ResultPanel(): React.JSX.Element {
   const result = useGeneratorStore((state) => state.result)
+  const generatedWith = useGeneratorStore((state) => state.generatedWith)
   const generating = useGeneratorStore((state) => state.generating)
   const failed = useGeneratorStore((state) => state.generateFailed)
   const params = useGeneratorStore((state) => state.params)
   const generate = useGeneratorStore((state) => state.generate)
   const player = useTrackPlayer()
+  const tracks = result?.entries.filter((entry) => entry.kind === 'track').length ?? 0
 
-  if (failed) {
-    return (
-      <div role="status" className="flex flex-col items-start gap-2">
-        <StatusLine tone="danger">A lista nem generálható.</StatusLine>
-        <Button onClick={() => void generate()}>Próbáld újra</Button>
-      </div>
-    )
-  }
-  if (result === null) {
-    return (
-      <EmptyState
-        message={
-          generating
-            ? 'Generálás…'
-            : 'Még nincs generált lista. Add meg a paramétereket, és nyomd meg a Generálás gombot.'
-        }
-      />
-    )
-  }
-  const tracks = result.entries.filter((entry) => entry.kind === 'track').length
   return (
     <div className="flex flex-col gap-4">
-      <p className="flex flex-wrap gap-x-4 text-small text-text-muted">
-        <span>
-          <Data>{formatCount(tracks)}</Data> track
-        </span>
-        <span>
-          Hossz: <Data>{result.totalMs > 0 ? formatElapsed(result.totalMs) : '–'}</Data>
-        </span>
-        <span>
-          Hiány: <Data>{formatCount(result.gaps)}</Data>
-        </span>
-      </p>
-      <div role="status" className="flex flex-col gap-1">
-        {result.entries.length === 0 && (
+      {result !== null && (
+        <p className="flex flex-wrap gap-x-4 text-small text-text-muted">
+          <span>
+            <Data>{formatCount(tracks)}</Data> track
+          </span>
+          <span>
+            Hossz: <Data>{result.totalMs > 0 ? formatElapsed(result.totalMs) : '–'}</Data>
+          </span>
+          <span>
+            Hiány: <Data>{formatCount(result.gaps)}</Data>
+          </span>
+        </p>
+      )}
+      {/* One live region, there before anything is said in it. */}
+      <div role="status" className="flex flex-col items-start gap-2">
+        {generating && <StatusLine tone="neutral">Generálás…</StatusLine>}
+        {failed && (
+          <>
+            <StatusLine tone="danger">A lista nem generálható.</StatusLine>
+            <Button onClick={() => void generate()}>Próbáld újra</Button>
+          </>
+        )}
+        {result !== null && generatedWith !== null && paramsChanged(params, generatedWith) && (
+          <StatusLine tone="neutral">
+            A paraméterek változtak a generálás óta. A lista és a csere a régiek szerint megy, amíg
+            nem generálsz újra.
+          </StatusLine>
+        )}
+        {result !== null && tracks === 0 && (
           <StatusLine tone="neutral">
             Nincs elemzett track ebben a BPM tartományban. Bővítsd a tartományt, vagy futtasd a BPM,
             key és energy elemzést.
           </StatusLine>
         )}
-        {result.gaps > 0 && (
+        {result !== null && tracks > 0 && result.gaps > 0 && (
           <StatusLine tone="warning">
             {formatCount(result.gaps)} helyre nincs keverhető track a könyvtárban. Bővítsd a BPM
             tartományt, vagy kérj online ajánlást a hiányokra.
@@ -624,12 +660,15 @@ function ResultPanel(): React.JSX.Element {
           </StatusLine>
         )}
       </div>
-      {result.entries.length > 0 && (
+      {result === null && !generating && !failed && (
+        <EmptyState message="Még nincs generált lista. Add meg a paramétereket, és nyomd meg a Generálás gombot." />
+      )}
+      {result !== null && generatedWith !== null && result.entries.length > 0 && (
         <>
           <EntryList entries={result.entries} player={player} />
           <EnergyChart
-            profile={params.energyProfile}
-            curve={params.customCurve}
+            profile={generatedWith.energyProfile}
+            curve={generatedWith.customCurve}
             entries={result.entries}
           />
           <SaveForm />

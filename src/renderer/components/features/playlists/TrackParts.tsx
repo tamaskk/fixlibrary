@@ -12,10 +12,17 @@ import type { PlaylistTrackItem } from '@shared/playlists'
 /** Tempo, key and energy of a track in the Data role, en dashes for what is not known. */
 export function TrackFacts({ item }: { item: PlaylistTrackItem }): React.JSX.Element {
   return (
-    <span className="flex shrink-0 gap-3 text-text-muted">
-      <Data>{item.bpm === null ? '–' : Math.round(item.bpm)}</Data>
-      <Data>{item.camelotKey ?? '–'}</Data>
-      <Data>{item.energy === null ? '–' : `E${item.energy}`}</Data>
+    // Columns of a fixed width, right-aligned, so that rows line up.
+    <span className="flex shrink-0 gap-2 text-text-muted">
+      <span className="w-8 text-right">
+        <Data>{item.bpm === null ? '–' : Math.round(item.bpm)}</Data>
+      </span>
+      <span className="w-8 text-right">
+        <Data>{item.camelotKey ?? '–'}</Data>
+      </span>
+      <span className="w-8 text-right">
+        <Data>{item.energy === null ? '–' : `E${item.energy}`}</Data>
+      </span>
     </span>
   )
 }

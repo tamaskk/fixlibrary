@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { customCurveSchema, ENERGY_PROFILES } from './energy-curves'
 import { moodTagsSchema } from './mood'
-import { MAX_PLAYLIST_NAME, playlistNameSchema, type PlaylistTrackItem } from './playlists'
+import { playlistNameSchema, type PlaylistTrackItem } from './playlists'
 
 export const MAX_GENERATOR_STYLES = 5
 export const MAX_PROMPT_LENGTH = 500
@@ -12,6 +12,8 @@ export const MAX_BPM = 200
 /** Far above a long set; they keep one generation short. */
 export const MAX_SET_MINUTES = 600
 export const MAX_SET_TRACKS = 200
+export const MIN_SET_MINUTES = 10
+export const MIN_SET_TRACKS = 2
 /** How many alternatives "Csere" offers. */
 export const ALTERNATIVE_COUNT = 5
 
@@ -20,9 +22,12 @@ const bpm = z.number().min(MIN_BPM).max(MAX_BPM)
 export const setLengthSchema = z.discriminatedUnion('unit', [
   z.strictObject({
     unit: z.literal('minutes'),
-    value: z.number().int().min(10).max(MAX_SET_MINUTES)
+    value: z.number().int().min(MIN_SET_MINUTES).max(MAX_SET_MINUTES)
   }),
-  z.strictObject({ unit: z.literal('tracks'), value: z.number().int().min(2).max(MAX_SET_TRACKS) })
+  z.strictObject({
+    unit: z.literal('tracks'),
+    value: z.number().int().min(MIN_SET_TRACKS).max(MAX_SET_TRACKS)
+  })
 ])
 export type SetLength = z.output<typeof setLengthSchema>
 
@@ -98,10 +103,17 @@ export const saveRequestSchema = z.strictObject({
 })
 export type SaveRequest = z.input<typeof saveRequestSchema>
 
-export const gapTargetSchema = z.strictObject({
+/**
+ * A gap's target as main reads it back. The style name the page shows is dropped: the
+ * style sent to Claude is looked up by its id, so no text of the page reaches a prompt.
+ */
+export const gapTargetSchema = z.object({
   styleId: z.number().int().positive().nullable(),
-  styleName: z.string().max(MAX_PLAYLIST_NAME).nullable(),
   bpm: z.number().min(MIN_BPM).max(MAX_BPM).nullable(),
-  camelotKey: z.string().max(3).nullable(),
+  camelotKey: z
+    .string()
+    .regex(/^(1[0-2]|[1-9])[AB]$/)
+    .nullable(),
   energy: z.number().min(1).max(10)
 })
+export type GapRequest = z.output<typeof gapTargetSchema>

@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { formatDecimal } from '@/lib/format'
+import { meanDeviationOf } from '@/stores/generator-store'
 import { CHART_HEIGHT, CHART_WIDTH, xOf, yOf } from './chart-geometry'
 import { EnergyGrid } from './EnergyCurveEditor'
 import { energyAt, type CurvePoint, type EnergyProfile } from '@shared/energy-curves'
@@ -24,16 +25,7 @@ export function EnergyChart({
     const t = index / SAMPLES
     return `${xOf(t)},${yOf(energyAt(profile, t, curve))}`
   }).join(' ')
-  const tracks = entries.filter((entry) => entry.kind === 'track')
-  const mean =
-    tracks.length === 0
-      ? null
-      : tracks.reduce(
-          (sum, entry) =>
-            sum +
-            (entry.kind === 'track' ? Math.abs((entry.item.energy ?? 0) - entry.targetEnergy) : 0),
-          0
-        ) / tracks.length
+  const mean = meanDeviationOf(entries)
 
   return (
     <figure className="flex flex-col gap-2">

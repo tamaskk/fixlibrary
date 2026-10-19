@@ -17,6 +17,7 @@ import { energyAt } from '@shared/energy-curves'
 import { AppError, type Result } from '@shared/errors'
 import {
   ALTERNATIVE_COUNT,
+  MAX_GENERATOR_STYLES,
   MAX_SET_TRACKS,
   type AlternativesRequest,
   type GapTarget,
@@ -156,15 +157,92 @@ function isDone(params: GeneratorParams, beam: Beam): boolean {
     : beam.elapsedMs >= params.length.value * 60_000
 }
 
+/** Keeps the best `size` of what it is offered, best first; ties go to the lower id. */
+interface BestKept<T> {
+  offer: (item: T) => void
+  best: T[]
+}
+
+function keepBest<T extends { score: number; track: GeneratorTrack }>(size: number): BestKept<T> {
+  const best: T[] = []
+  const better = (a: T, b: T): boolean =>
+    a.score > b.score || (a.score === b.score && a.track.id < b.track.id)
+  return {
+    offer(item: T): void {
+      if (best.length === size && !better(item, best[size - 1] as T)) return
+      let at = best.length
+      while (at > 0 && better(item, best[at - 1] as T)) at -= 1
+      best.splice(at, 0, item)
+      if (best.length > size) best.pop()
+    },
+    best
+  }
+}
+
+/**
+ * The tracks that could follow a track, found without walking the library: grouped by
+ * key, each group ordered by tempo, so only the mixing keys within 3 BPM are read.
+ */
+export interface MixIndex {
+  /** Every track that mixes with `last`; the whole library when there is none. */
+  after: (last: Pick<GeneratorTrack, 'bpm' | 'camelotKey'> | null) => Iterable<GeneratorTrack>
+}
+
+export function createMixIndex(library: readonly GeneratorTrack[]): MixIndex {
+  const byKey = new Map<string, GeneratorTrack[]>()
+  for (const track of library) {
+    const group = byKey.get(track.camelotKey) ?? []
+    group.push(track)
+    byKey.set(track.camelotKey, group)
+  }
+  for (const group of byKey.values()) group.sort((a, b) => a.bpm - b.bpm)
+  const keys = [...byKey.keys()]
+  const mixingKeys = new Map(
+    keys.map((key) => [key, keys.filter((other) => keyScore(key, other) > 0)])
+  )
+  return {
+    *after(last: Pick<GeneratorTrack, 'bpm' | 'camelotKey'> | null): Generator<GeneratorTrack> {
+      if (last === null) {
+        yield* library
+        return
+      }
+      for (const key of mixingKeys.get(last.camelotKey) ??
+        keys.filter((other) => keyScore(last.camelotKey, other) > 0)) {
+        const group = byKey.get(key) ?? []
+        // The first track of the group within 3 BPM below, by halving.
+        let low = 0
+        let high = group.length
+        while (low < high) {
+          const middle = (low + high) >> 1
+          if ((group[middle] as GeneratorTrack).bpm < last.bpm - MAX_BPM_STEP) low = middle + 1
+          else high = middle
+        }
+        for (let at = low; at < group.length; at += 1) {
+          const track = group[at] as GeneratorTrack
+          if (track.bpm > last.bpm + MAX_BPM_STEP) break
+          yield track
+        }
+      }
+    }
+  }
+}
+
+/** The median length of the tracks: what a gap or a track of unknown length is taken for. */
+function typicalLengthOf(library: readonly GeneratorTrack[]): number {
+  return (
+    median(library.flatMap((track) => (track.durationMs === null ? [] : [track.durationMs]))) ??
+    DEFAULT_TRACK_MS
+  )
+}
+
 /**
  * Generates a list. Every two neighbours mix (`mixesWith`), each track is in the
  * tempo range and in the list once. A place no track can take becomes a gap, and the
  * next place is judged against the track before the gap.
  */
 export function generateList(library: readonly GeneratorTrack[], params: GeneratorParams): Place[] {
-  const typicalMs =
-    median(library.flatMap((track) => (track.durationMs === null ? [] : [track.durationMs]))) ??
-    DEFAULT_TRACK_MS
+  const typicalMs = typicalLengthOf(library)
+  const index = createMixIndex(library)
   const [low, high] = params.bpmRange
   let beams: Beam[] = [{ places: [], last: null, used: new Set(), score: 0, elapsedMs: 0 }]
   while (beams.some((beam) => !isDone(params, beam))) {
@@ -175,17 +253,13 @@ export function generateList(library: readonly GeneratorTrack[], params: Generat
         continue
       }
       const place = beam.places.length
-      const scored = library
-        .filter(
-          (track) => !beam.used.has(track.id) && (beam.last === null || mixesWith(beam.last, track))
-        )
-        .map((track) => {
-          const t = timeOf(params, place, beam.elapsedMs, track.durationMs ?? typicalMs)
-          return { track, t, score: placeScore(track, t, params) }
-        })
-        .sort((a, b) => b.score - a.score || a.track.id - b.track.id)
-        .slice(0, EXPANSIONS)
-      for (const { track, t, score } of scored) {
+      const kept = keepBest<{ track: GeneratorTrack; t: number; score: number }>(EXPANSIONS)
+      for (const track of index.after(beam.last)) {
+        if (beam.used.has(track.id)) continue
+        const t = timeOf(params, place, beam.elapsedMs, track.durationMs ?? typicalMs)
+        kept.offer({ track, t, score: placeScore(track, t, params) })
+      }
+      for (const { track, t, score } of kept.best) {
         next.push({
           places: [...beam.places, { kind: 'track', track, t }],
           last: track,
@@ -194,7 +268,7 @@ export function generateList(library: readonly GeneratorTrack[], params: Generat
           elapsedMs: beam.elapsedMs + (track.durationMs ?? typicalMs)
         })
       }
-      if (scored.length === 0) {
+      if (kept.best.length === 0) {
         const t = timeOf(params, place, beam.elapsedMs, typicalMs)
         next.push({
           ...beam,
@@ -224,45 +298,42 @@ export function generateList(library: readonly GeneratorTrack[], params: Generat
 }
 
 /**
- * Up to five tracks that could take the place of the one at `index`: each mixes with
- * the tracks on both sides, is in the tempo range and not in the list yet.
+ * Up to five tracks of `candidates` that could take the place at `index`: each mixes
+ * with the nearest track on both sides (across a gap, as the generator judges it), is
+ * not in the list yet, and fits the place best. The neighbours are looked up in
+ * `known`, which holds every analysed track, also outside the tempo range of now.
  */
 export function alternativesAt(
-  library: readonly GeneratorTrack[],
+  candidates: readonly GeneratorTrack[],
+  known: readonly GeneratorTrack[],
   params: GeneratorParams,
   list: readonly (number | null)[],
   index: number
 ): GeneratorTrack[] {
-  const byId = new Map(library.map((track) => [track.id, track]))
-  const neighbour = (at: number): GeneratorTrack | undefined => {
-    const id = list[at]
-    return id === null || id === undefined ? undefined : byId.get(id)
+  const byId = new Map(known.map((track) => [track.id, track]))
+  const nearest = (from: number, step: -1 | 1): GeneratorTrack | undefined => {
+    for (let at = from; at >= 0 && at < list.length; at += step) {
+      const id = list[at]
+      if (id !== null && id !== undefined) return byId.get(id)
+    }
+    return undefined
   }
-  const before = neighbour(index - 1)
-  const after = neighbour(index + 1)
+  const before = nearest(index - 1, -1)
+  const after = nearest(index + 1, 1)
   const held = new Set(list.flatMap((id) => (id === null ? [] : [id])))
-  const typicalMs = DEFAULT_TRACK_MS
+  const typicalMs = typicalLengthOf(known)
   const lengthOf = (id: number | null): number =>
     (id === null ? undefined : byId.get(id)?.durationMs) ?? typicalMs
   const elapsedMs = list.slice(0, index).reduce<number>((sum, id) => sum + lengthOf(id), 0)
-  return library
-    .filter(
-      (track) =>
-        !held.has(track.id) &&
-        (before === undefined || mixesWith(before, track)) &&
-        (after === undefined || mixesWith(track, after))
-    )
-    .map((track) => ({
-      track,
-      score: placeScore(
-        track,
-        timeOf(params, index, elapsedMs, track.durationMs ?? typicalMs),
-        params
-      )
-    }))
-    .sort((a, b) => b.score - a.score || a.track.id - b.track.id)
-    .slice(0, ALTERNATIVE_COUNT)
-    .map(({ track }) => track)
+  const kept = keepBest<{ track: GeneratorTrack; score: number }>(ALTERNATIVE_COUNT)
+  for (const track of candidates) {
+    if (held.has(track.id)) continue
+    if (before !== undefined && !mixesWith(before, track)) continue
+    if (after !== undefined && !mixesWith(track, after)) continue
+    const t = timeOf(params, index, elapsedMs, track.durationMs ?? typicalMs)
+    kept.offer({ track, score: placeScore(track, t, params) })
+  }
+  return kept.best.map(({ track }) => track)
 }
 
 export interface GeneratorDependencies {
@@ -330,10 +401,17 @@ export function alternatives(
   const tracks = libraryOf(dependencies)
   const byId = new Map(tracks.map((track) => [track.id, track]))
   const styles = new Map(listStyles(dependencies.db).map((style) => [style.id, style.name]))
-  // The neighbours are judged as they are, also outside the tempo range of now.
-  const library = generatorTracksOf(tracks, { ...request.params, bpmRange: [0, Infinity] })
-  const found = alternativesAt(library, request.params, request.list, request.index).filter(
-    (track) => track.bpm >= request.params.bpmRange[0] && track.bpm <= request.params.bpmRange[1]
+  // The neighbours as they are: any analysed track, whatever its tempo or length.
+  const known = generatorTracksOf(tracks, {
+    bpmRange: [0, Infinity],
+    length: { unit: 'tracks', value: 2 }
+  })
+  const found = alternativesAt(
+    generatorTracksOf(tracks, request.params),
+    known,
+    request.params,
+    request.list,
+    request.index
   )
   return {
     ok: true,
@@ -346,6 +424,22 @@ export function alternatives(
 
 /** Reads a prompt into the fields it names. Styles the user does not have are named apart. */
 export async function parsePrompt(
+  dependencies: GeneratorDependencies,
+  prompt: string
+): Promise<Result<{ params: PromptParams; unknownStyles: string[] }>> {
+  // One at a time: each is a Claude call, and they wait in the line of the style runs.
+  if (parsing) return { ok: false, code: 'GENERATOR_BUSY' }
+  parsing = true
+  try {
+    return await readPrompt(dependencies, prompt)
+  } finally {
+    parsing = false
+  }
+}
+
+let parsing = false
+
+async function readPrompt(
   dependencies: GeneratorDependencies,
   prompt: string
 ): Promise<Result<{ params: PromptParams; unknownStyles: string[] }>> {
@@ -367,7 +461,7 @@ export async function parsePrompt(
     const id = byName.get(name.toLowerCase())
     return id === undefined ? [] : [id]
   })
-  if (styleIds.length > 0) params.styleIds = [...new Set(styleIds)]
+  if (styleIds.length > 0) params.styleIds = [...new Set(styleIds)].slice(0, MAX_GENERATOR_STYLES)
   if (answer.minutes !== null && answer.minutes >= 10) {
     params.length = { unit: 'minutes', value: answer.minutes }
   } else if (answer.tracks !== null && answer.tracks >= 2) {
@@ -398,6 +492,10 @@ export function saveAsPlaylist(
   const playlistId = created.value.view?.id
   if (playlistId === undefined) return { ok: false, code: 'UNEXPECTED' }
   const added = editPlaylist(deps, { action: 'add', playlistId, trackIds: request.trackIds })
-  if (!added.ok) return added
+  if (!added.ok) {
+    // No empty playlist is left behind by a save that failed.
+    editPlaylist(deps, { action: 'delete', playlistId })
+    return added
+  }
   return { ok: true, value: { playlistId, skipped: added.value.skipped } }
 }

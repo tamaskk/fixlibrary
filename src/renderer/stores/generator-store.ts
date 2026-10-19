@@ -41,6 +41,8 @@ interface GeneratorState {
   generateFailed: boolean
   /** The list as generated, with the places swapped since. Kept for the session only. */
   result: GeneratorResult | null
+  /** The parameters the list was generated with: swaps and the chart go by these. */
+  generatedWith: GeneratorParams | null
   swap: Swap | null
   gap: GapRecs | null
   saving: boolean
@@ -63,6 +65,27 @@ export function listOf(entries: readonly GeneratedEntry[]): (number | null)[] {
   return entries.map((entry) => (entry.kind === 'track' ? entry.item.trackId : null))
 }
 
+/** The mean distance of the tracks' energy from the curve, of the tracks whose energy is known. */
+export function meanDeviationOf(entries: readonly GeneratedEntry[]): number | null {
+  const deviations = entries.flatMap((entry) =>
+    entry.kind === 'track' && entry.item.energy !== null
+      ? [Math.abs(entry.item.energy - entry.targetEnergy)]
+      : []
+  )
+  return deviations.length === 0
+    ? null
+    : deviations.reduce((sum, value) => sum + value, 0) / deviations.length
+}
+
+/** True when the fields were changed since the list was generated. */
+export function paramsChanged(params: GeneratorParams, generatedWith: GeneratorParams): boolean {
+  const used = {
+    ...params,
+    customCurve: params.energyProfile === 'custom' ? params.customCurve : null
+  }
+  return JSON.stringify(used) !== JSON.stringify(generatedWith)
+}
+
 export const useGeneratorStore = create<GeneratorState>((set, get) => ({
   styles: null,
   stylesFailed: false,
@@ -74,6 +97,7 @@ export const useGeneratorStore = create<GeneratorState>((set, get) => ({
   generating: false,
   generateFailed: false,
   result: null,
+  generatedWith: null,
   swap: null,
   gap: null,
   saving: false,
@@ -118,25 +142,26 @@ export const useGeneratorStore = create<GeneratorState>((set, get) => ({
   generate: async () => {
     set({ generating: true, generateFailed: false, swap: null, gap: null, saved: null })
     try {
-      const params = get().params
-      const result = await window.api.generator.generate({
-        ...params,
-        customCurve: params.energyProfile === 'custom' ? params.customCurve : null
-      })
-      set({ result })
+      const current = get().params
+      const params = {
+        ...current,
+        customCurve: current.energyProfile === 'custom' ? current.customCurve : null
+      }
+      const result = await window.api.generator.generate(params)
+      set({ result, generatedWith: params })
     } catch {
       set({ generateFailed: true })
     }
     set({ generating: false })
   },
   openSwap: async (index) => {
-    const result = get().result
-    if (result === null) return
+    const { result, generatedWith } = get()
+    if (result === null || generatedWith === null) return
     set({ swap: { index, items: null, failure: null } })
     let next: Swap
     try {
       const found = await window.api.generator.alternatives({
-        params: get().params,
+        params: generatedWith,
         list: listOf(result.entries),
         index
       })
@@ -165,9 +190,12 @@ export const useGeneratorStore = create<GeneratorState>((set, get) => ({
         totalMs: entries.reduce(
           (sum, each) => sum + (each.kind === 'track' ? (each.item.durationMs ?? 0) : 0),
           0
-        )
+        ),
+        meanEnergyDeviation: meanDeviationOf(entries)
       },
       swap: null,
+      // The recommendations of a gap that is a track now are of no use.
+      gap: get().gap?.index === index ? null : get().gap,
       saved: null
     })
   },

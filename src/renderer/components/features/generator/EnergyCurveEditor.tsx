@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Minus, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { formatDecimal } from '@/lib/format'
 import { CHART_HEIGHT, CHART_WIDTH, PAD, xOf, yOf } from './chart-geometry'
 import { MAX_CURVE_POINTS, MIN_CURVE_POINTS, type CurvePoint } from '@shared/energy-curves'
 
@@ -28,9 +29,9 @@ export function EnergyGrid(): React.JSX.Element {
           <text
             x={2}
             y={yOf(energy) + 3}
-            fontSize={8}
+            fontSize={10}
             fill="var(--color-text-muted)"
-            className="font-mono"
+            className="font-mono tabular-nums"
           >
             {energy}
           </text>
@@ -113,12 +114,14 @@ export function EnergyCurveEditor({
     ])
   }
 
-  /** Removes the chosen point, or the one before the last; never the first or the last. */
+  // Only an inner point can go: the first and the last hold the ends of the set.
+  const removable = chosen !== null && chosen > 0 && chosen < points.length - 1
+
+  /** Removes the chosen inner point. */
   function removePoint(): void {
-    const index =
-      chosen !== null && chosen > 0 && chosen < points.length - 1 ? chosen : points.length - 2
+    if (!removable) return
     setChosen(null)
-    onChange(points.filter((_, at) => at !== index))
+    onChange(points.filter((_, at) => at !== chosen))
   }
 
   return (
@@ -145,7 +148,8 @@ export function EnergyCurveEditor({
             cx={xOf(point.t)}
             cy={yOf(point.energy)}
             r={chosen === index ? 6 : 5}
-            fill="var(--color-surface)"
+            // The chosen point is filled, not only larger.
+            fill={chosen === index ? 'var(--color-primary)' : 'var(--color-surface)'}
             stroke="var(--color-primary)"
             strokeWidth={2}
             tabIndex={0}
@@ -154,8 +158,8 @@ export function EnergyCurveEditor({
             aria-valuemin={1}
             aria-valuemax={10}
             aria-valuenow={point.energy}
-            aria-valuetext={`Energy ${point.energy}`}
-            className="cursor-grab focus-visible:outline-2 focus-visible:outline-primary"
+            aria-valuetext={`Energy ${formatDecimal(point.energy)}`}
+            className="cursor-grab focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             onPointerDown={(event) => {
               event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId)
               setDragging(index)
@@ -168,7 +172,8 @@ export function EnergyCurveEditor({
       </svg>
       <div className="flex items-center gap-2">
         <span className="flex-1 text-small text-text-muted">
-          Húzd a pontokat, vagy válaszd ki őket, és mozgasd a nyilakkal.
+          Húzd a pontokat, vagy válaszd ki őket, és mozgasd a nyilakkal. Törölni a kiválasztott
+          belső pontot lehet.
         </span>
         <Button
           variant="ghost"
@@ -183,7 +188,7 @@ export function EnergyCurveEditor({
           variant="ghost"
           size="icon"
           aria-label="Pont törlése"
-          disabled={points.length <= MIN_CURVE_POINTS}
+          disabled={points.length <= MIN_CURVE_POINTS || !removable}
           onClick={removePoint}
         >
           <Minus />
