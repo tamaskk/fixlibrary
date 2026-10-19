@@ -16,7 +16,15 @@ import type {
 } from './download'
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
-import type { PlaylistAction, PlaylistEditResult, PlaylistSummary, PlaylistView } from './playlists'
+import type {
+  OnlineDownloadOutcome,
+  OnlineRecommendation,
+  OnlineRecsState,
+  PlaylistAction,
+  PlaylistEditResult,
+  PlaylistSummary,
+  PlaylistView
+} from './playlists'
 import type { Result } from './errors'
 import type {
   LibraryPage,
@@ -124,6 +132,9 @@ export const IPC_CHANNELS = {
   playlistsList: 'playlists:list',
   playlistsView: 'playlists:view',
   playlistsEdit: 'playlists:edit',
+  playlistsOnlineLast: 'playlists:onlineLast',
+  playlistsOnlineRequest: 'playlists:onlineRequest',
+  playlistsOnlineDownload: 'playlists:onlineDownload',
   downloadInspect: 'download:inspect',
   downloadStart: 'download:start',
   downloadSearch: 'download:search',
@@ -295,6 +306,19 @@ export interface FixLibraryApi {
     view: (playlistId: number) => Promise<PlaylistView | null>
     /** Creates, renames, deletes or changes the tracks of a playlist. */
     edit: (action: PlaylistAction) => Promise<Result<PlaylistEditResult>>
+    /** The online recommendations last found for a playlist in this session, and whether they are being asked for. */
+    onlineLast: (playlistId: number) => Promise<OnlineRecsState>
+    /** Asks Claude for tracks that fit and checks each on YouTube; takes a minute or so. */
+    onlineRequest: (playlistId: number) => Promise<Result<OnlineRecommendation[]>>
+    /**
+     * Downloads a recommendation; its track joins the playlist once its Inbox batch is
+     * approved. A low bitrate or a copy in the library is asked about unless `confirmed`.
+     */
+    onlineDownload: (
+      playlistId: number,
+      url: string,
+      confirmed: boolean
+    ) => Promise<Result<OnlineDownloadOutcome>>
   }
   energy: {
     /** The calibration sample, the ratings given, and the kept model. */

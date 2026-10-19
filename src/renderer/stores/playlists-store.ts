@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import type { ErrorCode } from '@shared/errors'
-import type { PlaylistAction, PlaylistSummary, PlaylistView } from '@shared/playlists'
+import type {
+  OnlineRecommendation,
+  PlaylistAction,
+  PlaylistSummary,
+  PlaylistView
+} from '@shared/playlists'
 
 /** What the last edit said: tracks it skipped, or why it failed. */
 export type PlaylistNotice =
@@ -8,6 +13,32 @@ export type PlaylistNotice =
 
 /** What an edit came to, for the place that asked for it. */
 export type PlaylistEditOutcome = { ok: true; skipped: number } | { ok: false; code: ErrorCode }
+
+/** What a "Letöltés" of a row came to: started, a question first, or why it failed. */
+export type OnlineRowState =
+  | { kind: 'started' }
+  | { kind: 'lowBitrate'; kbps: number | null }
+  | { kind: 'duplicate' }
+  | { kind: 'failed'; code: ErrorCode }
+
+/** The online recommendations of the playlist shown (T-038). */
+export interface OnlineState {
+  playlistId: number | null
+  /** Null until asked for in this session. */
+  items: OnlineRecommendation[] | null
+  loading: boolean
+  failure: ErrorCode | null
+  /** By the address of a row. */
+  rows: Record<string, OnlineRowState>
+}
+
+const NO_ONLINE: OnlineState = {
+  playlistId: null,
+  items: null,
+  loading: false,
+  failure: null,
+  rows: {}
+}
 
 interface PlaylistsState {
   playlists: PlaylistSummary[]
@@ -22,6 +53,11 @@ interface PlaylistsState {
   editing: boolean
   /** What the last edit made on the Playlists page said. */
   notice: PlaylistNotice | null
+  online: OnlineState
+  /** Shows what was found for this playlist earlier in this session, if anything. */
+  loadOnline: (playlistId: number) => Promise<void>
+  requestOnline: (playlistId: number) => Promise<void>
+  downloadOnline: (playlistId: number, url: string, confirmed: boolean) => Promise<void>
   load: () => Promise<void>
   select: (playlistId: number) => Promise<void>
   /**
@@ -45,6 +81,50 @@ export const usePlaylistsStore = create<PlaylistsState>((set, get) => ({
   viewFailed: false,
   editing: false,
   notice: null,
+  online: NO_ONLINE,
+  loadOnline: async (playlistId) => {
+    if (get().online.playlistId === playlistId) return
+    set({ online: { ...NO_ONLINE, playlistId } })
+    try {
+      // A request made before the page was left may still run: it is shown as running.
+      const { items, running } = await window.api.playlists.onlineLast(playlistId)
+      if (get().online.playlistId === playlistId) {
+        set({ online: { ...get().online, items, loading: running || get().online.loading } })
+      }
+    } catch {
+      if (get().online.playlistId === playlistId) {
+        set({ online: { ...get().online, failure: 'UNEXPECTED' } })
+      }
+    }
+  },
+  requestOnline: async (playlistId) => {
+    set({ online: { ...NO_ONLINE, playlistId, items: get().online.items, loading: true } })
+    let next: Pick<OnlineState, 'items' | 'failure'>
+    try {
+      const result = await window.api.playlists.onlineRequest(playlistId)
+      next = result.ok
+        ? { items: result.value, failure: null }
+        : { items: get().online.items, failure: result.code }
+    } catch {
+      next = { items: get().online.items, failure: 'UNEXPECTED' }
+    }
+    // Shown if this playlist is shown now; main keeps it for when it is shown again.
+    if (get().online.playlistId === playlistId) {
+      set({ online: { ...get().online, ...next, loading: false } })
+    }
+  },
+  downloadOnline: async (playlistId, url, confirmed) => {
+    let row: OnlineRowState
+    try {
+      const result = await window.api.playlists.onlineDownload(playlistId, url, confirmed)
+      row = result.ok ? result.value : { kind: 'failed', code: result.code }
+    } catch {
+      row = { kind: 'failed', code: 'UNEXPECTED' }
+    }
+    const online = get().online
+    if (online.playlistId !== playlistId) return
+    set({ online: { ...online, rows: { ...online.rows, [url]: row } } })
+  },
   load: async () => {
     try {
       const playlists = await window.api.playlists.list()

@@ -12,6 +12,7 @@ import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
 import { registerEnergyIpc } from './ipc/energy'
 import { registerPlaylistsIpc } from './ipc/playlists'
+import { createOnlineRecs, noteInboxTrack, type OnlineRecs } from './pipeline/online-recs'
 import { registerCueEditorIpc } from './ipc/cue-editor'
 import { registerDownloadIpc, sendDownloads } from './ipc/download'
 import { registerRekordboxIpc } from './ipc/rekordbox'
@@ -93,6 +94,7 @@ let fileWork: FileWork | null = null
 let claudeService: Claude | null = null
 // Kept so that quitting can stop the downloads that are running.
 let downloads: Downloads | null = null
+let onlineRecs: OnlineRecs | null = null
 // Kept so that quitting can stop watching the Inbox.
 let inboxWatcher: InboxWatcher | null = null
 // The API keys of the lookup services; read by the stages that ask them.
@@ -509,14 +511,14 @@ function registerLibraryAndPipeline(): void {
   }
   registerCueEditorIpc(cueEditor)
   registerEnergyIpc({ db, python: () => pythonBridge })
-  registerPlaylistsIpc({ db, listMountedVolumes: cachedVolumes })
   const tools = resolveToolLocations({
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath
   })
+  const ytDlp = createYtDlp(() => resolveToolCommand('yt-dlp', tools))
   downloads = createDownloads({
-    ytDlp: createYtDlp(() => resolveToolCommand('yt-dlp', tools)),
+    ytDlp,
     folders: () => ({ libraryRoot: readSettings(db).library.rootFolder, ...downloadFolders() }),
     ffmpeg: () => {
       const ffmpeg = resolveToolCommand('ffmpeg', tools)?.command
@@ -530,6 +532,14 @@ function registerLibraryAndPipeline(): void {
     }
   })
   registerDownloadIpc(downloads)
+  onlineRecs = createOnlineRecs({
+    db,
+    listMountedVolumes: cachedVolumes,
+    claude: () => claudeService,
+    ytDlp,
+    downloads: () => downloads
+  })
+  registerPlaylistsIpc({ db, listMountedVolumes: cachedVolumes }, onlineRecs)
   // New files of the Inbox become a batch of their own once nothing else runs or waits
   // for approval, so a batch of the user's is never given up for one.
   inboxWatcher = createInboxWatcher({
@@ -561,7 +571,12 @@ function registerLibraryAndPipeline(): void {
     // The scan makes the files tracks; the run decides which of them it can take.
     process: createInboxBatches({
       scan: async () => (await scanner.scan()).ok,
-      trackIdOf: (path) => findTrackIdByPath(db, path),
+      trackIdOf: (path) => {
+        const trackId = findTrackIdByPath(db, path)
+        // A download of an online recommendation is known by its file name (T-038).
+        if (trackId !== undefined) noteInboxTrack(db, path, trackId)
+        return trackId
+      },
       start: (trackIds) => {
         const started = runs.start({ trackIds, stages: inboxStages(functions) })
         if (started.ok) {
@@ -759,6 +774,8 @@ function tellWorkToStop(): void {
   } catch (error) {
     logger.error('The call to Claude could not be stopped', error)
   }
+  // It only aborts and sets a flag: nothing in it can throw.
+  onlineRecs?.stop()
   try {
     // A download stopped half way leaves only files of the app's own temp folder.
     downloads?.stopAll()

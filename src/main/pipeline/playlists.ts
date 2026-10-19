@@ -14,6 +14,7 @@ import {
 import type { AppDatabase } from '../db/connection'
 import { listStyles } from '../db/styles'
 import { getTracksByIds, listLibraryTracks, type Track } from '../db/tracks'
+import { addDownloadedTracks } from './online-recs'
 import { buildProfile, profileSimilarity } from './similarity'
 import { isSetAsidePath } from '@shared/duplicates'
 import type { Result } from '@shared/errors'
@@ -39,6 +40,8 @@ export interface PlaylistDependencies {
 }
 
 export function listPlaylistSummaries(dependencies: PlaylistDependencies): PlaylistSummary[] {
+  // A download approved since the last listing joins its playlist now (T-038).
+  addDownloadedTracks(dependencies.db, dependencies.listMountedVolumes)
   return listPlaylists(dependencies.db)
 }
 
@@ -89,6 +92,7 @@ export function playlistView(
   { recommend = true }: { recommend?: boolean } = {}
 ): PlaylistView | null {
   const { db } = dependencies
+  addDownloadedTracks(db, dependencies.listMountedVolumes)
   const playlist = getPlaylist(db, playlistId)
   if (!playlist) return null
   const mounted = dependencies.listMountedVolumes()
