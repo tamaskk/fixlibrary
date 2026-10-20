@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import type { ToolCheck, ToolCheckFailure } from '@shared/tools'
 import { ClaudeStatus } from './ClaudeStatus'
 import { SettingsSection } from './SettingsSection'
+import { UpdateStatus } from './UpdateStatus'
 import { StatusLine } from '@/components/ui/status-line'
 
 const FAILURES: Record<ToolCheckFailure, string> = {
@@ -89,6 +90,7 @@ export function SystemSection(): React.JSX.Element {
       <div role="status">
         {logFolderFailed && <StatusLine tone="danger">A logmappa nem nyitható meg.</StatusLine>}
       </div>
+      <UpdateStatus />
       <ClaudeStatus />
     </SettingsSection>
   )

@@ -95,6 +95,18 @@ describe('prepareRuntime', () => {
     expect(readFileSync(runtimePaths(baseDir, 2).python, 'utf8')).toBe('the new interpreter')
   })
 
+  it('keeps a newer version the updater unpacked ahead', async () => {
+    // Arrange
+    packRuntime(2)
+    mkdirSync(join(baseDir, '9/bin'), { recursive: true })
+
+    // Act
+    await prepareRuntime({ bundleDir, baseDir }, () => undefined)
+
+    // Assert
+    expect(existsSync(join(baseDir, '9'))).toBe(true)
+  })
+
   it('unpacks again a version whose folder was not finished', async () => {
     // Arrange
     packRuntime(4)

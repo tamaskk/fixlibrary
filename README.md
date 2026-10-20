@@ -34,6 +34,18 @@ npm run dev
 - `FixLibrary-<version>-arm64.dmg`: the app with its Python runtime (Essentia, Demucs and the analysis code). Use it for the first install, and whenever the runtime version changed.
 - `FixLibrary-<version>-arm64-lite.dmg`: the app without the runtime archive. Only for an update that keeps the runtime version; on a first install it cannot start its analyses.
 
+## Release key
+
+Updates are trusted only through a release manifest signed with the owner's Ed25519 key. Make the key once, keep the private key outside the repository and back it up, and commit the public key it writes into `src/main/services/release-key.ts`:
+
+```bash
+npm run release:key -- keygen ~/.fixlibrary/release-signing-key.pem
+npm run release:key -- manifest release/ <app version> <runtime version>
+npm run release:key -- sign release/ ~/.fixlibrary/release-signing-key.pem
+```
+
+A build without the key never updates itself. Replacing the key (`--force`) leaves every installed app unable to trust new releases until it is updated by hand.
+
 ## Install
 
 Download the DMG only from the releases of this repository, and compare its checksum with the one the release names:
@@ -50,7 +62,7 @@ The app is signed ad hoc, without an Apple Developer ID, so macOS does not open 
 2. Open System Settings → Privacy & Security, scroll to Security, and click "Open Anyway" next to FixLibrary.
 3. Confirm with your password, then click "Open Anyway" again.
 
-This is needed once per downloaded copy. Do not turn Gatekeeper off (`spctl --master-disable`) or strip the quarantine attribute (`xattr -cr`) instead. Until the in-app updater exists (T-043), an update is a new download that asks the same way.
+This is needed once per downloaded copy. Do not turn Gatekeeper off (`spctl --master-disable`) or strip the quarantine attribute (`xattr -cr`) instead. Updates come through the app (Settings → Rendszer, or the line above the pages): it downloads the new version, checks its signature and checksum, and opens the DMG for you to drag the app across; such a download is not asked about again. yt-dlp updates itself in the background.
 
 ## License
 

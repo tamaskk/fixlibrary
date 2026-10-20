@@ -18,6 +18,7 @@ import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
 import type { FullRunStart, FullRunView } from './full-run'
 import type { PythonRuntimeState } from './python-runtime'
+import type { VersionsView } from './release'
 import type {
   AlternativesRequest,
   GapTarget,
@@ -146,6 +147,10 @@ export const IPC_CHANNELS = {
   playlistsOnlineLast: 'playlists:onlineLast',
   playlistsOnlineRequest: 'playlists:onlineRequest',
   playlistsOnlineDownload: 'playlists:onlineDownload',
+  updateView: 'update:view',
+  updateCheck: 'update:check',
+  updateOpen: 'update:open',
+  updateQuit: 'update:quit',
   pythonRuntimeState: 'python-runtime:state',
   pythonRuntimeRetry: 'python-runtime:retry',
   fullRunView: 'full-run:view',
@@ -168,7 +173,8 @@ export const IPC_EVENTS = {
   libraryScanProgress: 'library:scanProgress',
   pipelineProgress: 'pipeline:progress',
   downloadChanged: 'download:changed',
-  pythonRuntimeChanged: 'python-runtime:changed'
+  pythonRuntimeChanged: 'python-runtime:changed',
+  updateChanged: 'update:changed'
 } as const
 
 export interface FixLibraryApi {
@@ -342,6 +348,17 @@ export interface FixLibraryApi {
       url: string,
       confirmed: boolean
     ) => Promise<Result<OnlineDownloadOutcome>>
+  }
+  update: {
+    /** The versions of the app, its runtime and yt-dlp, and where the update is. */
+    view: () => Promise<VersionsView>
+    /** Looks for a newer app and a newer yt-dlp now. */
+    check: () => Promise<void>
+    /** Opens the downloaded DMG in Finder; false when there is none or it did not open. */
+    open: () => Promise<boolean>
+    /** Quits the app, so that the new one can be dragged over it. */
+    quit: () => Promise<void>
+    onChange: (listener: (view: VersionsView) => void) => () => void
   }
   pythonRuntime: {
     /** Whether the packaged runtime is there, or being unpacked (T-041); ready in development. */
