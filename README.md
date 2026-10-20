@@ -44,6 +44,12 @@ npm run release:key -- manifest release/ <app version> <runtime version>
 npm run release:key -- sign release/ ~/.fixlibrary/release-signing-key.pem
 ```
 
+To release, set `version` in `package.json`, merge, and push the tag `v<version>` (a tag `v<version>-<suffix>` makes a prerelease). The workflow tests and builds everything and creates a draft release; then sign and publish it from this machine:
+
+```bash
+npm run release:publish -- v<version>
+```
+
 A build without the key never updates itself. Replacing the key (`--force`) leaves every installed app unable to trust new releases until it is updated by hand.
 
 ## Install
