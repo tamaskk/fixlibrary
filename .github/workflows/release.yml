@@ -17,8 +17,9 @@ concurrency:
 
 jobs:
   build:
-    # Apple Silicon: the app, its runtime and its native modules are arm64 macOS only.
-    runs-on: macos-14
+    # Apple Silicon: the app, its runtime and its native modules are arm64 macOS only;
+    # macOS 15, as Essentia has wheels for nothing older.
+    runs-on: macos-15
     timeout-minutes: 120
     outputs:
       prerelease: ${{ steps.version.outputs.prerelease }}
