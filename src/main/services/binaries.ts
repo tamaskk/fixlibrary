@@ -12,6 +12,8 @@ export interface ToolLocations {
   bundledDir: string
   /** The sidecar's interpreter, or null where there is none yet (packaged app, task 41). */
   pythonPath: string | null
+  /** The yt-dlp zipapp the updater downloaded (T-043): run before the runtime's own. */
+  ytDlpZipapp?: string | null
 }
 
 /** What to execute for a tool. Callers append their own arguments to `args`. */
@@ -41,20 +43,31 @@ export function resolveToolLocations(app: {
   resourcesPath: string
   /** The interpreter of the packaged runtime (T-041), or null when the app holds none. */
   runtimePython?: string | null
+  /** Where the updater keeps a newer yt-dlp (T-043). */
+  ytDlpZipapp?: string | null
 }): ToolLocations {
+  const ytDlpZipapp = app.ytDlpZipapp ?? null
   return app.isPackaged
-    ? { bundledDir: join(app.resourcesPath, 'bin'), pythonPath: app.runtimePython ?? null }
+    ? {
+        bundledDir: join(app.resourcesPath, 'bin'),
+        pythonPath: app.runtimePython ?? null,
+        ytDlpZipapp
+      }
     : {
         bundledDir: join(app.appPath, 'resources/bin'),
-        pythonPath: join(app.appPath, 'python/.venv/bin/python')
+        pythonPath: join(app.appPath, 'python/.venv/bin/python'),
+        ytDlpZipapp
       }
 }
 
 /** The command a tool is run with, or null when this installation cannot run it. */
 export function resolveToolCommand(name: ToolName, locations: ToolLocations): ToolCommand | null {
   if (name === 'yt-dlp') {
-    return locations.pythonPath === null
-      ? null
+    if (locations.pythonPath === null) return null
+    // A newer yt-dlp from its own release runs from its zipapp, with the same isolation.
+    const zipapp = locations.ytDlpZipapp ?? null
+    return zipapp !== null && existsSync(zipapp)
+      ? { command: locations.pythonPath, args: ['-I', zipapp] }
       : { command: locations.pythonPath, args: [...YT_DLP_MODULE_ARGS] }
   }
   return { command: join(locations.bundledDir, name), args: [] }

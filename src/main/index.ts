@@ -13,6 +13,15 @@ import { registerPreviewIpc } from './ipc/preview'
 import { registerEnergyIpc } from './ipc/energy'
 import { registerFullRunIpc } from './ipc/full-run'
 import { registerGeneratorIpc } from './ipc/generator'
+import { registerUpdateIpc, sendUpdateView } from './ipc/update'
+import { RELEASE_PUBLIC_KEY } from './services/release-key'
+import {
+  APP_CHECK_INTERVAL_MS,
+  createUpdater,
+  downloadedYtDlpVersion,
+  type Updater
+} from './services/updater'
+import type { VersionsView } from '@shared/release'
 import { createRuntimeStateSender, registerPythonRuntimeIpc } from './ipc/python-runtime'
 import {
   prepareRuntime,
@@ -58,7 +67,9 @@ import {
 import { createStages, selectableStages, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
 import type { Stage } from './pipeline/stages/stage'
-import { createToolChecker } from './pipeline/system'
+import { createToolChecker, type ToolChecker } from './pipeline/system'
+import { getSetting, setSetting } from './db/settings'
+import { z } from 'zod'
 import { resolveToolCommand, resolveToolLocations, type ToolLocations } from './services/binaries'
 import { createClaudeCli } from './services/claude-cli'
 import { createYtDlp } from './services/downloader'
@@ -113,6 +124,11 @@ let onlineRecs: OnlineRecs | null = null
 // Kept so that quitting can stop the full run looking at its step.
 let fullRunTimer: NodeJS.Timeout | null = null
 let fullRunActive: () => boolean = () => false
+// The updater (T-043) and its timers, which quitting stops.
+let updater: Updater | null = null
+const updaterTimers: NodeJS.Timeout[] = []
+// The first look after a start waits for the startup work to settle.
+const UPDATER_FIRST_LOOK_MS = 60_000
 // The packaged runtime: unpacked on a first start before the sidecar can start (T-041).
 let runtimeState: PythonRuntimeState = { status: 'checking', fraction: null }
 // Resolves once the sidecar was started, or could not be: the startup work waits for it.
@@ -268,12 +284,72 @@ function registerSettingsAndSystemIpc(): void {
       )
     )
     .catch((error: unknown) => logger.error(`Claude could not be checked: ${describeError(error)}`))
+  const toolChecker = createToolChecker(toolLocations())
   registerSystemIpc({
     db,
     claude,
-    toolChecker: createToolChecker(toolLocations()),
+    toolChecker,
     logFolder: app.getPath('logs')
   })
+  startUpdater(toolChecker)
+}
+
+const UPDATER_KEY = 'updater'
+const updaterSettingSchema = z.object({ ytDlpCheckedAt: z.number().nullable() }).catch({
+  ytDlpCheckedAt: null
+})
+
+/** The updates of the app, its runtime and yt-dlp (T-043). */
+function startUpdater(toolChecker: ToolChecker): void {
+  const db = getDatabase()
+  const binDir = join(app.getPath('userData'), 'bin')
+  const runtimeVersion =
+    packagedRuntime() === null ? null : (readManifest(runtimeFolders().bundleDir)?.version ?? null)
+  const view = (): VersionsView => ({
+    app: app.getVersion(),
+    runtime: runtimeVersion,
+    update: updater?.state() ?? { status: 'idle', checkedAt: null },
+    ytDlp: { version: downloadedYtDlpVersion(binDir), updating: updater?.ytDlpUpdating() ?? false }
+  })
+  updater = createUpdater({
+    fetch,
+    appVersion: app.getVersion(),
+    runtime: () =>
+      runtimeVersion === null
+        ? null
+        : { version: runtimeVersion, baseDir: runtimeFolders().baseDir },
+    updatesDir: join(app.getPath('userData'), 'updates'),
+    binDir,
+    publicKey: RELEASE_PUBLIC_KEY,
+    userAgent: userAgent(),
+    ytDlpVersion: async () => {
+      const tool = (await toolChecker.check(true)).find((each) => each.name === 'yt-dlp')
+      return tool?.ok ? tool.version : null
+    },
+    ytDlpCheckedAt: () => getSetting(db, UPDATER_KEY, updaterSettingSchema)?.ytDlpCheckedAt ?? null,
+    setYtDlpCheckedAt: (at) => setSetting(db, UPDATER_KEY, { ytDlpCheckedAt: at }),
+    onChange: () => sendUpdateView(view())
+  })
+  registerUpdateIpc({
+    view,
+    check: () => {
+      void updater?.checkApp()
+      void updater?.checkYtDlp('manual')
+    },
+    readyDmg: () => updater?.readyDmg() ?? null,
+    quit: () => app.quit()
+  })
+  void updater.cleanUp()
+  // Only the packaged app looks by itself: a development build is no release.
+  if (!app.isPackaged) return
+  const look = (): void => {
+    void updater?.checkApp()
+    void updater?.checkYtDlp('scheduled')
+  }
+  updaterTimers.push(
+    setTimeout(look, UPDATER_FIRST_LOOK_MS),
+    setInterval(look, APP_CHECK_INTERVAL_MS)
+  )
 }
 
 /** Where the packaged app keeps its runtime archive, and where it unpacks it (T-041). */
@@ -297,7 +373,8 @@ function toolLocations(): ToolLocations {
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
-    runtimePython: packagedRuntime()?.python ?? null
+    runtimePython: packagedRuntime()?.python ?? null,
+    ytDlpZipapp: join(app.getPath('userData'), 'bin/yt-dlp')
   })
 }
 
@@ -618,6 +695,8 @@ function registerLibraryAndPipeline(): void {
       return ffmpeg !== undefined && existsSync(ffmpeg) ? ffmpeg : null
     },
     libraryTracks: () => listLibraryTracks(db, cachedVolumes()),
+    // yt-dlp could not read a page: a newer one may (T-043).
+    onExtractFailure: () => void updater?.checkYtDlp('failure'),
     onChange: (items) => {
       sendDownloads(items)
       // A finished download is looked for at once, not at the next listing.
@@ -916,6 +995,7 @@ function tellWorkToStop(): void {
   // It only aborts and sets a flag: nothing in it can throw.
   onlineRecs?.stop()
   if (fullRunTimer !== null) clearInterval(fullRunTimer)
+  for (const timer of updaterTimers) clearTimeout(timer)
   try {
     // A download stopped half way leaves only files of the app's own temp folder.
     downloads?.stopAll()

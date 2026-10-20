@@ -1,4 +1,5 @@
 import { AppSidebar } from '@/components/features/AppSidebar'
+import { UpdateBanner } from '@/components/features/update/UpdateBanner'
 import { RuntimeGate } from '@/components/features/runtime/RuntimeGate'
 import { BatchPreview } from '@/pages/BatchPreview'
 import { CueEditor } from '@/pages/CueEditor'
@@ -18,26 +19,29 @@ export function App(): React.JSX.Element {
     <RuntimeGate>
       <div className="flex h-full">
         <AppSidebar />
-        <div className="min-w-0 flex-1">
-          {page === 'settings' ? (
-            <Settings />
-          ) : page === 'preview' ? (
-            <BatchPreview />
-          ) : page === 'download' ? (
-            <Download />
-          ) : page === 'cues' ? (
-            <CueEditor />
-          ) : page === 'energy' ? (
-            <EnergyCalibration />
-          ) : page === 'playlists' ? (
-            <Playlists />
-          ) : page === 'generator' ? (
-            <Generator />
-          ) : page === 'rekordbox' ? (
-            <RekordboxWizard />
-          ) : (
-            <Library />
-          )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <UpdateBanner />
+          <div className="min-h-0 flex-1">
+            {page === 'settings' ? (
+              <Settings />
+            ) : page === 'preview' ? (
+              <BatchPreview />
+            ) : page === 'download' ? (
+              <Download />
+            ) : page === 'cues' ? (
+              <CueEditor />
+            ) : page === 'energy' ? (
+              <EnergyCalibration />
+            ) : page === 'playlists' ? (
+              <Playlists />
+            ) : page === 'generator' ? (
+              <Generator />
+            ) : page === 'rekordbox' ? (
+              <RekordboxWizard />
+            ) : (
+              <Library />
+            )}
+          </div>
         </div>
       </div>
     </RuntimeGate>

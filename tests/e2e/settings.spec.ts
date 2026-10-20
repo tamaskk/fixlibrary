@@ -109,7 +109,12 @@ test('settings are saved, survive a restart, and the API key is never stored as 
     await expect(styles.getByText('Nem mentett változások')).toBeHidden()
 
     const system = page.getByRole('region', { name: 'Rendszer' })
-    await expect(system.getByRole('listitem')).toHaveCount(4)
+    await expect(
+      system.getByRole('list', { name: 'Külső eszközök' }).getByRole('listitem')
+    ).toHaveCount(4)
+    // The versions of the app, its runtime and yt-dlp, and the updates (T-043).
+    await expect(system.getByRole('list', { name: 'Verziók' }).getByRole('listitem')).toHaveCount(3)
+    await expect(system.getByRole('button', { name: 'Frissítések keresése' })).toBeVisible()
 
     await page.getByRole('heading', { name: 'Beállítások', level: 1 }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: 'test-results/settings-1024x640.png' })

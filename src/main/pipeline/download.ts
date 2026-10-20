@@ -147,6 +147,8 @@ export interface DownloadDependencies {
   libraryTracks: () => readonly Track[]
   /** Called whenever a download changes; may be called very often. */
   onChange: (items: DownloadItem[]) => void
+  /** yt-dlp could not read a page: a newer yt-dlp usually can (T-043). */
+  onExtractFailure?: () => void
 }
 
 export interface Downloads {
@@ -186,6 +188,9 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
     try {
       return await question(controller.signal)
     } catch (error) {
+      if (error instanceof YtDlpError && error.failure === 'extract') {
+        dependencies.onExtractFailure?.()
+      }
       if (error instanceof YtDlpError) return { ok: false, code: FAILURE_CODES[error.failure] }
       throw error
     } finally {
@@ -249,6 +254,7 @@ export function createDownloads(dependencies: DownloadDependencies): Downloads {
             entry.item.state = 'failed'
             entry.item.percent = null
             entry.item.failure = error instanceof YtDlpError ? error.failure : 'failed'
+            if (entry.item.failure === 'extract') dependencies.onExtractFailure?.()
             if (!(error instanceof YtDlpError)) {
               logger.error(`Download ${entry.item.id} failed`, error)
             } else {

@@ -55,7 +55,8 @@ describe('resolveToolLocations', () => {
     // Assert
     expect(resolved).toEqual({
       bundledDir: '/repo/resources/bin',
-      pythonPath: '/repo/python/.venv/bin/python'
+      pythonPath: '/repo/python/.venv/bin/python',
+      ytDlpZipapp: null
     })
   })
 
@@ -64,7 +65,32 @@ describe('resolveToolLocations', () => {
     const resolved = resolveToolLocations({ ...paths, isPackaged: true })
 
     // Assert
-    expect(resolved).toEqual({ bundledDir: '/App/Resources/bin', pythonPath: null })
+    expect(resolved).toEqual({
+      bundledDir: '/App/Resources/bin',
+      pythonPath: null,
+      ytDlpZipapp: null
+    })
+  })
+
+  it('runs a yt-dlp zipapp the updater downloaded before the runtime module', () => {
+    // Arrange
+    const zipapp = join(folder, 'yt-dlp')
+    writeFileSync(zipapp, 'zipapp')
+    const without = resolveToolLocations({ ...paths, isPackaged: true, runtimePython: '/py' })
+    const withZipapp = resolveToolLocations({
+      ...paths,
+      isPackaged: true,
+      runtimePython: '/py',
+      ytDlpZipapp: zipapp
+    })
+
+    // Act
+    const module = resolveToolCommand('yt-dlp', without)
+    const downloaded = resolveToolCommand('yt-dlp', withZipapp)
+
+    // Assert
+    expect(module).toEqual({ command: '/py', args: ['-I', '-m', 'yt_dlp'] })
+    expect(downloaded).toEqual({ command: '/py', args: ['-I', zipapp] })
   })
 
   it('runs yt-dlp with the interpreter of the packaged runtime', () => {

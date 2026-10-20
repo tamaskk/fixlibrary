@@ -125,11 +125,56 @@ function unpack(
 async function removeOthers(baseDir: string, keep: number): Promise<void> {
   for (const name of await readdir(baseDir).catch(() => [] as string[])) {
     if (name === String(keep)) continue
+    // A newer version stays: the updater unpacked it for the app it downloaded (T-043).
+    if (/^\d+$/.test(name) && Number(name) > keep) continue
     if (!/^\d+$/.test(name) && !name.startsWith(UNPACK_PREFIX)) continue
     await rm(join(baseDir, name), { recursive: true, force: true }).catch((error: unknown) =>
       logger.warn(`An old Python runtime could not be removed: ${String(error)}`)
     )
   }
+}
+
+/**
+ * Unpacks a runtime archive into `baseDir/<version>`: into a folder of its own first,
+ * hashed in the same read, marked ready with its SHA-256 and renamed into place only
+ * when the hash matches. Throws when it does not, or the archive cannot be unpacked;
+ * nothing of it is left then.
+ */
+export async function installRuntime(
+  archive: string,
+  expected: { version: number; sha256: string; size: number },
+  baseDir: string,
+  onFraction: (fraction: number) => void,
+  signal?: AbortSignal
+): Promise<RuntimePaths> {
+  const paths = runtimePaths(baseDir, expected.version)
+  const work = join(
+    baseDir,
+    `${UNPACK_PREFIX}${expected.version}-${randomBytes(4).toString('hex')}`
+  )
+  try {
+    if ((await stat(archive)).size !== expected.size)
+      throw new Error('the archive has another size')
+    await mkdir(work, { recursive: true })
+    const hash = await unpack(archive, work, (bytes) => onFraction(bytes / expected.size), signal)
+    if (hash !== expected.sha256) throw new Error('the archive does not match its SHA-256')
+    const unpacked = join(work, 'python-runtime')
+    if (!existsSync(join(unpacked, 'bin/python3')))
+      throw new Error('the archive holds no interpreter')
+    await writeFile(join(unpacked, READY_NAME), `${expected.sha256}\n`)
+    // A folder of this version that was not finished goes first.
+    await rm(paths.dir, { recursive: true, force: true })
+    await rename(unpacked, paths.dir)
+    logger.info(`Python runtime ${expected.version} unpacked`)
+    return paths
+  } finally {
+    await rm(work, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+/** True when the runtime of this version is unpacked from an archive of this SHA-256. */
+export function isRuntimeReady(baseDir: string, version: number, sha256: string): boolean {
+  return isReady(runtimePaths(baseDir, version), sha256)
 }
 
 /**
@@ -156,38 +201,20 @@ export async function prepareRuntime(
     return { ok: true, value: paths }
   }
 
-  const archive = join(folders.bundleDir, manifest.archive)
-  const work = join(
-    folders.baseDir,
-    `${UNPACK_PREFIX}${manifest.version}-${randomBytes(4).toString('hex')}`
-  )
   try {
-    if ((await stat(archive)).size !== manifest.size)
-      throw new Error('the archive has another size')
     onState({ status: 'unpacking', fraction: 0 })
-    await mkdir(work, { recursive: true })
-    const hash = await unpack(
-      archive,
-      work,
-      (bytes) => onState({ status: 'unpacking', fraction: bytes / manifest.size }),
+    await installRuntime(
+      join(folders.bundleDir, manifest.archive),
+      manifest,
+      folders.baseDir,
+      (fraction) => onState({ status: 'unpacking', fraction }),
       signal
     )
-    if (hash !== manifest.sha256) throw new Error('the archive does not match its SHA-256')
-    const unpacked = join(work, 'python-runtime')
-    if (!existsSync(join(unpacked, 'bin/python3')))
-      throw new Error('the archive holds no interpreter')
-    await writeFile(join(unpacked, READY_NAME), `${manifest.sha256}\n`)
-    // A folder of this version that was not finished goes first.
-    await rm(paths.dir, { recursive: true, force: true })
-    await rename(unpacked, paths.dir)
-    logger.info(`Python runtime ${manifest.version} unpacked`)
   } catch (error) {
     logger.error(`The Python runtime could not be unpacked: ${String(error)}`)
-    await rm(work, { recursive: true, force: true }).catch(() => undefined)
     onState({ status: 'failed', fraction: null })
     return { ok: false, code: 'TOOL_MISSING' }
   }
-  await rm(work, { recursive: true, force: true }).catch(() => undefined)
   await removeOthers(folders.baseDir, manifest.version)
   onState({ status: 'ready', fraction: 1 })
   return { ok: true, value: paths }
