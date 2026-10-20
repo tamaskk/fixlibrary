@@ -8,6 +8,12 @@ interface FullRunState {
   loadFailed: boolean
   starting: boolean
   startFailure: ErrorCode | null
+  stopFailed: boolean
+  /** The run put away for this session, by when it started; a new one shows again. */
+  hiddenStartedAt: number | null
+  hide: (startedAt: number) => void
+  /** Before the start dialog opens: what an earlier start said is no news. */
+  clearStartFailure: () => void
   load: () => Promise<void>
   /** On these tracks, or on the whole library with null. */
   start: (trackIds: number[] | null) => Promise<boolean>
@@ -20,6 +26,10 @@ export const useFullRunStore = create<FullRunState>((set, get) => ({
   loadFailed: false,
   starting: false,
   startFailure: null,
+  stopFailed: false,
+  hiddenStartedAt: null,
+  hide: (startedAt) => set({ hiddenStartedAt: startedAt }),
+  clearStartFailure: () => set({ startFailure: null }),
   load: async () => {
     try {
       set({ view: await window.api.fullRun.view(), loadFailed: false })
@@ -42,7 +52,12 @@ export const useFullRunStore = create<FullRunState>((set, get) => ({
     }
   },
   stop: async () => {
-    await window.api.fullRun.stop()
+    try {
+      await window.api.fullRun.stop()
+      set({ stopFailed: false })
+    } catch {
+      set({ stopFailed: true })
+    }
     await get().load()
   }
 }))

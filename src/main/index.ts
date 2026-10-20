@@ -15,6 +15,7 @@ import { registerFullRunIpc } from './ipc/full-run'
 import { registerGeneratorIpc } from './ipc/generator'
 import { registerPlaylistsIpc } from './ipc/playlists'
 import { createFullRun, FULL_RUN_TICK_MS } from './pipeline/full-run'
+import { readProposal } from '@shared/preview'
 import { createOnlineRecs, noteInboxTrack, type OnlineRecs } from './pipeline/online-recs'
 import { registerCueEditorIpc } from './ipc/cue-editor'
 import { registerDownloadIpc, sendDownloads } from './ipc/download'
@@ -68,7 +69,7 @@ import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
 import { AUDIO_SCHEME, createAudioHandler, originOfRendererUrl } from './services/audio-protocol'
 import { createPeaksStore } from './services/peaks-store'
-import { countBatchItems, findPreviewBatch, getBatch } from './db/batches'
+import { countBatchItems, findPreviewBatch, getBatch, listAllBatchItems } from './db/batches'
 import { currentEnergyModel } from './pipeline/energy'
 import { applyWizardAction, readWizardState } from './pipeline/rekordbox-wizard'
 import { findTrackIdByPath, getTrackById, listLibraryTracks } from './db/tracks'
@@ -631,14 +632,22 @@ function registerLibraryAndPipeline(): void {
     libraryTrackIds: () => listLibraryTracks(db, cachedVolumes()).map((track) => track.id),
     startBatch: (request) => runs.start(request),
     batchStatus: (batchId) => getBatch(db, batchId)?.status,
-    discardBatch: (batchId) => void preview.discard(batchId),
+    discardBatch: (batchId) => preview.discard(batchId).ok,
+    hasProposals: (batchId) =>
+      listAllBatchItems(db, batchId).some(
+        (item) => Object.keys(readProposal(item.after).fields ?? {}).length > 0
+      ),
+    cancelBatch: (batchId) => {
+      if (runs.progress()?.batchId === batchId) runs.cancel()
+    },
+    previewBatchId: () => findPreviewBatch(db)?.id ?? null,
+    runBusy: () => runs.progress() !== null || runs.changingFiles(),
     batchCounts: (batchId) => countBatchItems(db, batchId),
     computeStages: () => inboxStages(functions),
     hasEnergyModel: () => currentEnergyModel(db) !== null,
     wizardState: () => readWizardState(db),
-    restartWizard: async () => {
-      await applyWizardAction({ db, environment }, { type: 'restart' })
-    },
+    restartWizard: async () =>
+      (await applyWizardAction({ db, environment }, { type: 'restart' })).ok,
     ready: () => startupDone
   })
   fullRunActive = () => fullRun.active()

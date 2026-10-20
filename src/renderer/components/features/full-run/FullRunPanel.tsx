@@ -55,10 +55,13 @@ export function FullRunPanel(): React.JSX.Element | null {
   const view = useFullRunStore((state) => state.view)
   const load = useFullRunStore((state) => state.load)
   const stop = useFullRunStore((state) => state.stop)
+  const loadFailed = useFullRunStore((state) => state.loadFailed)
+  const stopFailed = useFullRunStore((state) => state.stopFailed)
+  const hidden = useFullRunStore((state) => state.hiddenStartedAt)
+  const hide = useFullRunStore((state) => state.hide)
   const setPage = useAppStore((state) => state.setPage)
   const remainingMs = usePipelineStore((state) => state.progress?.remainingMs ?? null)
   const [now, setNow] = React.useState(() => Date.now())
-  const [hidden, setHidden] = React.useState<number | null>(null)
   const titleId = React.useId()
   const active = view !== null && view.step !== 'done' && view.stop === null
 
@@ -76,6 +79,16 @@ export function FullRunPanel(): React.JSX.Element | null {
     return () => clearInterval(timer)
   }, [active, load])
 
+  if (view === null && loadFailed) {
+    return (
+      <Card className="p-4">
+        <div role="status" className="flex flex-col items-start gap-2">
+          <StatusLine tone="danger">A teljes futtatás állapota nem tölthető be.</StatusLine>
+          <Button onClick={() => void load()}>Próbáld újra</Button>
+        </div>
+      </Card>
+    )
+  }
   // A run that ended can be put away for the session; a new one shows again.
   if (view === null || hidden === view.startedAt) return null
   const steps = stepsShown(view)
@@ -84,7 +97,7 @@ export function FullRunPanel(): React.JSX.Element | null {
   const computing = active && (view.step === 'features' || view.step === 'compute')
 
   return (
-    <Card>
+    <Card className="p-4">
       <section aria-labelledby={titleId} className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-4">
           <h2 id={titleId} className="text-h2">
@@ -95,7 +108,7 @@ export function FullRunPanel(): React.JSX.Element | null {
               Leállítás
             </Button>
           ) : (
-            <Button variant="ghost" onClick={() => setHidden(view.startedAt)}>
+            <Button variant="ghost" onClick={() => hide(view.startedAt)}>
               Elrejtés
             </Button>
           )}
@@ -114,7 +127,10 @@ export function FullRunPanel(): React.JSX.Element | null {
                 )}
               >
                 {done ? (
-                  <Check aria-label="kész" className="size-4 text-success" />
+                  <>
+                    <Check aria-hidden="true" className="size-4 text-success" />
+                    <span className="sr-only">kész:</span>
+                  </>
                 ) : (
                   <span className="w-4 text-center">
                     <Data>{index + 1}</Data>
@@ -139,13 +155,23 @@ export function FullRunPanel(): React.JSX.Element | null {
             </span>
           )}
           {view.stemsRunning && <span>A stemek a háttérben készülnek.</span>}
+          {active && <span>Amíg tart, az Inbox nem indít új batchet.</span>}
         </p>
         <div role="status" className="flex flex-col items-start gap-2">
-          {waits && (
-            <>
-              <StatusLine tone="neutral">{waits.text}</StatusLine>
-              <Button onClick={() => setPage(waits.page)}>{waits.action}</Button>
-            </>
+          {waits && <StatusLine tone="neutral">{waits.text}</StatusLine>}
+          {view.waitingFor === 'preview' && (
+            <StatusLine tone="warning">
+              Egy másik batch vár jóváhagyásra. Hagyd jóvá vagy vesd el, utána a teljes futás
+              folytatódik.
+            </StatusLine>
+          )}
+          {view.waitingFor === 'run' && (
+            <StatusLine tone="neutral">
+              Egy másik futás dolgozik. Ha végzett, ez folytatódik.
+            </StatusLine>
+          )}
+          {stopFailed && (
+            <StatusLine tone="danger">A leállítás nem sikerült. Próbáld újra.</StatusLine>
           )}
           {view.stop !== null && <StatusLine tone="warning">{STOP_TEXT[view.stop]}</StatusLine>}
           {view.step === 'done' && view.summary !== null && (
@@ -156,6 +182,11 @@ export function FullRunPanel(): React.JSX.Element | null {
             </StatusLine>
           )}
         </div>
+        {/* Outside the live region: the way to the page is not news. */}
+        {waits && <Button onClick={() => setPage(waits.page)}>{waits.action}</Button>}
+        {active && view.waitingFor === 'preview' && !waits && (
+          <Button onClick={() => setPage('preview')}>Előnézet megnyitása</Button>
+        )}
       </section>
     </Card>
   )

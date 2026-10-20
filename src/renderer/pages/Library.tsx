@@ -15,6 +15,7 @@ import { StatusLine } from '@/components/ui/status-line'
 import { applyView, DEFAULT_VIEW } from '@/lib/library-view'
 import { selectedInOrder } from '@/lib/selection'
 import { scanPhaseLabel } from '@/lib/scan-phase'
+import { useFullRunStore } from '@/stores/full-run-store'
 import { useAppStore } from '@/stores/app-store'
 import { useLibraryStore } from '@/stores/library-store'
 import { usePipelineStore } from '@/stores/pipeline-store'
@@ -55,6 +56,9 @@ export function Library(): React.JSX.Element {
   const cancelRun = usePipelineStore((state) => state.cancel)
   const waitingForApproval = usePreviewStore((state) => state.batch !== null)
   const loadPreview = usePreviewStore((state) => state.load)
+  const fullRunActive = useFullRunStore(
+    (state) => state.view !== null && state.view.step !== 'done' && state.view.stop === null
+  )
 
   // Asked again on every visit: the library folder may have been chosen in Settings
   // since, and the app may be scanning by itself.
@@ -217,7 +221,8 @@ export function Library(): React.JSX.Element {
                 functions={functions}
                 choice={choice}
                 onChoose={choose}
-                runActive={runProgress !== null}
+                // A run of the user's would give up the batch a full run waits on.
+                runActive={runProgress !== null || fullRunActive}
                 requesting={requestingRun}
                 // The note that a run started is only news until the run itself reports.
                 outcome={

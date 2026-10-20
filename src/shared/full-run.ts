@@ -36,6 +36,11 @@ export interface FullRunSummary {
 
 export interface FullRunView {
   step: FullRunStep
+  /**
+   * What the step waits for at the moment: a batch that waits for the user's approval
+   * (which a new batch would give up), or another batch that is computed or applied.
+   */
+  waitingFor: 'preview' | 'run' | null
   /** Set when the run ended before `done`. */
   stop: FullRunStop | null
   /** True when the run measures and calibrates the energy first. */

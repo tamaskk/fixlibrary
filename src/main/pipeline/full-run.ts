@@ -51,16 +51,24 @@ export interface FullRunDependencies {
   /** Starts a batch; RUN_ACTIVE while another one runs or waits, which is waited out. */
   startBatch: (request: { trackIds: number[]; stages: string[] }) => Result<{ batchId: number }>
   batchStatus: (batchId: number) => BatchStatus | undefined
-  /** Gives up a batch that waits for approval; for the batches that propose nothing. */
-  discardBatch: (batchId: number) => void
+  /** Gives up a batch that waits for approval; false when the preview refused it just now. */
+  discardBatch: (batchId: number) => boolean
+  /** True when a batch proposes any change: such a batch is never given up for the user. */
+  hasProposals: (batchId: number) => boolean
+  /** Ends the batch that computes, if it is this one. */
+  cancelBatch: (batchId: number) => void
+  /** The batch that waits for approval, if any. */
+  previewBatchId: () => number | null
+  /** True while a batch is computed or applied. */
+  runBusy: () => boolean
   /** How the main batch came out, for the summary. */
   batchCounts: (batchId: number) => { total: number; excluded: number; failed: number }
   /** Every function but the stems, the cues and the moods, as an Inbox batch runs. */
   computeStages: () => string[]
   hasEnergyModel: () => boolean
   wizardState: () => WizardState
-  /** Phase A of the wizard from its start, the setup kept. */
-  restartWizard: () => Promise<void>
+  /** Phase A of the wizard from its start, the setup kept; false when it was refused. */
+  restartWizard: () => Promise<boolean>
   /** False until the app has recovered what it was doing at startup. */
   ready: () => boolean
   now?: () => number
@@ -86,8 +94,9 @@ export function phaseADone(state: WizardState): boolean {
   )
 }
 
-function viewOf(state: FullRunState): FullRunView {
+function viewOf(state: FullRunState, waitingFor: FullRunView['waitingFor']): FullRunView {
   return {
+    waitingFor,
     step: state.step,
     stop: state.stop,
     calibrates: state.calibrates,
@@ -102,12 +111,18 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
   const { db } = dependencies
   const now = dependencies.now ?? Date.now
   let ticking = false
+  let unreadableLogged = false
+  // What the step waited for at the last look; not kept, it is looked at again.
+  let waitingFor: FullRunView['waitingFor'] = null
 
   function read(): FullRunState | null {
     try {
       return getSetting(db, STATE_KEY, stateSchema) ?? null
     } catch {
-      logger.warn('The state of the full run could not be read; no full run goes on')
+      if (!unreadableLogged) {
+        logger.warn('The state of the full run could not be read; no full run goes on')
+        unreadableLogged = true
+      }
       return null
     }
   }
@@ -138,7 +153,19 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
    * the next look), or `refused` when it cannot start at all, such as with no track left.
    */
   function startBatch(state: FullRunState, stages: string[]): number | 'wait' | 'refused' {
+    // A start gives up the batch that waits for approval: never one of the user's.
+    const waiting = dependencies.previewBatchId()
+    if (waiting !== null && waiting !== state.batchId && waiting !== state.stemsBatchId) {
+      waitingFor = 'preview'
+      return 'wait'
+    }
+    // Asked before the tracks are read, which for a whole library is not nothing.
+    if (dependencies.runBusy()) {
+      waitingFor = 'run'
+      return 'wait'
+    }
     const started = dependencies.startBatch({ trackIds: tracksOf(state), stages })
+    if (!started.ok && started.code === 'RUN_ACTIVE') waitingFor = 'run'
     if (started.ok) return started.value.batchId
     if (started.code === 'RUN_ACTIVE') return 'wait'
     logger.warn(`Full run: a batch of ${stages.join(', ')} did not start: ${started.code}`)
@@ -154,6 +181,15 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
     const started = startBatch(state, stages)
     if (started === 'wait') return state
     return started === 'refused' ? ended(state, 'failed') : place(started)
+  }
+
+  /**
+   * Gives up a batch that waits for approval and proposes nothing. False while it
+   * cannot be given up now, or proposes something: then it is the user's to approve.
+   */
+  function giveUp(batchId: number): boolean {
+    if (dependencies.hasProposals(batchId)) return false
+    return dependencies.discardBatch(batchId)
   }
 
   /** What a batch that ended against the run's will means for it. */
@@ -176,8 +212,8 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
         : { ...state, stemsBatchId: started }
     }
     const status = dependencies.batchStatus(state.stemsBatchId)
-    if (status === 'computing') return state
-    if (status === 'preview') dependencies.discardBatch(state.stemsBatchId)
+    if (status === 'computing' || status === 'applying') return state
+    if (status === 'preview' && !giveUp(state.stemsBatchId)) return state
     // Given up, cancelled or failed: the cues take what stems there are.
     return { ...state, stemsDone: true }
   }
@@ -186,7 +222,8 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
     if (state.mainBatchId === null) return null
     const counts = dependencies.batchCounts(state.mainBatchId)
     return {
-      processed: counts.total - counts.excluded - counts.failed,
+      // A row both left out and failed is counted in both: never below nothing.
+      processed: Math.max(0, counts.total - counts.excluded - counts.failed),
       skipped: Math.max(0, state.requested - counts.total) + counts.excluded,
       failed: counts.failed
     }
@@ -195,14 +232,23 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
   /** One step forward, if its condition holds; the state as it is otherwise. */
   async function advance(state: FullRunState): Promise<FullRunState> {
     const status = state.batchId === null ? undefined : dependencies.batchStatus(state.batchId)
+    // Undone after it was written: what follows would work on files put back.
+    const afterApply = ['rekordboxA', 'cues', 'rekordboxB'].includes(state.step)
+    if (
+      afterApply &&
+      state.mainBatchId !== null &&
+      dependencies.batchStatus(state.mainBatchId) === 'undone'
+    ) {
+      return ended(state, 'cancelled')
+    }
     switch (state.step) {
       case 'features': {
         // Only measures: what the calibration rates. Given up once computed.
         if (state.batchId === null) {
           return begin(state, [ENERGY_FEATURES_STAGE], (batchId) => ({ ...state, batchId }))
         }
-        if (status === 'computing') return state
-        if (status === 'preview') dependencies.discardBatch(state.batchId)
+        if (status === 'computing' || status === 'applying') return state
+        if (status === 'preview' && !giveUp(state.batchId)) return state
         // Approved by hand, it wrote nothing: the measures are kept all the same.
         if (status === 'preview' || status === 'applied') return enter(state, 'calibration')
         return ended(state, stopFor(status))
@@ -233,8 +279,11 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
             : { ...enter(state, 'apply'), batchId: state.batchId }
         }
         if (status === 'applied') {
-          // A wizard done in an earlier run goes through phase A again for these files.
-          if (phaseADone(dependencies.wizardState())) await dependencies.restartWizard()
+          // Phase A again from its start for these files, also when an earlier run
+          // left it half done: an XML written before this apply must not count.
+          if (dependencies.wizardState().setupDone && !(await dependencies.restartWizard())) {
+            return ended(state, 'failed')
+          }
           return advanceStems(enter(state, 'rekordboxA'))
         }
         return ended(state, stopFor(status))
@@ -289,18 +338,26 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
         summary: null
       }
       write(state)
+      waitingFor = null
       logger.info(`Full run started for ${requested} tracks at ${state.step}`)
-      return { ok: true, value: viewOf(state) }
+      return { ok: true, value: viewOf(state, null) }
     },
 
     stop() {
       const state = read()
-      if (isActive(state)) write(ended(state, 'stopped'))
+      if (!isActive(state)) return
+      // The stems are the run's own and propose nothing: they do not go on without it.
+      if (state.stemsBatchId !== null && !state.stemsDone) {
+        const status = dependencies.batchStatus(state.stemsBatchId)
+        if (status === 'computing') dependencies.cancelBatch(state.stemsBatchId)
+        if (status === 'preview') giveUp(state.stemsBatchId)
+      }
+      write(ended(state, 'stopped'))
     },
 
     view() {
       const state = read()
-      return state === null ? null : viewOf(state)
+      return state === null ? null : viewOf(state, isActive(state) ? waitingFor : null)
     },
 
     active: () => isActive(read()),
@@ -310,10 +367,14 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
       ticking = true
       try {
         let state = read()
+        waitingFor = null
         // As many steps as are done already: after a restart, several may be.
         for (let guard = 0; isActive(state) && guard < FULL_RUN_STEPS.length; guard += 1) {
           const next = await advance(state)
           if (JSON.stringify(next) === JSON.stringify(state)) break
+          // A stop or a new start that came while this step waited wins.
+          const stored = read()
+          if (stored?.startedAt !== state.startedAt || stored.stop !== null) break
           write(next)
           state = next
         }

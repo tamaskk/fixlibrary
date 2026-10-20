@@ -22,6 +22,7 @@ export function FullRunStart({
   const start = useFullRunStore((state) => state.start)
   const starting = useFullRunStore((state) => state.starting)
   const failure = useFullRunStore((state) => state.startFailure)
+  const clearStartFailure = useFullRunStore((state) => state.clearStartFailure)
   const [open, setOpen] = React.useState(false)
   const active = view !== null && view.step !== 'done' && view.stop === null
   const whole = selectedIds.length === 0
@@ -29,13 +30,20 @@ export function FullRunStart({
 
   return (
     <>
-      <Button disabled={active} onClick={() => setOpen(true)}>
+      <Button
+        disabled={active}
+        title={active ? 'Már fut egy teljes futtatás.' : undefined}
+        onClick={() => {
+          clearStartFailure()
+          setOpen(true)
+        }}
+      >
         Teljes futtatás
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           title="Teljes futtatás"
-          description={`${whole ? 'A teljes könyvtáron' : 'A kijelölt trackeken'} (${formatCount(count)} track) minden funkció lefut sorban: elemzés, előnézet és jóváhagyás, fájlműveletek, Rekordbox A fázis, hot cue-k, Rekordbox B fázis. A kalibrációnál, a jóváhagyásoknál és a Rekordboxnál a te lépésedre vár. Az app bezárható, újraindítás után ugyanonnan folytatódik.`}
+          description={`${whole ? 'A teljes könyvtáron' : 'A kijelölt trackeken'} (${formatCount(count)} track) minden funkció lefut sorban. A kalibrációnál, a jóváhagyásoknál és a Rekordboxnál a te lépésedre vár. Az app bezárható: újraindítás után ugyanonnan folytatódik.`}
         >
           <div role="status">
             {failure && <StatusLine tone="danger">{errorMessage(failure)}</StatusLine>}

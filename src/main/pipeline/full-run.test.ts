@@ -15,6 +15,13 @@ interface World {
   model: boolean
   wizard: WizardState
   busy: boolean
+  /** A batch of the user's that waits for approval. */
+  userPreview: number | null
+  /** How many discards the preview refuses before it takes one. */
+  refuseDiscards: number
+  cancelled: number[]
+  restartRefused: boolean
+  counts: { total: number; excluded: number; failed: number }
 }
 
 function setUp(world: World): FullRunDependencies {
@@ -30,15 +37,32 @@ function setUp(world: World): FullRunDependencies {
     },
     batchStatus: (batchId) => world.status.get(batchId),
     discardBatch: (batchId) => {
+      if (world.refuseDiscards > 0) {
+        world.refuseDiscards -= 1
+        return false
+      }
       world.discarded.push(batchId)
       world.status.set(batchId, 'cancelled')
+      return true
     },
-    batchCounts: () => ({ total: 3, excluded: 1, failed: 0 }),
+    hasProposals: () => false,
+    cancelBatch: (batchId) => {
+      world.cancelled.push(batchId)
+      world.status.set(batchId, 'cancelled')
+    },
+    previewBatchId: () =>
+      world.userPreview ??
+      [...world.status].find(([, status]) => status === 'preview')?.[0] ??
+      null,
+    runBusy: () => false,
+    batchCounts: () => world.counts,
     computeStages: () => ['bpmKey', 'naming', 'energy'],
     hasEnergyModel: () => world.model,
     wizardState: () => world.wizard,
     restartWizard: async () => {
+      if (world.restartRefused) return false
       world.wizard = { ...world.wizard, step: 'a.writeXml' }
+      return true
     },
     ready: () => true,
     now: () => 1000
@@ -53,6 +77,11 @@ function newWorld(overrides: Partial<World> = {}): World {
     model: true,
     wizard: { ...INITIAL_WIZARD_STATE, setupDone: true, step: 'a.writeXml' },
     busy: false,
+    userPreview: null,
+    refuseDiscards: 0,
+    cancelled: [],
+    restartRefused: false,
+    counts: { total: 3, excluded: 1, failed: 0 },
     ...overrides
   }
 }
@@ -291,5 +320,137 @@ describe('the full run', () => {
     expect(again).toEqual({ ok: false, code: 'RUN_ACTIVE' })
     expect(fullRun.view()?.stop).toBe('stopped')
     expect(fullRun.start({ trackIds: [1] }).ok).toBe(true)
+  })
+
+  it('never gives up a preview of the user to start its own batch', async () => {
+    // Arrange
+    const world = newWorld({ userPreview: 99 })
+    const fullRun = createFullRun(setUp(world))
+    fullRun.start({ trackIds: null })
+
+    // Act
+    await fullRun.tick()
+    const waiting = { started: world.started.length, view: fullRun.view()?.waitingFor }
+    world.userPreview = null
+    await fullRun.tick()
+
+    // Assert
+    expect(waiting).toEqual({ started: 0, view: 'preview' })
+    expect(world.started).toHaveLength(1)
+  })
+
+  it('stays at its step while the preview refuses to give up its stems', async () => {
+    // Arrange
+    const world = newWorld()
+    const fullRun = createFullRun(setUp(world))
+    fullRun.start({ trackIds: null })
+    await fullRun.tick()
+    world.status.set(1, 'applied')
+    await fullRun.tick()
+    world.wizard = { ...world.wizard, step: 'b.writeXml' }
+    await fullRun.tick()
+    world.refuseDiscards = 1
+
+    // Act
+    world.status.set(2, 'preview')
+    await fullRun.tick()
+    const afterRefusal = world.started.length
+    await fullRun.tick()
+
+    // Assert
+    expect(afterRefusal).toBe(2)
+    expect(world.discarded).toEqual([2])
+    expect(world.started.at(-1)?.stages).toEqual(['cues'])
+  })
+
+  it('ends when its batch was undone after the apply, or the wizard cannot start again', async () => {
+    // Arrange
+    const undone = newWorld()
+    const first = createFullRun(setUp(undone))
+    first.start({ trackIds: null })
+    await first.tick()
+    undone.status.set(1, 'applied')
+    await first.tick()
+    const refused = newWorld({ restartRefused: true })
+
+    // Act
+    undone.status.set(1, 'undone')
+    await first.tick()
+    // Both keep their state in the same setting: the first is read before the second starts.
+    const firstView = first.view()
+    const second = createFullRun(setUp(refused))
+    second.start({ trackIds: null })
+    await second.tick()
+    refused.status.set(1, 'applied')
+    await second.tick()
+
+    // Assert
+    expect(firstView).toMatchObject({ step: 'rekordboxA', stop: 'cancelled' })
+    expect(second.view()).toMatchObject({ step: 'preview', stop: 'failed' })
+  })
+
+  it('takes its stems along when it is stopped', async () => {
+    // Arrange
+    const world = newWorld()
+    const fullRun = createFullRun(setUp(world))
+    fullRun.start({ trackIds: null })
+    await fullRun.tick()
+    world.status.set(1, 'applied')
+    await fullRun.tick()
+
+    // Act
+    fullRun.stop()
+
+    // Assert
+    expect(world.cancelled).toEqual([2])
+    expect(fullRun.view()?.stop).toBe('stopped')
+  })
+
+  it('counts a row left out and failed once, never below nothing', async () => {
+    // Arrange
+    const world = newWorld({ counts: { total: 2, excluded: 2, failed: 2 } })
+    const fullRun = createFullRun(setUp(world))
+    fullRun.start({ trackIds: null })
+    await fullRun.tick()
+    world.status.set(1, 'applied')
+    await fullRun.tick()
+    world.status.set(2, 'preview')
+    world.wizard = { ...world.wizard, step: 'b.writeXml' }
+    await fullRun.tick()
+    world.status.set(3, 'applied')
+    await fullRun.tick()
+
+    // Act
+    world.wizard = { ...world.wizard, step: 'doneB' }
+    await fullRun.tick()
+
+    // Assert
+    expect(fullRun.view()?.summary?.processed).toBe(0)
+  })
+
+  it('keeps a stop that came while a step waited', async () => {
+    // Arrange
+    const world = newWorld()
+    const dependencies = setUp(world)
+    let release: (ok: boolean) => void = () => undefined
+    const fullRun = createFullRun({
+      ...dependencies,
+      restartWizard: () =>
+        new Promise((resolve) => {
+          release = resolve
+        })
+    })
+    fullRun.start({ trackIds: null })
+    await fullRun.tick()
+    world.status.set(1, 'applied')
+
+    // Act
+    const ticking = fullRun.tick()
+    fullRun.stop()
+    release(true)
+    await ticking
+
+    // Assert
+    expect(fullRun.view()?.stop).toBe('stopped')
   })
 })
