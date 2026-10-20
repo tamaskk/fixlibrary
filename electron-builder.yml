@@ -53,6 +53,9 @@ mac:
       arch: arm64
   category: public.app-category.music
   identity: '-'
+  # Signed ad hoc, without an Apple Developer ID: with the hardened runtime, library
+  # validation would refuse the frameworks of an ad hoc signature (different Team IDs).
+  hardenedRuntime: false
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
 dmg:
