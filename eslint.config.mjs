@@ -14,6 +14,8 @@ export default defineConfig(
       'release',
       'python',
       'resources/bin',
+      // The packaged Python runtime (scripts/build-python.sh).
+      'build/python-runtime',
       'test-results',
       'playwright-report'
     ]

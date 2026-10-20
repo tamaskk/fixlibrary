@@ -66,6 +66,20 @@ describe('resolveToolLocations', () => {
     // Assert
     expect(resolved).toEqual({ bundledDir: '/App/Resources/bin', pythonPath: null })
   })
+
+  it('runs yt-dlp with the interpreter of the packaged runtime', () => {
+    // Act
+    const resolved = resolveToolLocations({
+      ...paths,
+      isPackaged: true,
+      runtimePython: '/Users/me/Library/Application Support/fixlibrary/python/1/bin/python3'
+    })
+
+    // Assert
+    expect(resolveToolCommand('yt-dlp', resolved)?.command).toBe(
+      '/Users/me/Library/Application Support/fixlibrary/python/1/bin/python3'
+    )
+  })
 })
 
 describe('resolveToolCommand', () => {

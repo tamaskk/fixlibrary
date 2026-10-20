@@ -101,6 +101,11 @@ const api: FixLibraryApi = {
     onlineDownload: (playlistId, url, confirmed) =>
       ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineDownload, playlistId, url, confirmed)
   },
+  pythonRuntime: {
+    state: () => ipcRenderer.invoke(IPC_CHANNELS.pythonRuntimeState),
+    retry: () => ipcRenderer.invoke(IPC_CHANNELS.pythonRuntimeRetry),
+    onChange: (listener) => subscribe(IPC_EVENTS.pythonRuntimeChanged, listener)
+  },
   fullRun: {
     view: () => ipcRenderer.invoke(IPC_CHANNELS.fullRunView),
     start: (request) => ipcRenderer.invoke(IPC_CHANNELS.fullRunStart, request),

@@ -39,9 +39,11 @@ export function resolveToolLocations(app: {
   isPackaged: boolean
   appPath: string
   resourcesPath: string
+  /** The interpreter of the packaged runtime (T-041), or null when the app holds none. */
+  runtimePython?: string | null
 }): ToolLocations {
   return app.isPackaged
-    ? { bundledDir: join(app.resourcesPath, 'bin'), pythonPath: null }
+    ? { bundledDir: join(app.resourcesPath, 'bin'), pythonPath: app.runtimePython ?? null }
     : {
         bundledDir: join(app.appPath, 'resources/bin'),
         pythonPath: join(app.appPath, 'python/.venv/bin/python')

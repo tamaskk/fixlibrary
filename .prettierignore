@@ -11,6 +11,7 @@ docs/prompts
 HARNESS_BOOTSTRAP.md
 python
 resources/bin
+build/python-runtime
 test-results
 playwright-report
 .claude/hooks

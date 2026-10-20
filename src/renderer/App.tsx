@@ -1,4 +1,5 @@
 import { AppSidebar } from '@/components/features/AppSidebar'
+import { RuntimeGate } from '@/components/features/runtime/RuntimeGate'
 import { BatchPreview } from '@/pages/BatchPreview'
 import { CueEditor } from '@/pages/CueEditor'
 import { Download } from '@/pages/Download'
@@ -14,29 +15,31 @@ export function App(): React.JSX.Element {
   const page = useAppStore((state) => state.page)
 
   return (
-    <div className="flex h-full">
-      <AppSidebar />
-      <div className="min-w-0 flex-1">
-        {page === 'settings' ? (
-          <Settings />
-        ) : page === 'preview' ? (
-          <BatchPreview />
-        ) : page === 'download' ? (
-          <Download />
-        ) : page === 'cues' ? (
-          <CueEditor />
-        ) : page === 'energy' ? (
-          <EnergyCalibration />
-        ) : page === 'playlists' ? (
-          <Playlists />
-        ) : page === 'generator' ? (
-          <Generator />
-        ) : page === 'rekordbox' ? (
-          <RekordboxWizard />
-        ) : (
-          <Library />
-        )}
+    <RuntimeGate>
+      <div className="flex h-full">
+        <AppSidebar />
+        <div className="min-w-0 flex-1">
+          {page === 'settings' ? (
+            <Settings />
+          ) : page === 'preview' ? (
+            <BatchPreview />
+          ) : page === 'download' ? (
+            <Download />
+          ) : page === 'cues' ? (
+            <CueEditor />
+          ) : page === 'energy' ? (
+            <EnergyCalibration />
+          ) : page === 'playlists' ? (
+            <Playlists />
+          ) : page === 'generator' ? (
+            <Generator />
+          ) : page === 'rekordbox' ? (
+            <RekordboxWizard />
+          ) : (
+            <Library />
+          )}
+        </div>
       </div>
-    </div>
+    </RuntimeGate>
   )
 }
