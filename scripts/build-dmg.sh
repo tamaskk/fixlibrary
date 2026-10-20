@@ -41,7 +41,8 @@ FEED="release/latest-mac.yml"
 rm -f "${FULL}" "${LITE}" "${FULL}.blockmap" "${LITE}.blockmap" "${FEED}"
 
 echo "Building ${FULL}"
-npx electron-builder --mac
+# Never publishes: on a tag electron-builder would upload to GitHub itself; the workflow drafts the release.
+npx electron-builder --mac --publish never
 verify_app
 SIZE="$(stat -f %z "${FULL}")"
 echo "  $((SIZE / 1024 / 1024)) MiB"
@@ -73,7 +74,7 @@ restore() {
 }
 trap restore EXIT
 mv "${ARCHIVES[0]}" "${ASIDE}/"
-npx electron-builder --mac "-c.dmg.artifactName=\${productName}-\${version}-\${arch}-lite.\${ext}"
+npx electron-builder --mac --publish never "-c.dmg.artifactName=\${productName}-\${version}-\${arch}-lite.\${ext}"
 verify_app
 echo "  $(( $(stat -f %z "${LITE}") / 1024 / 1024 )) MiB"
 
