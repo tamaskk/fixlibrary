@@ -40,3 +40,9 @@ tests/fixtures/real
 test-results
 playwright-report
 coverage
+
+# The packaged runtime (scripts/build-python.sh)
+build/python-runtime-*.tar.gz
+build/python-runtime.json
+
+build/compileall.log

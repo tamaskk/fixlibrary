@@ -252,6 +252,10 @@ Tables
 - Above the table: search and filters as labelled fields in one row, with the number of rows on the right (`shown / all` when a filter hides some). Below it, the selection bar: the number of selected rows on the left; on the right the choice of what to run, as a labelled select, and the actions, Secondary before Primary. With nothing to choose from, the select and the actions are disabled and the select says so. The answer to an action appears as a status line under the bar.
 - When a search or a filter leaves no row, the table gives way to an empty state with a Secondary "Szűrők törlése" button.
 
+First start
+
+- While the packaged app unpacks its runtime (T-041), the window shows a page of its own instead of the sidebar and the pages: "FixLibrary" (H1), then in Body text-muted "Indítás…", or "Az elemző környezet kicsomagolása. Ez az első indításkor és frissítés után egyszer kell, egy-két percig tart." with the progress bar ("Kicsomagolás") and the percent next to it in the Data role, in a column of at most 448px in the middle. A failure says "Az elemző környezet nincs kész." and, in a `role="status"` element that is there from the start, "Az elemző környezet nem készíthető elő. Az elemzések nem működnek, amíg nem sikerül." in danger, with "Próbáld újra" (Primary, focused) and "Tovább így is" (Secondary); a retry puts the focus on the heading. Until main answers the page is empty, so in development, where the runtime is always ready, it never shows.
+
 Batch preview
 
 - The page "Előnézet": tabs "Változások" and "Hibák" (with the number of skipped tracks), one "Szűrő" select and, for a batch that looked tracks up, "Lookup frissítése" (Secondary) next to it, with the row count on the right, the table, and under it the bar of the approval: on the left how many tracks will be written, how many were taken out and how many failed; on the right "Elvetés" (Secondary, confirms as Danger) and "Jóváhagyás" (Primary). The confirmation of the approval names the numbers and the mode. "Utolsó batch visszavonása" (Secondary, confirms as Danger) sits in the page header while there is something to undo.

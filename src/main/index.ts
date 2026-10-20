@@ -13,6 +13,15 @@ import { registerPreviewIpc } from './ipc/preview'
 import { registerEnergyIpc } from './ipc/energy'
 import { registerFullRunIpc } from './ipc/full-run'
 import { registerGeneratorIpc } from './ipc/generator'
+import { createRuntimeStateSender, registerPythonRuntimeIpc } from './ipc/python-runtime'
+import {
+  prepareRuntime,
+  readManifest,
+  runtimePaths,
+  type RuntimeFolders,
+  type RuntimePaths
+} from './services/python-runtime'
+import type { PythonRuntimeState } from '@shared/python-runtime'
 import { registerPlaylistsIpc } from './ipc/playlists'
 import { createFullRun, FULL_RUN_TICK_MS } from './pipeline/full-run'
 import { readProposal } from '@shared/preview'
@@ -50,7 +59,7 @@ import { createStages, selectableStages, validateStages } from './pipeline/stage
 import { createDemoStages } from './pipeline/stages/demo'
 import type { Stage } from './pipeline/stages/stage'
 import { createToolChecker } from './pipeline/system'
-import { resolveToolCommand, resolveToolLocations } from './services/binaries'
+import { resolveToolCommand, resolveToolLocations, type ToolLocations } from './services/binaries'
 import { createClaudeCli } from './services/claude-cli'
 import { createYtDlp } from './services/downloader'
 import { readEnvFile } from './services/env-file'
@@ -104,6 +113,22 @@ let onlineRecs: OnlineRecs | null = null
 // Kept so that quitting can stop the full run looking at its step.
 let fullRunTimer: NodeJS.Timeout | null = null
 let fullRunActive: () => boolean = () => false
+// The packaged runtime: unpacked on a first start before the sidecar can start (T-041).
+let runtimeState: PythonRuntimeState = { status: 'checking', fraction: null }
+// Resolves once the sidecar was started, or could not be: the startup work waits for it.
+let pythonReady: Promise<void> = Promise.resolve()
+// The unpacking under way, so that a retry cannot start a second one.
+let preparing: Promise<void> | null = null
+// Quitting stops an unpacking: tar does not outlive the app.
+const runtimeAbort = new AbortController()
+// The startup work, when the runtime was not ready for it; done after a retry.
+let afterRuntimeReady: (() => Promise<void>) | null = null
+const sendRuntimeState = createRuntimeStateSender()
+
+function setRuntimeState(state: PythonRuntimeState): void {
+  runtimeState = state
+  sendRuntimeState(state)
+}
 // Kept so that quitting can stop watching the Inbox.
 let inboxWatcher: InboxWatcher | null = null
 // The API keys of the lookup services; read by the stages that ask them.
@@ -246,34 +271,48 @@ function registerSettingsAndSystemIpc(): void {
   registerSystemIpc({
     db,
     claude,
-    toolChecker: createToolChecker(
-      resolveToolLocations({
-        isPackaged: app.isPackaged,
-        appPath: app.getAppPath(),
-        resourcesPath: process.resourcesPath
-      })
-    ),
+    toolChecker: createToolChecker(toolLocations()),
     logFolder: app.getPath('logs')
   })
 }
 
-function startPythonSidecar(): void {
-  // Development only: the packaged runtime and its path come with T-041.
-  const pythonDir = join(app.getAppPath(), 'python')
-  const pythonPath = join(pythonDir, '.venv/bin/python')
-  if (app.isPackaged || !existsSync(pythonPath)) {
-    logger.error('Python sidecar not started: no development environment in python/.venv')
-    return
+/** Where the packaged app keeps its runtime archive, and where it unpacks it (T-041). */
+function runtimeFolders(): RuntimeFolders {
+  return {
+    bundleDir: join(process.resourcesPath, 'python'),
+    baseDir: join(app.getPath('userData'), 'python')
   }
+}
 
-  const locations = resolveToolLocations({
+/** The runtime the packaged app runs, unpacked or not yet; null in development. */
+function packagedRuntime(): RuntimePaths | null {
+  if (!app.isPackaged) return null
+  const { bundleDir, baseDir } = runtimeFolders()
+  const manifest = readManifest(bundleDir)
+  return manifest === null ? null : runtimePaths(baseDir, manifest.version)
+}
+
+function toolLocations(): ToolLocations {
+  return resolveToolLocations({
     isPackaged: app.isPackaged,
     appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath
+    resourcesPath: process.resourcesPath,
+    runtimePython: packagedRuntime()?.python ?? null
   })
+}
+
+function startBridge(runtime: {
+  python: string
+  cwd: string
+  modelsDir: string
+  torchHome: string
+}): void {
+  const locations = toolLocations()
+  // A second start never leaves the first sidecar behind.
+  void pythonBridge?.stop()
   pythonBridge = createPythonBridge({
-    pythonPath,
-    cwd: pythonDir,
+    pythonPath: runtime.python,
+    cwd: runtime.cwd,
     logDir: app.getPath('logs'),
     // The sidecar decodes and fingerprints with the app's own tools and with nothing else.
     ffmpegPath: resolveToolCommand('ffmpeg', locations)?.command,
@@ -282,16 +321,66 @@ function startPythonSidecar(): void {
     coversDir: coversFolder(),
     stemsDir: stemsFolder(),
     peaksDir: peaksFolder(),
-    modelsDir: modelsFolder(),
+    modelsDir: runtime.modelsDir,
     // Nothing of the app downloads into it; set so that no part of torch ever writes to
     // `~/.cache` instead.
-    torchHome: join(app.getPath('userData'), 'torch')
+    torchHome: runtime.torchHome
   })
   pythonBridge.start()
   pythonBridge
     .call('ping', {})
     .then(({ version }) => logger.info(`Python sidecar ready, fixlib_py ${version}`))
     .catch((error: unknown) => logger.error('Python sidecar did not answer ping', error))
+}
+
+/** The packaged app: the runtime unpacked first when this version has none yet. */
+async function prepareRuntimeAndStart(): Promise<void> {
+  try {
+    const prepared = await prepareRuntime(runtimeFolders(), setRuntimeState, runtimeAbort.signal)
+    if (!prepared.ok) return
+    const { python, dir, modelsDir, torchHome } = prepared.value
+    startBridge({ python, cwd: dir, modelsDir, torchHome })
+  } catch (error) {
+    logger.error('The Python sidecar could not be started', error)
+    setRuntimeState({ status: 'failed', fraction: null })
+  }
+}
+
+/** One preparation at a time; a retry while one runs, or after one worked, does nothing. */
+function retryRuntime(): void {
+  if (preparing !== null || runtimeState.status !== 'failed') return
+  setRuntimeState({ status: 'checking', fraction: null })
+  preparing = prepareRuntimeAndStart().finally(() => {
+    preparing = null
+    if (runtimeState.status !== 'ready') return
+    // The startup work that waited for the runtime is done now.
+    const waiting = afterRuntimeReady
+    afterRuntimeReady = null
+    void waiting?.()
+  })
+}
+
+function startPythonSidecar(): void {
+  if (app.isPackaged) {
+    preparing = prepareRuntimeAndStart().finally(() => {
+      preparing = null
+    })
+    pythonReady = preparing
+    return
+  }
+  const pythonDir = join(app.getAppPath(), 'python')
+  const pythonPath = join(pythonDir, '.venv/bin/python')
+  setRuntimeState({ status: 'ready', fraction: 1 })
+  if (!existsSync(pythonPath)) {
+    logger.error('Python sidecar not started: no development environment in python/.venv')
+    return
+  }
+  startBridge({
+    python: pythonPath,
+    cwd: pythonDir,
+    modelsDir: modelsFolder(),
+    torchHome: join(app.getPath('userData'), 'torch')
+  })
 }
 
 /**
@@ -333,9 +422,8 @@ function peaksFolder(): string {
 
 /** `resources/models` in development; the packaged app gets its models with T-041. */
 function modelsFolder(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'models')
-    : join(app.getAppPath(), 'resources/models')
+  // The packaged app has the model inside its runtime (T-041).
+  return packagedRuntime()?.modelsDir ?? join(app.getAppPath(), 'resources/models')
 }
 
 /**
@@ -520,11 +608,7 @@ function registerLibraryAndPipeline(): void {
   }
   registerCueEditorIpc(cueEditor)
   registerEnergyIpc({ db, python: () => pythonBridge })
-  const tools = resolveToolLocations({
-    isPackaged: app.isPackaged,
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath
-  })
+  const tools = toolLocations()
   const ytDlp = createYtDlp(() => resolveToolCommand('yt-dlp', tools))
   downloads = createDownloads({
     ytDlp,
@@ -660,7 +744,7 @@ function registerLibraryAndPipeline(): void {
   // the last run, then a run that was interrupted goes on. Without a
   // chosen folder there is nothing to scan, and a drive that is not connected ends
   // the scan at once.
-  void (async () => {
+  const startupWork = async (): Promise<void> => {
     try {
       await batchFiles.removeTempFiles()
       if (readSettings(db).library.rootFolder !== null) {
@@ -682,6 +766,14 @@ function registerLibraryAndPipeline(): void {
       takeUpRun()
       inboxWatcher?.start()
     }
+  }
+  void (async () => {
+    // The scan reads tags through the sidecar, which a first start unpacks first.
+    await pythonReady
+    // Without it the scan would take every file for unreadable and the run would fail:
+    // both wait for a runtime that a retry makes ready.
+    if (runtimeState.status === 'ready') await startupWork()
+    else afterRuntimeReady = startupWork
   })()
 }
 
@@ -787,6 +879,10 @@ app.whenReady().then(() => {
     return
   }
   registerAppIpc({ audioReadToken })
+  registerPythonRuntimeIpc({
+    state: () => runtimeState,
+    retry: retryRuntime
+  })
   registerSettingsAndSystemIpc()
   startPythonSidecar()
   registerLibraryAndPipeline()
@@ -802,6 +898,7 @@ app.whenReady().then(() => {
  * keep the next from running.
  */
 function tellWorkToStop(): void {
+  runtimeAbort.abort()
   try {
     // The running jobs are told to stop and put back in line, so the next start goes
     // on with the run. The orchestrator stays known until the file work has ended:

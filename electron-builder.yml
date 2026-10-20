@@ -16,6 +16,8 @@ files:
   - '!{.env,.env.*,.npmrc}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!drizzle.config.ts'
+  # The runtime and its archive ship as extraResources, never inside the asar.
+  - '!build/*'
   # The tools ship once, as extraResources, not a second time inside the asar.
   - '!resources/*'
   # better-sqlite3 ships its sources and a prebuilt binary for every platform.
@@ -31,6 +33,12 @@ extraResources:
       - '**/*'
       - '!.installed-sha256'
       - '!.recipe-sha256'
+  # The Python runtime of scripts/build-python.sh, unpacked at the first start (T-041).
+  - from: build
+    to: python
+    filter:
+      - python-runtime-*.tar.gz
+      - python-runtime.json
   - from: src/main/db/migrations
     to: migrations
     # The snapshots are only for drizzle-kit; the journal and the SQL files are needed.

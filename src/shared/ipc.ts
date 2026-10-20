@@ -17,6 +17,7 @@ import type {
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
 import type { FullRunStart, FullRunView } from './full-run'
+import type { PythonRuntimeState } from './python-runtime'
 import type {
   AlternativesRequest,
   GapTarget,
@@ -145,6 +146,8 @@ export const IPC_CHANNELS = {
   playlistsOnlineLast: 'playlists:onlineLast',
   playlistsOnlineRequest: 'playlists:onlineRequest',
   playlistsOnlineDownload: 'playlists:onlineDownload',
+  pythonRuntimeState: 'python-runtime:state',
+  pythonRuntimeRetry: 'python-runtime:retry',
   fullRunView: 'full-run:view',
   fullRunStart: 'full-run:start',
   fullRunStop: 'full-run:stop',
@@ -164,7 +167,8 @@ export const IPC_CHANNELS = {
 export const IPC_EVENTS = {
   libraryScanProgress: 'library:scanProgress',
   pipelineProgress: 'pipeline:progress',
-  downloadChanged: 'download:changed'
+  downloadChanged: 'download:changed',
+  pythonRuntimeChanged: 'python-runtime:changed'
 } as const
 
 export interface FixLibraryApi {
@@ -338,6 +342,13 @@ export interface FixLibraryApi {
       url: string,
       confirmed: boolean
     ) => Promise<Result<OnlineDownloadOutcome>>
+  }
+  pythonRuntime: {
+    /** Whether the packaged runtime is there, or being unpacked (T-041); ready in development. */
+    state: () => Promise<PythonRuntimeState>
+    /** Unpacks again after a failure. */
+    retry: () => Promise<void>
+    onChange: (listener: (state: PythonRuntimeState) => void) => () => void
   }
   fullRun: {
     /** The full run that goes on or ended last, or null when none was started. */
