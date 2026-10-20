@@ -58,7 +58,7 @@ A build without the key never updates itself. Replacing the key (`--force`) leav
 
 ## Install
 
-Download the DMG only from the releases of this repository, and compare its checksum with the one the release names:
+FixLibrary needs an Apple Silicon Mac with macOS 15 or newer. Download the DMG only from the releases of this repository, and compare its checksum with the one the release names:
 
 ```bash
 shasum -a 256 FixLibrary-*.dmg

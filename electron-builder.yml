@@ -52,6 +52,8 @@ mac:
     - target: dmg
       arch: arm64
   category: public.app-category.music
+  # The runtime's Essentia has arm64 wheels for macOS 15 and newer only.
+  minimumSystemVersion: '15.0'
   identity: '-'
   # Signed ad hoc, without an Apple Developer ID: with the hardened runtime, library
   # validation would refuse the frameworks of an ad hoc signature (different Team IDs).
