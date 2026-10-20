@@ -1,7 +1,7 @@
 // The release key of the updater (T-043). The app trusts a release only through
 // `manifest.json` signed with this Ed25519 key; the private key never enters the repo.
 //
-//   npm run release:key -- keygen <private key path>
+//   npm run release:key -- keygen <private key path> [--force]
 //       makes the key pair: the private key at the path (mode 600, never overwritten),
 //       the public key into src/main/services/release-key.ts
 //   npm run release:key -- manifest <release folder> <app version> <runtime version>
@@ -16,7 +16,7 @@ import {
   sign,
   verify
 } from 'node:crypto'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // npm runs it from the repository root.
@@ -38,21 +38,36 @@ function appPublicKey(): string {
 const [command, ...args] = process.argv.slice(2)
 
 if (command === 'keygen') {
-  const [privatePath] = args
+  const [privatePath, flag] = args
   if (!privatePath) fail('name the path of the private key')
   if (existsSync(privatePath))
     fail(`${privatePath} exists; a release key is never replaced by accident`)
+  const current = /RELEASE_PUBLIC_KEY: string \| null = (`[^`]*`|null)/.exec(
+    readFileSync(KEY_FILE, 'utf8')
+  )
+  // A new key makes every installed app refuse the releases signed with it.
+  if (current?.[1] !== 'null' && flag !== '--force') {
+    fail(
+      'the app has a release key already; a new one needs --force, and every installed app must be updated by hand'
+    )
+  }
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
   writeFileSync(privatePath, privateKey.export({ type: 'pkcs8', format: 'pem' }), {
     mode: 0o600,
     flag: 'wx'
   })
   const pem = publicKey.export({ type: 'spki', format: 'pem' }).toString().trim()
-  const source = readFileSync(KEY_FILE, 'utf8').replace(
-    /RELEASE_PUBLIC_KEY: string \| null = (`[^`]*`|null)/,
-    `RELEASE_PUBLIC_KEY: string | null = \`${pem}\``
-  )
-  writeFileSync(KEY_FILE, source)
+  try {
+    const source = readFileSync(KEY_FILE, 'utf8').replace(
+      /RELEASE_PUBLIC_KEY: string \| null = (`[^`]*`|null)/,
+      `RELEASE_PUBLIC_KEY: string | null = \`${pem}\``
+    )
+    writeFileSync(KEY_FILE, source)
+  } catch (error) {
+    // A private key the app does not know is of no use: it does not stay.
+    rmSync(privatePath, { force: true })
+    throw error
+  }
   console.log(`Private key: ${privatePath} (keep it out of the repo, and back it up)`)
   console.log('Public key written to src/main/services/release-key.ts')
 } else if (command === 'manifest') {

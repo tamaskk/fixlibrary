@@ -2,7 +2,7 @@
 // ffmpeg, fpcalc and mp3gain come from scripts/fetch-binaries.sh; yt-dlp is a Python
 // module in the sidecar environment. Nothing here falls back to a tool on the PATH.
 import { execFile } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { TOOL_NAMES, type ToolCheck, type ToolName } from '@shared/tools'
@@ -12,8 +12,28 @@ export interface ToolLocations {
   bundledDir: string
   /** The sidecar's interpreter, or null where there is none yet (packaged app, task 41). */
   pythonPath: string | null
-  /** The yt-dlp zipapp the updater downloaded (T-043): run before the runtime's own. */
-  ytDlpZipapp?: string | null
+  /** The folder of the yt-dlp zipapps the updater downloaded (T-043), or null. */
+  ytDlpDir?: string | null
+}
+
+/** The name the updater gives the zipapp of a yt-dlp version; one per version. */
+export function ytDlpZipappName(version: string): string {
+  return `yt-dlp-${version}.pyz`
+}
+
+/**
+ * The zipapp the updater made current, by the version noted in `yt-dlp.version`, or
+ * null. A new version gets a file of its own, so a yt-dlp that runs is never changed.
+ */
+export function currentYtDlpZipapp(dir: string): string | null {
+  try {
+    const version = readFileSync(join(dir, 'yt-dlp.version'), 'utf8').trim()
+    if (!/^\d{4}\.\d{2}\.\d{2}(\.\d+)?$/.test(version)) return null
+    const path = join(dir, ytDlpZipappName(version))
+    return existsSync(path) ? path : null
+  } catch {
+    return null
+  }
 }
 
 /** What to execute for a tool. Callers append their own arguments to `args`. */
@@ -44,19 +64,19 @@ export function resolveToolLocations(app: {
   /** The interpreter of the packaged runtime (T-041), or null when the app holds none. */
   runtimePython?: string | null
   /** Where the updater keeps a newer yt-dlp (T-043). */
-  ytDlpZipapp?: string | null
+  ytDlpDir?: string | null
 }): ToolLocations {
-  const ytDlpZipapp = app.ytDlpZipapp ?? null
+  const ytDlpDir = app.ytDlpDir ?? null
   return app.isPackaged
     ? {
         bundledDir: join(app.resourcesPath, 'bin'),
         pythonPath: app.runtimePython ?? null,
-        ytDlpZipapp
+        ytDlpDir
       }
     : {
         bundledDir: join(app.appPath, 'resources/bin'),
         pythonPath: join(app.appPath, 'python/.venv/bin/python'),
-        ytDlpZipapp
+        ytDlpDir
       }
 }
 
@@ -65,15 +85,15 @@ export function resolveToolCommand(name: ToolName, locations: ToolLocations): To
   if (name === 'yt-dlp') {
     if (locations.pythonPath === null) return null
     // A newer yt-dlp from its own release runs from its zipapp, with the same isolation.
-    const zipapp = locations.ytDlpZipapp ?? null
-    return zipapp !== null && existsSync(zipapp)
+    const zipapp = locations.ytDlpDir ? currentYtDlpZipapp(locations.ytDlpDir) : null
+    return zipapp !== null
       ? { command: locations.pythonPath, args: ['-I', zipapp] }
       : { command: locations.pythonPath, args: [...YT_DLP_MODULE_ARGS] }
   }
   return { command: join(locations.bundledDir, name), args: [] }
 }
 
-function checkTool(
+export function checkTool(
   name: ToolName,
   locations: ToolLocations,
   timeoutMs: number
@@ -124,4 +144,30 @@ export function checkAll(
 ): Promise<ToolCheck[]> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS
   return Promise.all(TOOL_NAMES.map((name) => checkTool(name, locations, timeoutMs)))
+}
+
+/**
+ * What a yt-dlp zipapp says its version is when the runtime's interpreter runs it, or
+ * null when it does not run: a download is made current only after this.
+ */
+export function probeYtDlpZipapp(
+  pythonPath: string,
+  zipapp: string,
+  timeoutMs = DEFAULT_CHECK_TIMEOUT_MS
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      pythonPath,
+      ['-I', zipapp, '--version'],
+      {
+        env: {},
+        cwd: tmpdir(),
+        timeout: timeoutMs,
+        killSignal: 'SIGKILL',
+        maxBuffer: MAX_VERSION_OUTPUT_BYTES
+      },
+      (error, stdout) =>
+        resolve(error ? null : (VERSION_CHECKS['yt-dlp'].pattern.exec(stdout.trim())?.[1] ?? null))
+    )
+  })
 }

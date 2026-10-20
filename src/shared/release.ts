@@ -8,7 +8,7 @@ export const MANIFEST_NAME = 'manifest.json'
 export const MANIFEST_SIGNATURE_NAME = 'manifest.json.sig'
 
 const semver = z.string().regex(/^\d+\.\d+\.\d+$/)
-const fileName = z.string().regex(/^[A-Za-z0-9._-]{1,120}$/)
+const fileName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/)
 
 export const releaseManifestSchema = z.strictObject({
   appVersion: semver,
@@ -28,16 +28,18 @@ export const releaseManifestSchema = z.strictObject({
 export type ReleaseManifest = z.output<typeof releaseManifestSchema>
 export type ReleaseFile = ReleaseManifest['files'][number]
 
-/** Negative, zero or positive as `a` is older, the same as or newer than `b` (x.y.z). */
+/**
+ * Negative, zero or positive as `a` is older, the same as or newer than `b`, part by
+ * numeric part: x.y.z, and yt-dlp's dates with a fourth part for a point release.
+ */
 export function compareVersions(a: string, b: string): number {
   const parts = (version: string): number[] =>
     version
       .replace(/^v/, '')
-      .split(/[.+-]/)
-      .slice(0, 3)
+      .split('.')
       .map((part) => Number.parseInt(part, 10) || 0)
   const [x, y] = [parts(a), parts(b)]
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < Math.max(x.length, y.length); index += 1) {
     const difference = (x[index] ?? 0) - (y[index] ?? 0)
     if (difference !== 0) return difference
   }
@@ -84,7 +86,7 @@ export type UpdateState =
   | { status: 'upToDate'; checkedAt: number }
   | { status: 'downloading'; version: string; fraction: number }
   | { status: 'ready'; version: string }
-  /** The app has no release key: it cannot trust any release (scripts/release-keygen.sh). */
+  /** The app has no release key: it cannot trust any release (`npm run release:key -- keygen`). */
   | { status: 'unverifiable' }
   | { status: 'failed'; checkedAt: number }
 

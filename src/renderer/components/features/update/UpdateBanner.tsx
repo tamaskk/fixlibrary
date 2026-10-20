@@ -34,7 +34,9 @@ export function UpdateBanner(): React.JSX.Element {
                 : `Új verzió: ${update.version}. Letöltve és ellenőrizve.`}
           </span>
           {opened ? (
-            <Button onClick={() => void quit()}>Bezárás</Button>
+            <Button aria-label="Az app bezárása" onClick={() => void quit()}>
+              Bezárás
+            </Button>
           ) : (
             <Button onClick={() => void open()}>Megnyitás</Button>
           )}

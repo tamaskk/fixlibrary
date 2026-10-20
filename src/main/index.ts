@@ -67,10 +67,16 @@ import {
 import { createStages, selectableStages, validateStages } from './pipeline/stages'
 import { createDemoStages } from './pipeline/stages/demo'
 import type { Stage } from './pipeline/stages/stage'
-import { createToolChecker, type ToolChecker } from './pipeline/system'
+import { createToolChecker } from './pipeline/system'
 import { getSetting, setSetting } from './db/settings'
 import { z } from 'zod'
-import { resolveToolCommand, resolveToolLocations, type ToolLocations } from './services/binaries'
+import {
+  checkTool,
+  probeYtDlpZipapp,
+  resolveToolCommand,
+  resolveToolLocations,
+  type ToolLocations
+} from './services/binaries'
 import { createClaudeCli } from './services/claude-cli'
 import { createYtDlp } from './services/downloader'
 import { readEnvFile } from './services/env-file'
@@ -129,6 +135,7 @@ let updater: Updater | null = null
 const updaterTimers: NodeJS.Timeout[] = []
 // The first look after a start waits for the startup work to settle.
 const UPDATER_FIRST_LOOK_MS = 60_000
+const YT_DLP_PROBE_TIMEOUT_MS = 30_000
 // The packaged runtime: unpacked on a first start before the sidecar can start (T-041).
 let runtimeState: PythonRuntimeState = { status: 'checking', fraction: null }
 // Resolves once the sidecar was started, or could not be: the startup work waits for it.
@@ -291,7 +298,7 @@ function registerSettingsAndSystemIpc(): void {
     toolChecker,
     logFolder: app.getPath('logs')
   })
-  startUpdater(toolChecker)
+  startUpdater()
 }
 
 const UPDATER_KEY = 'updater'
@@ -300,7 +307,7 @@ const updaterSettingSchema = z.object({ ytDlpCheckedAt: z.number().nullable() })
 })
 
 /** The updates of the app, its runtime and yt-dlp (T-043). */
-function startUpdater(toolChecker: ToolChecker): void {
+function startUpdater(): void {
   const db = getDatabase()
   const binDir = join(app.getPath('userData'), 'bin')
   const runtimeVersion =
@@ -322,9 +329,14 @@ function startUpdater(toolChecker: ToolChecker): void {
     binDir,
     publicKey: RELEASE_PUBLIC_KEY,
     userAgent: userAgent(),
-    ytDlpVersion: async () => {
-      const tool = (await toolChecker.check(true)).find((each) => each.name === 'yt-dlp')
-      return tool?.ok ? tool.version : null
+    moduleYtDlpVersion: async () => {
+      const module = { ...toolLocations(), ytDlpDir: null }
+      const checked = await checkTool('yt-dlp', module, YT_DLP_PROBE_TIMEOUT_MS)
+      return checked.ok ? checked.version : null
+    },
+    probeYtDlp: async (zipapp) => {
+      const python = toolLocations().pythonPath
+      return python === null ? null : probeYtDlpZipapp(python, zipapp)
     },
     ytDlpCheckedAt: () => getSetting(db, UPDATER_KEY, updaterSettingSchema)?.ytDlpCheckedAt ?? null,
     setYtDlpCheckedAt: (at) => setSetting(db, UPDATER_KEY, { ytDlpCheckedAt: at }),
@@ -333,10 +345,10 @@ function startUpdater(toolChecker: ToolChecker): void {
   registerUpdateIpc({
     view,
     check: () => {
-      void updater?.checkApp()
+      void updater?.checkApp('manual')
       void updater?.checkYtDlp('manual')
     },
-    readyDmg: () => updater?.readyDmg() ?? null,
+    readyDmg: async () => (await updater?.readyDmg()) ?? null,
     quit: () => app.quit()
   })
   void updater.cleanUp()
@@ -374,7 +386,7 @@ function toolLocations(): ToolLocations {
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
     runtimePython: packagedRuntime()?.python ?? null,
-    ytDlpZipapp: join(app.getPath('userData'), 'bin/yt-dlp')
+    ytDlpDir: join(app.getPath('userData'), 'bin')
   })
 }
 

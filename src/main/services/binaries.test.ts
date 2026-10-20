@@ -56,7 +56,7 @@ describe('resolveToolLocations', () => {
     expect(resolved).toEqual({
       bundledDir: '/repo/resources/bin',
       pythonPath: '/repo/python/.venv/bin/python',
-      ytDlpZipapp: null
+      ytDlpDir: null
     })
   })
 
@@ -68,20 +68,21 @@ describe('resolveToolLocations', () => {
     expect(resolved).toEqual({
       bundledDir: '/App/Resources/bin',
       pythonPath: null,
-      ytDlpZipapp: null
+      ytDlpDir: null
     })
   })
 
   it('runs a yt-dlp zipapp the updater downloaded before the runtime module', () => {
     // Arrange
-    const zipapp = join(folder, 'yt-dlp')
+    const zipapp = join(folder, 'yt-dlp-2026.10.10.pyz')
     writeFileSync(zipapp, 'zipapp')
+    writeFileSync(join(folder, 'yt-dlp.version'), '2026.10.10\n')
     const without = resolveToolLocations({ ...paths, isPackaged: true, runtimePython: '/py' })
     const withZipapp = resolveToolLocations({
       ...paths,
       isPackaged: true,
       runtimePython: '/py',
-      ytDlpZipapp: zipapp
+      ytDlpDir: folder
     })
 
     // Act

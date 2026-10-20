@@ -126,7 +126,8 @@ function dependencies(
     binDir: join(folder, 'bin'),
     publicKey: PUBLIC,
     userAgent: 'FixLibrary test',
-    ytDlpVersion: async () => '2026.08.19',
+    moduleYtDlpVersion: async () => '2026.08.19',
+    probeYtDlp: async () => '2026.10.10',
     ytDlpCheckedAt: () => checkedAt,
     setYtDlpCheckedAt: (at) => {
       checkedAt = at
@@ -218,7 +219,7 @@ describe('the app update', () => {
 
     // Assert
     expect(deps.states.at(-1)).toEqual({ status: 'ready', version: '0.0.2' })
-    expect(readFileSync(updater.readyDmg() ?? '', 'utf8')).toBe('the lite dmg')
+    expect(readFileSync((await updater.readyDmg()) ?? '', 'utf8')).toBe('the lite dmg')
     const runtime = published.assets['python-runtime-2.tar.gz'] as Buffer
     expect(isRuntimeReady(join(folder, 'python'), 2, sha256(runtime))).toBe(true)
     expect(asked.some((url) => url.endsWith('FixLibrary-0.0.2-arm64.dmg'))).toBe(false)
@@ -254,11 +255,83 @@ describe('the app update', () => {
 
     // Assert
     expect(deps.states.at(-1)).toMatchObject({ status: 'failed' })
-    expect(updater.readyDmg()).toBeNull()
+    expect(await updater.readyDmg()).toBeNull()
     const kept = existsSync(join(folder, 'updates/0.0.2'))
       ? readdirSync(join(folder, 'updates/0.0.2')).filter((name) => name.endsWith('.dmg'))
       : []
     expect(kept).toEqual([])
+  })
+
+  it('downloads only the lite DMG in development, where no packaged runtime runs', async () => {
+    // Arrange
+    const asked: string[] = []
+    const deps = dependencies({
+      runtime: () => null,
+      fetch: fakeFetch({ 'tamaskk/fixlibrary': release() }, asked)
+    })
+
+    // Act
+    await createUpdater(deps).checkApp()
+
+    // Assert
+    expect(deps.states.at(-1)).toEqual({ status: 'ready', version: '0.0.2' })
+    expect(asked.some((url) => url.endsWith('python-runtime-2.tar.gz'))).toBe(false)
+  })
+
+  it('lets a slow download run past the timeout of the headers, and ends a stalled one', async () => {
+    // Arrange: the lite DMG comes in two halves, the second after a pause.
+    const published = release()
+    const slow = (pauseMs: number): typeof fetch => {
+      const plain = fakeFetch({ 'tamaskk/fixlibrary': published })
+      return (async (input: string | URL, init?: RequestInit) => {
+        const answer = await plain(input, init)
+        if (!String(input).endsWith('-lite.dmg') || answer.status !== 200) return answer
+        const bytes = new Uint8Array(await answer.arrayBuffer())
+        const signal = init?.signal
+        return new Response(
+          new ReadableStream({
+            async start(controller) {
+              controller.enqueue(bytes.slice(0, 4))
+              await new Promise((resolve) => setTimeout(resolve, pauseMs))
+              if (signal?.aborted) {
+                controller.error(new Error('aborted'))
+                return
+              }
+              controller.enqueue(bytes.slice(4))
+              controller.close()
+            }
+          })
+        )
+      }) as typeof fetch
+    }
+    const timeouts = { headersMs: 20, stallMs: 150 }
+    const fine = dependencies({ fetch: slow(60), timeouts, runtime: () => null })
+    const stalled = dependencies({ fetch: slow(400), timeouts, runtime: () => null })
+
+    // Act
+    await createUpdater(fine).checkApp()
+    await createUpdater(stalled).checkApp()
+
+    // Assert
+    expect(fine.states.at(-1)).toEqual({ status: 'ready', version: '0.0.2' })
+    expect(stalled.states.at(-1)).toMatchObject({ status: 'failed' })
+  })
+
+  it('looks again when asked only after a minute', async () => {
+    // Arrange
+    const asked: string[] = []
+    const deps = dependencies({
+      appVersion: '0.0.2',
+      fetch: fakeFetch({ 'tamaskk/fixlibrary': release() }, asked)
+    })
+    const updater = createUpdater(deps)
+
+    // Act
+    await updater.checkApp('manual')
+    await updater.checkApp('manual')
+
+    // Assert
+    expect(asked.filter((url) => url.includes('api.github.com'))).toHaveLength(1)
   })
 
   it('asks no host but GitHub', async () => {
@@ -314,7 +387,7 @@ describe('the yt-dlp update', () => {
     await createUpdater(deps).checkYtDlp('manual')
 
     // Assert
-    expect(readFileSync(join(folder, 'bin/yt-dlp'), 'utf8')).toBe('a yt-dlp zipapp')
+    expect(readFileSync(join(folder, 'bin/yt-dlp-2026.10.10.pyz'), 'utf8')).toBe('a yt-dlp zipapp')
     expect(readFileSync(join(folder, 'bin/yt-dlp.version'), 'utf8').trim()).toBe('2026.10.10')
   })
 
@@ -328,14 +401,79 @@ describe('the yt-dlp update', () => {
     await createUpdater(deps).checkYtDlp('manual')
 
     // Assert
-    expect(existsSync(join(folder, 'bin/yt-dlp'))).toBe(false)
+    expect(existsSync(join(folder, 'bin/yt-dlp-2026.10.10.pyz'))).toBe(false)
+  })
+
+  it('drops a zipapp that does not run, and keeps the one in use', async () => {
+    // Arrange
+    const zipapp = Buffer.from('a broken zipapp')
+    const deps = dependencies({
+      fetch: fakeFetch({ 'yt-dlp/yt-dlp': ytDlpRelease(zipapp, sha256(zipapp)) }),
+      probeYtDlp: async () => null
+    })
+
+    // Act
+    await createUpdater(deps).checkYtDlp('manual')
+
+    // Assert
+    expect(existsSync(join(folder, 'bin/yt-dlp-2026.10.10.pyz'))).toBe(false)
+    expect(existsSync(join(folder, 'bin/yt-dlp.version'))).toBe(false)
+  })
+
+  it('takes a point release of the same day', async () => {
+    // Arrange
+    const zipapp = Buffer.from('a point release')
+    const release = { ...ytDlpRelease(zipapp, sha256(zipapp)), tag: '2026.10.10.1' }
+    const deps = dependencies({
+      moduleYtDlpVersion: async () => '2026.10.10',
+      fetch: fakeFetch({ 'yt-dlp/yt-dlp': release })
+    })
+
+    // Act
+    await createUpdater(deps).checkYtDlp('manual')
+
+    // Assert
+    expect(readFileSync(join(folder, 'bin/yt-dlp.version'), 'utf8').trim()).toBe('2026.10.10.1')
+  })
+
+  it('looks again at the next start after an offline one', async () => {
+    // Arrange
+    let noted: number | null = null
+    const deps = dependencies({
+      fetch: (async () => {
+        throw new Error('offline')
+      }) as typeof fetch,
+      setYtDlpCheckedAt: (at) => {
+        noted = at
+      }
+    })
+
+    // Act
+    await createUpdater(deps).checkYtDlp('scheduled')
+
+    // Assert
+    expect(noted).toBeNull()
+  })
+
+  it('removes a downloaded yt-dlp that is not newer than the runtime one', async () => {
+    // Arrange
+    mkdirSync(join(folder, 'bin'))
+    writeFileSync(join(folder, 'bin/yt-dlp-2026.08.01.pyz'), 'old')
+    writeFileSync(join(folder, 'bin/yt-dlp.version'), '2026.08.01\n')
+
+    // Act
+    await createUpdater(dependencies()).cleanUp()
+
+    // Assert
+    expect(readdirSync(join(folder, 'bin'))).toEqual([])
   })
 
   it('asks weekly, and after a failure not more than once in six hours', async () => {
     // Arrange
     const asked: string[] = []
     let at = 1_000_000_000
-    const deps = dependencies({ fetch: fakeFetch({}, asked), now: () => at })
+    const same = { ...ytDlpRelease(Buffer.from('x'), 'e'.repeat(64)), tag: '2026.08.19' }
+    const deps = dependencies({ fetch: fakeFetch({ 'yt-dlp/yt-dlp': same }, asked), now: () => at })
     const updater = createUpdater(deps)
 
     // Act
