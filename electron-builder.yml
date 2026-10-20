@@ -56,8 +56,17 @@ mac:
   # Signed ad hoc, without an Apple Developer ID: with the hardened runtime, library
   # validation would refuse the frameworks of an ad hoc signature (different Team IDs).
   hardenedRuntime: false
-  entitlementsInherit: build/entitlements.mac.plist
   notarize: false
+# No other code can run as the app through its binary: no `ELECTRON_RUN_AS_NODE`, no
+# `NODE_OPTIONS`, no `--inspect`, and the app.asar it loads is the one whose hash the
+# signed Info.plist names. File protocol privileges stay: the page is loaded from a file.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  enableCookieEncryption: true
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
 npmRebuild: false
