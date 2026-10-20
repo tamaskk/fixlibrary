@@ -159,6 +159,43 @@ describe('the full run', () => {
     expect(world.started).toHaveLength(1)
   })
 
+  it('ends as failed when its batch cannot start at all, and goes on without stems', async () => {
+    // Arrange
+    const world = newWorld()
+    const dependencies = setUp(world)
+    const refusing = createFullRun({
+      ...dependencies,
+      startBatch: () => ({ ok: false, code: 'INVALID_INPUT' })
+    })
+    refusing.start({ trackIds: null })
+    const withoutStems = newWorld()
+    const plain = setUp(withoutStems)
+    const noStems = createFullRun({
+      ...plain,
+      db: dependencies.db,
+      startBatch: (request) =>
+        request.stages.includes('stems')
+          ? { ok: false, code: 'INVALID_INPUT' }
+          : plain.startBatch(request)
+    })
+
+    // Act
+    await refusing.tick()
+    const refused = refusing.view()
+    refusing.stop()
+    noStems.start({ trackIds: null })
+    await noStems.tick()
+    withoutStems.status.set(1, 'applied')
+    await noStems.tick()
+    withoutStems.wizard = { ...withoutStems.wizard, step: 'b.writeXml' }
+    await noStems.tick()
+
+    // Assert
+    expect(refused).toMatchObject({ step: 'compute', stop: 'failed' })
+    expect(noStems.view()?.step).toBe('cues')
+    expect(withoutStems.started.at(-1)?.stages).toEqual(['cues'])
+  })
+
   it('stops when its batch is given up in the preview', async () => {
     // Arrange
     const world = newWorld()

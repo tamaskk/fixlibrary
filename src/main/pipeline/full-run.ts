@@ -133,13 +133,27 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
     return state.trackIds ?? dependencies.libraryTrackIds()
   }
 
-  /** Starts the batch of a step; null while another batch is in the way. */
-  function startBatch(state: FullRunState, stages: string[]): number | null {
+  /**
+   * Starts a batch: its id, `wait` while another batch is in the way (tried again at
+   * the next look), or `refused` when it cannot start at all, such as with no track left.
+   */
+  function startBatch(state: FullRunState, stages: string[]): number | 'wait' | 'refused' {
     const started = dependencies.startBatch({ trackIds: tracksOf(state), stages })
     if (started.ok) return started.value.batchId
-    if (started.code !== 'RUN_ACTIVE')
-      logger.warn(`Full run: a batch did not start: ${started.code}`)
-    return null
+    if (started.code === 'RUN_ACTIVE') return 'wait'
+    logger.warn(`Full run: a batch of ${stages.join(', ')} did not start: ${started.code}`)
+    return 'refused'
+  }
+
+  /** The batch of the step: started, waited for, or the end of the run when refused. */
+  function begin(
+    state: FullRunState,
+    stages: string[],
+    place: (batchId: number) => FullRunState
+  ): FullRunState {
+    const started = startBatch(state, stages)
+    if (started === 'wait') return state
+    return started === 'refused' ? ended(state, 'failed') : place(started)
   }
 
   /** What a batch that ended against the run's will means for it. */
@@ -154,8 +168,12 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
   function advanceStems(state: FullRunState): FullRunState {
     if (state.stemsDone) return state
     if (state.stemsBatchId === null) {
-      const batchId = startBatch(state, [STEMS_STAGE])
-      return batchId === null ? state : { ...state, stemsBatchId: batchId }
+      const started = startBatch(state, [STEMS_STAGE])
+      if (started === 'wait') return state
+      // Without stems the cues take what stems there are; the run goes on.
+      return started === 'refused'
+        ? { ...state, stemsDone: true }
+        : { ...state, stemsBatchId: started }
     }
     const status = dependencies.batchStatus(state.stemsBatchId)
     if (status === 'computing') return state
@@ -181,8 +199,7 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
       case 'features': {
         // Only measures: what the calibration rates. Given up once computed.
         if (state.batchId === null) {
-          const batchId = startBatch(state, [ENERGY_FEATURES_STAGE])
-          return batchId === null ? state : { ...state, batchId }
+          return begin(state, [ENERGY_FEATURES_STAGE], (batchId) => ({ ...state, batchId }))
         }
         if (status === 'computing') return state
         if (status === 'preview') dependencies.discardBatch(state.batchId)
@@ -194,8 +211,11 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
         return dependencies.hasEnergyModel() ? enter(state, 'compute') : state
       case 'compute': {
         if (state.batchId === null) {
-          const batchId = startBatch(state, dependencies.computeStages())
-          return batchId === null ? state : { ...state, batchId, mainBatchId: batchId }
+          return begin(state, dependencies.computeStages(), (batchId) => ({
+            ...state,
+            batchId,
+            mainBatchId: batchId
+          }))
         }
         if (status === 'computing') return state
         // Approved between two looks, it may be past its preview already.
@@ -227,8 +247,7 @@ export function createFullRun(dependencies: FullRunDependencies): FullRun {
         const withStems = advanceStems(state)
         if (!withStems.stemsDone) return withStems
         if (withStems.batchId === null) {
-          const batchId = startBatch(withStems, [CUES_STAGE])
-          return batchId === null ? withStems : { ...withStems, batchId }
+          return begin(withStems, [CUES_STAGE], (batchId) => ({ ...withStems, batchId }))
         }
         if (status === 'computing' || status === 'preview' || status === 'applying') {
           return withStems

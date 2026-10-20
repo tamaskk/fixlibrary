@@ -3,6 +3,8 @@ import { LibraryTable } from '@/components/features/library/LibraryTable'
 import { LibraryToolbar } from '@/components/features/library/LibraryToolbar'
 import { ScanProgressPanel } from '@/components/features/library/ScanProgressPanel'
 import { ScanResult } from '@/components/features/library/ScanResult'
+import { FullRunPanel } from '@/components/features/full-run/FullRunPanel'
+import { FullRunStart } from '@/components/features/full-run/FullRunStart'
 import { AddToPlaylist } from '@/components/features/library/AddToPlaylist'
 import { SelectionBar } from '@/components/features/library/SelectionBar'
 import { RunPanel } from '@/components/features/pipeline/RunPanel'
@@ -90,9 +92,15 @@ export function Library(): React.JSX.Element {
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-h1">Könyvtár</h1>
         {hasTracks && (
-          <Button variant="secondary" loading={scanning} onClick={() => scan()}>
-            Újraolvasás
-          </Button>
+          <div className="flex items-center gap-2">
+            <FullRunStart
+              selectedIds={selectedInOrder(selection, tracks?.map(({ id }) => id) ?? [])}
+              libraryCount={ready?.trackCount ?? 0}
+            />
+            <Button variant="secondary" loading={scanning} onClick={() => scan()}>
+              Újraolvasás
+            </Button>
+          </div>
         )}
       </div>
 
@@ -112,6 +120,7 @@ export function Library(): React.JSX.Element {
 
       {ready !== null && (
         <>
+          <FullRunPanel />
           {runProgress !== null && (
             <RunPanel
               progress={runProgress}
