@@ -332,6 +332,19 @@ describe('the lookup stage', () => {
     })
   })
 
+  it('searches without the id a download left in the title', async () => {
+    // Arrange
+    const { stage, requests } = lookupOver([RECORDING_ANSWER_AS_SEARCH()], {})
+
+    // Act
+    await stage.run(context(), { ...track, title: `${track.title} [jruTD9VcUKE]` })
+
+    // Assert
+    expect(new URL(requests[0]?.url ?? '').searchParams.get('query')).toBe(
+      'recording:"around the world" AND artist:"daft punk"'
+    )
+  })
+
   it('keeps the tags of a track nobody knows, names them as ID3, and flags the row', async () => {
     // Arrange
     const { stage } = lookupOver([{ body: { recordings: [] } }, { body: { results: [] } }], {

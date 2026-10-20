@@ -74,6 +74,11 @@ export function removeJunk(given: string): string {
   return tidy(withoutBrackets.replace(JUNK_ADDRESS, ' '))
 }
 
+/** A name without junk, or null when nothing else was in it. */
+export function withoutJunk(name: string | null): string | null {
+  return name === null ? null : orNull(removeJunk(name))
+}
+
 /**
  * What a file name says of its track, by the usual patterns: `Artist - Title`,
  * `01. Artist - Title`, `Artist_-_Title`. Without a dash the whole name is the title.

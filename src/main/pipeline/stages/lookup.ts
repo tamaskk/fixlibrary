@@ -9,6 +9,7 @@ import { AppError } from '@shared/errors'
 import type { Proposal } from '@shared/preview'
 import { STAGE_TIMEOUTS_MS } from '@shared/timeouts'
 import { FINGERPRINT_STAGE, keptFingerprint } from './fingerprint'
+import { withoutJunk } from '../naming'
 import type { Stage, StageContext, StageResult } from './stage'
 
 export const LOOKUP_STAGE = 'lookup'
@@ -66,9 +67,10 @@ export function createLookupStage(dependencies: LookupStageDependencies): Stage 
       {
         fingerprint: keptFingerprint(cache, track),
         durationS: track.durationMs === null ? null : track.durationMs / 1000,
-        artist: track.artist,
-        title: track.title,
-        mix: track.mix,
+        // The leftovers of a download (`[jruTD9VcUKE]`) would find nothing.
+        artist: withoutJunk(track.artist),
+        title: withoutJunk(track.title),
+        mix: withoutJunk(track.mix),
         fileName: basename(track.path)
       },
       clients,
