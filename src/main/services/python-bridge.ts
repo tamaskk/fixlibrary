@@ -107,7 +107,9 @@ interface PendingCall {
 }
 
 export function createPythonBridge(options: PythonBridgeOptions): PythonBridge {
-  const args = options.args ?? ['-m', 'fixlib_py.server']
+  // Neither the user's own site-packages (`-s`) nor the working folder (`-P`) come before
+  // the runtime's locked packages: a standalone Python reads both unless told not to.
+  const args = options.args ?? ['-s', '-P', '-m', 'fixlib_py.server']
   const restartDelaysMs = options.restartDelaysMs ?? DEFAULT_RESTART_DELAYS_MS
   const maxRestarts = options.maxRestarts ?? DEFAULT_MAX_RESTARTS
   const shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS

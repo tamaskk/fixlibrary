@@ -4,9 +4,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'fs'
 import { tmpdir } from 'os'
@@ -123,6 +125,67 @@ describe('prepareRuntime', () => {
     expect(result).toEqual({ ok: false, code: 'TOOL_MISSING' })
     expect(states.at(-1)).toEqual({ status: 'failed', fraction: null })
     expect(existsSync(join(baseDir, '5'))).toBe(false)
+    expect(readdirSync(baseDir)).toEqual([])
+  })
+
+  it('refuses an archive of another size, and one that tar cannot read, leaving nothing', async () => {
+    // Arrange
+    packRuntime(6)
+    const manifest = readManifest(bundleDir)
+    writeFileSync(
+      join(bundleDir, 'python-runtime.json'),
+      JSON.stringify({ ...manifest, size: (manifest?.size ?? 0) + 1 })
+    )
+    const otherSize = await prepareRuntime({ bundleDir, baseDir }, () => undefined)
+    // Not a gzip at all, with a manifest that matches it.
+    const garbage = Buffer.from('this is no archive')
+    writeFileSync(join(bundleDir, 'python-runtime-6.tar.gz'), garbage)
+    writeFileSync(
+      join(bundleDir, 'python-runtime.json'),
+      JSON.stringify({
+        ...manifest,
+        sha256: createHash('sha256').update(garbage).digest('hex'),
+        size: garbage.length
+      })
+    )
+
+    // Act
+    const unreadable = await prepareRuntime({ bundleDir, baseDir }, () => undefined)
+
+    // Assert
+    expect(otherSize).toEqual({ ok: false, code: 'TOOL_MISSING' })
+    expect(unreadable).toEqual({ ok: false, code: 'TOOL_MISSING' })
+    expect(readdirSync(baseDir)).toEqual([])
+  })
+
+  it('unpacks again an archive rebuilt under the same version', async () => {
+    // Arrange
+    packRuntime(7, 'first build')
+    await prepareRuntime({ bundleDir, baseDir }, () => undefined)
+    packRuntime(7, 'second build')
+
+    // Act
+    await prepareRuntime({ bundleDir, baseDir }, () => undefined)
+
+    // Assert
+    expect(readFileSync(runtimePaths(baseDir, 7).python, 'utf8')).toBe('second build')
+  })
+
+  it('removes a link named like a version, not what it points to', async () => {
+    // Arrange
+    packRuntime(8)
+    const outside = join(folder, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'keep.txt'), 'mine')
+    mkdirSync(baseDir, { recursive: true })
+    symlinkSync(outside, join(baseDir, '3'))
+
+    // Act
+    await prepareRuntime({ bundleDir, baseDir }, () => undefined)
+
+    // Assert
+    expect(existsSync(join(baseDir, '3'))).toBe(false)
+    expect(readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('mine')
   })
 
   it('says the runtime is missing when the app holds no manifest', async () => {

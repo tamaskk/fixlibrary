@@ -117,6 +117,12 @@ let fullRunActive: () => boolean = () => false
 let runtimeState: PythonRuntimeState = { status: 'checking', fraction: null }
 // Resolves once the sidecar was started, or could not be: the startup work waits for it.
 let pythonReady: Promise<void> = Promise.resolve()
+// The unpacking under way, so that a retry cannot start a second one.
+let preparing: Promise<void> | null = null
+// Quitting stops an unpacking: tar does not outlive the app.
+const runtimeAbort = new AbortController()
+// The startup work, when the runtime was not ready for it; done after a retry.
+let afterRuntimeReady: (() => Promise<void>) | null = null
 const sendRuntimeState = createRuntimeStateSender()
 
 function setRuntimeState(state: PythonRuntimeState): void {
@@ -302,6 +308,8 @@ function startBridge(runtime: {
   torchHome: string
 }): void {
   const locations = toolLocations()
+  // A second start never leaves the first sidecar behind.
+  void pythonBridge?.stop()
   pythonBridge = createPythonBridge({
     pythonPath: runtime.python,
     cwd: runtime.cwd,
@@ -327,16 +335,37 @@ function startBridge(runtime: {
 
 /** The packaged app: the runtime unpacked first when this version has none yet. */
 async function prepareRuntimeAndStart(): Promise<void> {
-  const prepared = await prepareRuntime(runtimeFolders(), setRuntimeState)
-  if (prepared.ok) {
+  try {
+    const prepared = await prepareRuntime(runtimeFolders(), setRuntimeState, runtimeAbort.signal)
+    if (!prepared.ok) return
     const { python, dir, modelsDir, torchHome } = prepared.value
     startBridge({ python, cwd: dir, modelsDir, torchHome })
+  } catch (error) {
+    logger.error('The Python sidecar could not be started', error)
+    setRuntimeState({ status: 'failed', fraction: null })
   }
+}
+
+/** One preparation at a time; a retry while one runs, or after one worked, does nothing. */
+function retryRuntime(): void {
+  if (preparing !== null || runtimeState.status !== 'failed') return
+  setRuntimeState({ status: 'checking', fraction: null })
+  preparing = prepareRuntimeAndStart().finally(() => {
+    preparing = null
+    if (runtimeState.status !== 'ready') return
+    // The startup work that waited for the runtime is done now.
+    const waiting = afterRuntimeReady
+    afterRuntimeReady = null
+    void waiting?.()
+  })
 }
 
 function startPythonSidecar(): void {
   if (app.isPackaged) {
-    pythonReady = prepareRuntimeAndStart()
+    preparing = prepareRuntimeAndStart().finally(() => {
+      preparing = null
+    })
+    pythonReady = preparing
     return
   }
   const pythonDir = join(app.getAppPath(), 'python')
@@ -715,10 +744,8 @@ function registerLibraryAndPipeline(): void {
   // the last run, then a run that was interrupted goes on. Without a
   // chosen folder there is nothing to scan, and a drive that is not connected ends
   // the scan at once.
-  void (async () => {
+  const startupWork = async (): Promise<void> => {
     try {
-      // The scan reads tags through the sidecar, which a first start unpacks first.
-      await pythonReady
       await batchFiles.removeTempFiles()
       if (readSettings(db).library.rootFolder !== null) {
         const result = await scanner.scan()
@@ -739,6 +766,14 @@ function registerLibraryAndPipeline(): void {
       takeUpRun()
       inboxWatcher?.start()
     }
+  }
+  void (async () => {
+    // The scan reads tags through the sidecar, which a first start unpacks first.
+    await pythonReady
+    // Without it the scan would take every file for unreadable and the run would fail:
+    // both wait for a runtime that a retry makes ready.
+    if (runtimeState.status === 'ready') await startupWork()
+    else afterRuntimeReady = startupWork
   })()
 }
 
@@ -846,9 +881,7 @@ app.whenReady().then(() => {
   registerAppIpc({ audioReadToken })
   registerPythonRuntimeIpc({
     state: () => runtimeState,
-    retry: () => {
-      if (runtimeState.status === 'failed') pythonReady = prepareRuntimeAndStart()
-    }
+    retry: retryRuntime
   })
   registerSettingsAndSystemIpc()
   startPythonSidecar()
@@ -865,6 +898,7 @@ app.whenReady().then(() => {
  * keep the next from running.
  */
 function tellWorkToStop(): void {
+  runtimeAbort.abort()
   try {
     // The running jobs are told to stop and put back in line, so the next start goes
     // on with the run. The orchestrator stays known until the file work has ended:

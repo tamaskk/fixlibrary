@@ -25,7 +25,7 @@ echo "Checking the signatures"
 bad=0
 checked=0
 while IFS= read -r -d '' file; do
-  if file -b "${file}" | grep -q 'Mach-O'; then
+  if [[ "$(file -b "${file}")" == *Mach-O* ]]; then
     checked=$((checked + 1))
     if ! codesign -v "${file}" 2>/dev/null; then
       echo "  not valid: ${file#"${RUNTIME}/"}" >&2
@@ -46,8 +46,10 @@ FIXLIB_FFMPEG="${FFMPEG}" \
   "${PYTHON}" -I - "${PYTHON}" "${WORK}/loop.wav" <<'PY'
 import json
 import os
+import select
 import subprocess
 import sys
+import time
 
 import numpy as np
 import soundfile
@@ -59,19 +61,26 @@ t = np.arange(30 * rate) / rate
 kick = np.sin(2 * np.pi * 55 * t) * np.exp(-12 * (t % 0.5))
 chord = sum(np.sin(2 * np.pi * f * t) for f in (220.0, 261.63, 329.63)) * 0.05
 soundfile.write(sample, (0.6 * kick + chord).astype(np.float32), rate)
+# As the app starts it (python-bridge.ts): no user site-packages, no working folder.
+errors = open(os.path.join(os.path.dirname(sample), "sidecar.log"), "w")
 server = subprocess.Popen(
-    [python, "-I", "-m", "fixlib_py.server"],
+    [python, "-s", "-P", "-m", "fixlib_py.server"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
-    stderr=subprocess.DEVNULL,
+    stderr=errors,
     text=True,
     cwd=os.path.dirname(sample),
 )
 
-def call(request_id, method, params):
+def call(request_id, method, params, timeout_s=120):
     server.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
     server.stdin.flush()
+    deadline = time.monotonic() + timeout_s
     while True:
+        # A sidecar that hangs fails the smoke instead of holding it.
+        ready, _, _ = select.select([server.stdout], [], [], max(0, deadline - time.monotonic()))
+        if not ready:
+            raise TimeoutError(f"{method} gave no answer in {timeout_s} s")
         answer = json.loads(server.stdout.readline())
         if answer.get("id") == request_id:
             return answer
@@ -83,6 +92,10 @@ try:
     measured = call(2, "analysis.bpm_key", {"path": sample, "jobId": "smoke", "bpmMin": 70, "bpmMax": 180})
     assert "result" in measured, measured
     print("  analysis.bpm_key:", measured["result"])
+except Exception:
+    errors.flush()
+    sys.stderr.write(open(errors.name).read()[-4000:])
+    raise
 finally:
     server.stdin.close()
     server.wait(timeout=30)

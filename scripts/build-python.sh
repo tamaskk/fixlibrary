@@ -29,26 +29,38 @@ PYTHON="${STAGE}/bin/python3"
 
 echo "Installing the locked dependencies and fixlib_py"
 REQUIREMENTS="$(mktemp)"
-trap 'rm -f "${REQUIREMENTS}"' EXIT
+WHEELS="$(mktemp -d)"
+trap 'rm -rf "${REQUIREMENTS}" "${WHEELS}"' EXIT
 # The lock as it is, with its hashes, without the dev group and the project itself:
 # a wheel that is not the one locked is refused.
 (cd "${PYTHON_DIR}" && uv export --frozen --no-dev --no-emit-project --format requirements.txt) >"${REQUIREMENTS}"
-uv pip install --python "${PYTHON}" --break-system-packages --no-deps --require-hashes -r "${REQUIREMENTS}"
-uv pip install --python "${PYTHON}" --break-system-packages --no-deps "${PYTHON_DIR}"
+# Wheels only: an sdist would fetch and run build tools that no hash covers.
+uv pip install --python "${PYTHON}" --break-system-packages --no-deps --no-build \
+  --require-hashes -r "${REQUIREMENTS}"
+# fixlib_py by uv's own build backend, offline: nothing is fetched to build it.
+(cd "${PYTHON_DIR}" && uv build --wheel --offline --no-cache --out-dir "${WHEELS}")
+uv pip install --python "${PYTHON}" --break-system-packages --no-deps --offline "${WHEELS}"/fixlib_py-*.whl
 
 echo "Adding the Demucs weights"
 mkdir -p "${STAGE}/models" "${STAGE}/torch-home"
 cp -R "${MODELS}" "${STAGE}/models/htdemucs"
 
 echo "Compiling the Python files"
-# A few test files of the packages are not valid Python 3.11; they stay uncompiled.
-"${PYTHON}" -m compileall -q -j 0 "${STAGE}/lib" >/dev/null || true
+SITE="${STAGE}/lib/python3.11/site-packages"
+# Our own code must compile.
+"${PYTHON}" -m compileall -q "${SITE}/fixlib_py"
+# A few test files of the packages are not valid Python 3.11; they stay uncompiled,
+# and are named in the log.
+if ! "${PYTHON}" -m compileall -q -j 0 "${STAGE}/lib" >"${OUT_DIR}/compileall.log" 2>&1; then
+  echo "  some files of the packages did not compile; see build/compileall.log"
+fi
 
 echo "Signing every Mach-O file ad hoc"
 signed=0
 while IFS= read -r -d '' file; do
-  if file -b "${file}" | grep -q 'Mach-O'; then
-    codesign --force --sign - "${file}" 2>/dev/null
+  # A test of the string, not a pipe: grep -q could end `file` early under pipefail.
+  if [[ "$(file -b "${file}")" == *Mach-O* ]]; then
+    codesign --force --sign - "${file}"
     signed=$((signed + 1))
   fi
 done < <(find "${STAGE}" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0)

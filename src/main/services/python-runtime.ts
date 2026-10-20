@@ -61,37 +61,45 @@ export function runtimePaths(baseDir: string, version: number): RuntimePaths {
   }
 }
 
-function isReady(paths: RuntimePaths): boolean {
-  return existsSync(join(paths.dir, READY_NAME)) && existsSync(paths.python)
-}
-
-/** Reads a file through, hashing it, and says how far it got. */
-async function sha256Of(path: string, onBytes: (bytes: number) => void): Promise<string> {
-  const hash = createHash('sha256')
-  let read = 0
-  for await (const chunk of createReadStream(path)) {
-    hash.update(chunk as Buffer)
-    read += (chunk as Buffer).length
-    onBytes(read)
+/** Ready when unpacked to its end from this very archive: a rebuilt one is unpacked again. */
+function isReady(paths: RuntimePaths, sha256: string): boolean {
+  try {
+    return (
+      readFileSync(join(paths.dir, READY_NAME), 'utf8').trim() === sha256 &&
+      existsSync(paths.python)
+    )
+  } catch {
+    return false
   }
-  return hash.digest('hex')
 }
 
-/** Unpacks the archive into a folder, feeding tar from a stream so the bytes read can be counted. */
-function unpack(archive: string, into: string, onBytes: (bytes: number) => void): Promise<void> {
+/**
+ * Unpacks the archive into a folder and hashes it in the same read, so what is unpacked
+ * is what was hashed. Tar is fed from a stream, so the bytes read give the progress.
+ * Resolves with the SHA-256 of what tar took; the caller trusts nothing before it matches.
+ */
+function unpack(
+  archive: string,
+  into: string,
+  onBytes: (bytes: number) => void,
+  signal: AbortSignal | undefined
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    // bsdtar refuses absolute paths and `..` in an archive unless told otherwise.
+    // bsdtar strips a leading `/`, and refuses `..` and writing through a link.
     const tar = spawn(TAR, ['-xzf', '-', '-C', into], {
       env: {},
-      stdio: ['pipe', 'ignore', 'pipe']
+      stdio: ['pipe', 'ignore', 'pipe'],
+      signal
     })
     const errors: string[] = []
     tar.stderr.on('data', (data: Buffer) => {
       if (errors.length < 20) errors.push(data.toString('utf8').slice(0, 500))
     })
+    const hash = createHash('sha256')
     let read = 0
     const input = createReadStream(archive)
     input.on('data', (chunk) => {
+      hash.update(chunk as Buffer)
       read += (chunk as Buffer).length
       onBytes(read)
     })
@@ -99,16 +107,21 @@ function unpack(archive: string, into: string, onBytes: (bytes: number) => void)
       tar.kill()
       reject(error)
     })
+    // A tar that stops early closes its input: what it said is reported on `close`.
+    tar.stdin.on('error', () => input.destroy())
     input.pipe(tar.stdin)
     tar.on('error', reject)
     tar.on('close', (code) => {
-      if (code === 0) resolve()
+      if (code === 0 && input.readableEnded) resolve(hash.digest('hex'))
       else reject(new Error(`tar ended with ${code}: ${errors.join(' ').trim()}`))
     })
   })
 }
 
-/** Removes every version but `keep`, and what an unpacking that stopped left behind. */
+/**
+ * Removes every version but `keep`, and what an unpacking that stopped left behind.
+ * One app runs at a time (the single-instance lock), so no other one is unpacking.
+ */
 async function removeOthers(baseDir: string, keep: number): Promise<void> {
   for (const name of await readdir(baseDir).catch(() => [] as string[])) {
     if (name === String(keep)) continue
@@ -126,7 +139,9 @@ async function removeOthers(baseDir: string, keep: number): Promise<void> {
  */
 export async function prepareRuntime(
   folders: RuntimeFolders,
-  onState: (state: PythonRuntimeState) => void
+  onState: (state: PythonRuntimeState) => void,
+  /** Quitting: tar is stopped, and nothing is left but a folder the next start removes. */
+  signal?: AbortSignal
 ): Promise<Result<RuntimePaths>> {
   const manifest = readManifest(folders.bundleDir)
   if (manifest === null) {
@@ -135,7 +150,7 @@ export async function prepareRuntime(
     return { ok: false, code: 'TOOL_MISSING' }
   }
   const paths = runtimePaths(folders.baseDir, manifest.version)
-  if (isReady(paths)) {
+  if (isReady(paths, manifest.sha256)) {
     await removeOthers(folders.baseDir, manifest.version)
     onState({ status: 'ready', fraction: 1 })
     return { ok: true, value: paths }
@@ -149,16 +164,15 @@ export async function prepareRuntime(
   try {
     if ((await stat(archive)).size !== manifest.size)
       throw new Error('the archive has another size')
-    // A tenth of the way is the check, the rest the unpacking.
     onState({ status: 'unpacking', fraction: 0 })
-    const hash = await sha256Of(archive, (bytes) =>
-      onState({ status: 'unpacking', fraction: (0.1 * bytes) / manifest.size })
+    await mkdir(work, { recursive: true })
+    const hash = await unpack(
+      archive,
+      work,
+      (bytes) => onState({ status: 'unpacking', fraction: bytes / manifest.size }),
+      signal
     )
     if (hash !== manifest.sha256) throw new Error('the archive does not match its SHA-256')
-    await mkdir(work, { recursive: true })
-    await unpack(archive, work, (bytes) =>
-      onState({ status: 'unpacking', fraction: 0.1 + (0.9 * bytes) / manifest.size })
-    )
     const unpacked = join(work, 'python-runtime')
     if (!existsSync(join(unpacked, 'bin/python3')))
       throw new Error('the archive holds no interpreter')
