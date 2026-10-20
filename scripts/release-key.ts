@@ -8,6 +8,11 @@
 //       writes manifest.json naming the DMGs and the runtime archive with their SHA-256
 //   npm run release:key -- sign <release folder> <private key path>
 //       writes manifest.json.sig next to manifest.json, and checks it with the app's key
+//   npm run release:publish -- <tag> [private key path]
+//       signs the manifest of the draft release the workflow made (T-044), after checking
+//       its build attestation, its tag on main, and that the release holds exactly the files
+//       it names, byte for byte; uploads the signature and publishes it. A prerelease is
+//       published unsigned.
 import {
   createHash,
   createPrivateKey,
@@ -16,8 +21,25 @@ import {
   sign,
   verify
 } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import {
+  MANIFEST_NAME,
+  MANIFEST_SIGNATURE_NAME,
+  RELEASE_REPOSITORY,
+  releaseFileNames,
+  releaseManifestSchema
+} from '../src/shared/release'
 
 // npm runs it from the repository root.
 const KEY_FILE = join(process.cwd(), 'src/main/services/release-key.ts')
@@ -102,6 +124,116 @@ if (command === 'keygen') {
   }
   writeFileSync(join(folder, 'manifest.json.sig'), `${signature.toString('base64')}\n`)
   console.log(`Wrote ${join(folder, 'manifest.json.sig')}`)
+} else if (command === 'publish') {
+  const [tag, keyPath] = args
+  const privatePath = keyPath ?? join(homedir(), '.fixlibrary/release-signing-key.pem')
+  const match = /^v(\d+\.\d+\.\d+)(-[A-Za-z0-9.]+)?$/.exec(tag ?? '')
+  if (!match || tag === undefined) fail('usage: publish <tag> [private key path]')
+  const prerelease = match[2] !== undefined
+  const gh = (ghArgs: string[]): string =>
+    execFileSync('gh', [...ghArgs, '--repo', RELEASE_REPOSITORY], { encoding: 'utf8' })
+  // The files of the release as GitHub holds them, each with the SHA-256 GitHub computed.
+  const viewRelease = (): {
+    isDraft: boolean
+    isPrerelease: boolean
+    assets: { name: string; size: number; digest: string | null }[]
+  } => JSON.parse(gh(['release', 'view', tag, '--json', 'isDraft,isPrerelease,assets']))
+  const release = viewRelease()
+  if (!release.isDraft) fail(`${tag} is published already`)
+  if (release.isPrerelease !== prerelease) fail(`${tag} is not marked as its tag says`)
+  // The tag is the owner's commit on main, and the one the workflow built.
+  execFileSync('git', ['fetch', '--quiet', 'origin', 'main', `refs/tags/${tag}:refs/tags/${tag}`])
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', `${tag}^{commit}`, 'origin/main'])
+  } catch {
+    fail(`${tag} names a commit that is not on main`)
+  }
+  const runtimeVersion = Number(
+    execFileSync('git', ['show', `${tag}:python/runtime-version.txt`], { encoding: 'utf8' }).trim()
+  )
+  const folder = mkdtempSync(join(tmpdir(), 'fixlibrary-release-'))
+  try {
+    gh(['release', 'download', tag, '--pattern', MANIFEST_NAME, '--dir', folder])
+    const manifestPath = join(folder, MANIFEST_NAME)
+    // Built by this repository's release workflow from this tag, not uploaded by hand.
+    execFileSync(
+      'gh',
+      [
+        'attestation',
+        'verify',
+        manifestPath,
+        '--repo',
+        RELEASE_REPOSITORY,
+        '--signer-workflow',
+        `${RELEASE_REPOSITORY}/.github/workflows/release.yml`,
+        '--source-ref',
+        `refs/tags/${tag}`
+      ],
+      { stdio: 'inherit' }
+    )
+    const bytes = readFileSync(manifestPath)
+    const parsed = releaseManifestSchema.safeParse(JSON.parse(bytes.toString('utf8')))
+    if (!parsed.success) fail(`the manifest is not valid: ${parsed.error.message}`)
+    const manifest = parsed.data
+    if (manifest.appVersion !== match[1])
+      fail(`the manifest names ${manifest.appVersion}, not ${tag}`)
+    if (manifest.runtimeVersion !== runtimeVersion) {
+      fail(`the manifest names runtime ${manifest.runtimeVersion}, the tag ${runtimeVersion}`)
+    }
+    const names = Object.values(releaseFileNames(manifest))
+    if (
+      manifest.files.length !== names.length ||
+      !names.every((name) => manifest.files.some((file) => file.name === name))
+    ) {
+      fail(`the manifest must name exactly ${names.join(', ')}`)
+    }
+    const sha256Of = (data: Buffer | string): string =>
+      createHash('sha256').update(data).digest('hex')
+    // What is signed is what the release holds: every file, byte for byte, and nothing else.
+    const checkAssets = (
+      assets: ReturnType<typeof viewRelease>['assets'],
+      signature: string | null
+    ): void => {
+      const expected = new Map(manifest.files.map((file) => [file.name, file.sha256]))
+      expected.set(MANIFEST_NAME, sha256Of(bytes))
+      if (signature !== null) expected.set(MANIFEST_SIGNATURE_NAME, sha256Of(signature))
+      for (const asset of assets) {
+        const sha256 = expected.get(asset.name)
+        if (sha256 === undefined || asset.digest !== `sha256:${sha256}`) {
+          fail(`the release holds ${asset.name} not as the manifest names it`)
+        }
+      }
+      for (const name of expected.keys()) {
+        if (!assets.some((asset) => asset.name === name)) fail(`the release misses ${name}`)
+      }
+    }
+    // A signature of an earlier, interrupted publish is replaced below; a prerelease has none.
+    checkAssets(
+      release.assets.filter((asset) => prerelease || asset.name !== MANIFEST_SIGNATURE_NAME),
+      null
+    )
+    // A prerelease is never signed: its manifest names the version of the release to come,
+    // and its signature would make a test build installable as that release.
+    let signatureText: string | null = null
+    if (!prerelease) {
+      const signature = sign(null, bytes, createPrivateKey(readFileSync(privatePath)))
+      if (!verify(null, bytes, createPublicKey(appPublicKey()), signature)) {
+        fail('the private key is not the one the app trusts')
+      }
+      signatureText = `${signature.toString('base64')}\n`
+      const signaturePath = join(folder, MANIFEST_SIGNATURE_NAME)
+      writeFileSync(signaturePath, signatureText)
+      gh(['release', 'upload', tag, signaturePath, '--clobber'])
+    }
+    gh(['release', 'edit', tag, '--draft=false'])
+    // The release as published: nothing was swapped while it was being signed.
+    checkAssets(viewRelease().assets, signatureText)
+    console.log(
+      `${tag} is ${prerelease ? 'published unsigned (prerelease)' : 'signed and published'}`
+    )
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
 } else {
-  fail('usage: keygen | manifest | sign (see the top of this file)')
+  fail('usage: keygen | manifest | sign | publish (see the top of this file)')
 }

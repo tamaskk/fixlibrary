@@ -44,6 +44,16 @@ npm run release:key -- manifest release/ <app version> <runtime version>
 npm run release:key -- sign release/ ~/.fixlibrary/release-signing-key.pem
 ```
 
+To release, set `version` in `package.json`, merge, and push the tag `v<version>` (a tag `v<version>-<suffix>` makes a prerelease). The workflow tests and builds everything and creates a draft release; then sign and publish it from this machine:
+
+```bash
+npm run release:publish -- v<version>
+```
+
+It publishes only a draft whose `manifest.json` carries the build attestation of this repository's workflow for that tag, whose tag is on `main`, and whose files are exactly the ones the manifest names, byte for byte (GitHub's digests). A prerelease is published unsigned, so the updater can never install it. If the workflow fails after it created the draft, delete the draft (`gh release delete <tag>`) and re-run the workflow.
+
+On GitHub, keep a tag ruleset on `refs/tags/v*` that lets only the owner create, move or delete these tags, protect `main` (pull requests only, no force push), and turn on immutable releases where available.
+
 A build without the key never updates itself. Replacing the key (`--force`) leaves every installed app unable to trust new releases until it is updated by hand.
 
 ## Install
