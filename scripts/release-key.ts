@@ -16,8 +16,8 @@ import {
   sign,
   verify
 } from 'node:crypto'
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 // npm runs it from the repository root.
 const KEY_FILE = join(process.cwd(), 'src/main/services/release-key.ts')
@@ -52,6 +52,8 @@ if (command === 'keygen') {
     )
   }
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  // Its folder is made for it, readable by the owner only.
+  mkdirSync(dirname(privatePath), { recursive: true, mode: 0o700 })
   writeFileSync(privatePath, privateKey.export({ type: 'pkcs8', format: 'pem' }), {
     mode: 0o600,
     flag: 'wx'
