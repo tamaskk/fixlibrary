@@ -10,7 +10,12 @@ export const JUNK_BRACKET_CONTENTS: readonly RegExp[] = [
   /^official\s+(?:music\s+|lyrics?\s+)?(?:video|audio|visuali[sz]er)$/i,
   /^(?:visuali[sz]er|lyrics?\s+video|lyrics|audio|video|premiere)$/i,
   /^(?:hd|hq|4k|\d{2,4}\s?kbps|out\s+now)$/i,
-  /^free\s+(?:download|dl)$/i
+  /^free\s+(?:download|dl)$/i,
+  // The id yt-dlp puts in a file name: eleven characters of a YouTube id with a digit
+  // or a capital after a small letter, so an eleven-letter word stays.
+  /^(?=[\w-]*(?:\d|[a-z][A-Z]))[\w-]{11}$/,
+  // A SoundCloud or Bandcamp id: eight digits or more, longer than any year.
+  /^\d{8,}$/
 ]
 
 /** True for the content of a bracketed part that is thrown out whole. */

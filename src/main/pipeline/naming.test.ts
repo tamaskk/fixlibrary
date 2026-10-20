@@ -563,6 +563,28 @@ describe('isJunkBracket', () => {
 })
 
 describe('removeJunk', () => {
+  it('takes out the id a download site left in brackets', () => {
+    // Act
+    const youTube = removeJunk('Menealo [jruTD9VcUKE]')
+    const mixedCase = removeJunk('1,2,3 [GsTVHVlZlNo]')
+    const soundCloud = removeJunk('wtf im gonna do with lemons [2394088713]')
+
+    // Assert
+    expect([youTube, mixedCase, soundCloud]).toEqual([
+      'Menealo',
+      '1,2,3',
+      'wtf im gonna do with lemons'
+    ])
+  })
+
+  it('keeps a bracketed word, a year or a catalogue number that only looks like an id', () => {
+    // Act
+    const kept = ['Song [Underground]', 'Song [2026]', 'Song [Remastered]', 'Song (Instrumental)']
+
+    // Assert
+    expect(kept.map(removeJunk)).toEqual(kept)
+  })
+
   it('leaves no empty brackets, double spaces or dangling dashes behind', () => {
     expect(removeJunk('Title  (Official Video)  [HD] - ')).toBe('Title')
     expect(removeJunk('( ) Title [ ]')).toBe('Title')

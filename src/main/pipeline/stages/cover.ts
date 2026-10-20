@@ -28,6 +28,7 @@ import { SET_ASIDE_STAGE } from './set-aside'
 import type { Stage, StageContext, StageResult } from './stage'
 import { COVER_STAGE, EMBED_COVER_STAGE, REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
 import { tagsFor, takesTags, WRITE_TAGS_STAGE } from './write-tags'
+import { withoutJunk } from '../naming'
 
 export { COVER_STAGE, EMBED_COVER_STAGE, REDRAW_PLACEHOLDER_STAGE } from './cover-stages'
 
@@ -75,7 +76,8 @@ type Made = { cover: string; thumb: string } | { unreachable: boolean }
 function textOf(proposal: Proposal, field: PreviewField, own: PreviewValue): string | null {
   const proposed = proposal.fields?.[field]
   const value = proposed === undefined ? own : proposed.value
-  return typeof value === 'string' && value.trim() !== '' ? value : null
+  // The leftovers of a download (`[jruTD9VcUKE]`) would find nothing.
+  return typeof value === 'string' ? withoutJunk(value) : null
 }
 
 function queryOf(track: Track, proposal: Proposal): CoverQuery {

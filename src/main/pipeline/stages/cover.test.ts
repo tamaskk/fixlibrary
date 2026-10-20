@@ -261,6 +261,21 @@ describe('the cover stage', () => {
     expect(itunes.asked).toEqual(['Daft Punk|Around the World'])
   })
 
+  it('looks for the track without the id a download left in its title', async () => {
+    // Arrange
+    const itunes = itunesWith([SONG])
+    const { stage } = stageOver([picture], itunes)
+
+    // Act
+    await stage.run(
+      context(),
+      trackWith({ artist: 'Daft Punk', title: 'Around the World [jruTD9VcUKE]' })
+    )
+
+    // Assert
+    expect(itunes.asked).toEqual(['Daft Punk|Around the World'])
+  })
+
   it('goes on to the Cover Art Archive when the sidecar makes no cover of the iTunes picture', async () => {
     // Arrange
     refused.add(`${stemOf(ARTWORK)}.download`)
