@@ -101,6 +101,11 @@ const api: FixLibraryApi = {
     onlineDownload: (playlistId, url, confirmed) =>
       ipcRenderer.invoke(IPC_CHANNELS.playlistsOnlineDownload, playlistId, url, confirmed)
   },
+  fullRun: {
+    view: () => ipcRenderer.invoke(IPC_CHANNELS.fullRunView),
+    start: (request) => ipcRenderer.invoke(IPC_CHANNELS.fullRunStart, request),
+    stop: () => ipcRenderer.invoke(IPC_CHANNELS.fullRunStop)
+  },
   generator: {
     parsePrompt: (prompt) => ipcRenderer.invoke(IPC_CHANNELS.generatorParsePrompt, prompt),
     generate: (params) => ipcRenderer.invoke(IPC_CHANNELS.generatorGenerate, params),

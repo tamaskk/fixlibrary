@@ -16,6 +16,7 @@ import type {
 } from './download'
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
+import type { FullRunStart, FullRunView } from './full-run'
 import type {
   AlternativesRequest,
   GapTarget,
@@ -144,6 +145,9 @@ export const IPC_CHANNELS = {
   playlistsOnlineLast: 'playlists:onlineLast',
   playlistsOnlineRequest: 'playlists:onlineRequest',
   playlistsOnlineDownload: 'playlists:onlineDownload',
+  fullRunView: 'fullRun:view',
+  fullRunStart: 'fullRun:start',
+  fullRunStop: 'fullRun:stop',
   generatorParsePrompt: 'generator:parsePrompt',
   generatorGenerate: 'generator:generate',
   generatorAlternatives: 'generator:alternatives',
@@ -334,6 +338,14 @@ export interface FixLibraryApi {
       url: string,
       confirmed: boolean
     ) => Promise<Result<OnlineDownloadOutcome>>
+  }
+  fullRun: {
+    /** The full run that goes on or ended last, or null when none was started. */
+    view: () => Promise<FullRunView | null>
+    /** Starts one on the selected tracks, or with `trackIds: null` on the whole library. */
+    start: (request: FullRunStart) => Promise<Result<FullRunView>>
+    /** Ends it where it is; the batch of its step is left as it is. */
+    stop: () => Promise<void>
   }
   generator: {
     /** Reads a prompt into the fields it names, and the styles it named that the user has not. */

@@ -11,8 +11,10 @@ import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
 import { registerEnergyIpc } from './ipc/energy'
+import { registerFullRunIpc } from './ipc/full-run'
 import { registerGeneratorIpc } from './ipc/generator'
 import { registerPlaylistsIpc } from './ipc/playlists'
+import { createFullRun, FULL_RUN_TICK_MS } from './pipeline/full-run'
 import { createOnlineRecs, noteInboxTrack, type OnlineRecs } from './pipeline/online-recs'
 import { registerCueEditorIpc } from './ipc/cue-editor'
 import { registerDownloadIpc, sendDownloads } from './ipc/download'
@@ -66,7 +68,9 @@ import { createCoverStore } from './services/covers'
 import { createStemsStore, stemModelInstalled } from './services/stems-store'
 import { AUDIO_SCHEME, createAudioHandler, originOfRendererUrl } from './services/audio-protocol'
 import { createPeaksStore } from './services/peaks-store'
-import { findPreviewBatch } from './db/batches'
+import { countBatchItems, findPreviewBatch, getBatch } from './db/batches'
+import { currentEnergyModel } from './pipeline/energy'
+import { applyWizardAction, readWizardState } from './pipeline/rekordbox-wizard'
 import { findTrackIdByPath, getTrackById, listLibraryTracks } from './db/tracks'
 import { isSetAsidePath } from '@shared/duplicates'
 import { createPythonBridge, type PythonBridge } from './services/python-bridge'
@@ -96,6 +100,9 @@ let claudeService: Claude | null = null
 // Kept so that quitting can stop the downloads that are running.
 let downloads: Downloads | null = null
 let onlineRecs: OnlineRecs | null = null
+// Kept so that quitting can stop the full run looking at its step.
+let fullRunTimer: NodeJS.Timeout | null = null
+let fullRunActive: () => boolean = () => false
 // Kept so that quitting can stop watching the Inbox.
 let inboxWatcher: InboxWatcher | null = null
 // The API keys of the lookup services; read by the stages that ask them.
@@ -574,7 +581,9 @@ function registerLibraryAndPipeline(): void {
       runs.progress() === null &&
       !runs.changingFiles() &&
       !scanner.isRunning() &&
-      findPreviewBatch(db) === undefined,
+      findPreviewBatch(db) === undefined &&
+      // A full run takes its batches one after another; none of the Inbox comes between.
+      !fullRunActive(),
     // The scan makes the files tracks; the run decides which of them it can take.
     process: createInboxBatches({
       scan: async () => (await scanner.scan()).ok,
@@ -607,17 +616,34 @@ function registerLibraryAndPipeline(): void {
       }
     })
   )
-  registerPreviewIpc(
-    createPreview({
-      db,
-      stages,
-      orchestrator: runs,
-      batchFiles,
-      listMountedVolumes,
-      covers: createCoverStore(coversFolder()),
-      python: () => pythonBridge
-    })
-  )
+  const preview = createPreview({
+    db,
+    stages,
+    orchestrator: runs,
+    batchFiles,
+    listMountedVolumes,
+    covers: createCoverStore(coversFolder()),
+    python: () => pythonBridge
+  })
+  registerPreviewIpc(preview)
+  const fullRun = createFullRun({
+    db,
+    libraryTrackIds: () => listLibraryTracks(db, cachedVolumes()).map((track) => track.id),
+    startBatch: (request) => runs.start(request),
+    batchStatus: (batchId) => getBatch(db, batchId)?.status,
+    discardBatch: (batchId) => void preview.discard(batchId),
+    batchCounts: (batchId) => countBatchItems(db, batchId),
+    computeStages: () => inboxStages(functions),
+    hasEnergyModel: () => currentEnergyModel(db) !== null,
+    wizardState: () => readWizardState(db),
+    restartWizard: async () => {
+      await applyWizardAction({ db, environment }, { type: 'restart' })
+    },
+    ready: () => startupDone
+  })
+  fullRunActive = () => fullRun.active()
+  registerFullRunIpc(fullRun)
+  fullRunTimer = setInterval(() => void fullRun.tick(), FULL_RUN_TICK_MS)
 
   // In this order, so that no two of them work on the drive at the same time: what
   // interrupted writes left behind is removed, the tracks of an interrupted batch are
@@ -783,6 +809,7 @@ function tellWorkToStop(): void {
   }
   // It only aborts and sets a flag: nothing in it can throw.
   onlineRecs?.stop()
+  if (fullRunTimer !== null) clearInterval(fullRunTimer)
   try {
     // A download stopped half way leaves only files of the app's own temp folder.
     downloads?.stopAll()
