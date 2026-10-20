@@ -8,6 +8,9 @@
 //       writes manifest.json naming the DMGs and the runtime archive with their SHA-256
 //   npm run release:key -- sign <release folder> <private key path>
 //       writes manifest.json.sig next to manifest.json, and checks it with the app's key
+//   npm run release:publish -- <tag> [private key path]
+//       signs the manifest of the draft release the workflow made (T-044), after checking
+//       that the release holds every file it names, uploads the signature and publishes it
 import {
   createHash,
   createPrivateKey,
@@ -16,7 +19,17 @@ import {
   sign,
   verify
 } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 // npm runs it from the repository root.
@@ -102,6 +115,57 @@ if (command === 'keygen') {
   }
   writeFileSync(join(folder, 'manifest.json.sig'), `${signature.toString('base64')}\n`)
   console.log(`Wrote ${join(folder, 'manifest.json.sig')}`)
+} else if (command === 'publish') {
+  const [tag, keyPath] = args
+  const privatePath = keyPath ?? join(homedir(), '.fixlibrary/release-signing-key.pem')
+  const match = /^v(\d+\.\d+\.\d+)(-[A-Za-z0-9.]+)?$/.exec(tag ?? '')
+  if (!match) fail('usage: publish <tag> [private key path]')
+  // The draft the workflow made: its files as GitHub holds them.
+  const release = JSON.parse(
+    execFileSync('gh', ['release', 'view', tag as string, '--json', 'isDraft,assets'], {
+      encoding: 'utf8'
+    })
+  ) as { isDraft: boolean; assets: { name: string; size: number }[] }
+  if (!release.isDraft) fail(`${tag} is published already`)
+  const folder = mkdtempSync(join(tmpdir(), 'fixlibrary-release-'))
+  try {
+    execFileSync(
+      'gh',
+      ['release', 'download', tag as string, '--pattern', 'manifest.json', '--dir', folder],
+      {
+        stdio: 'inherit'
+      }
+    )
+    const bytes = readFileSync(join(folder, 'manifest.json'))
+    const manifest = JSON.parse(bytes.toString('utf8')) as {
+      appVersion: string
+      files: { name: string; size: number }[]
+    }
+    if (manifest.appVersion !== match?.[1])
+      fail(`the manifest names ${manifest.appVersion}, not ${tag}`)
+    // What is signed is what the release holds: every file, at its size.
+    for (const file of manifest.files) {
+      const asset = release.assets.find((each) => each.name === file.name)
+      if (asset?.size !== file.size)
+        fail(`the release does not hold ${file.name} as the manifest names it`)
+    }
+    const signature = sign(null, bytes, createPrivateKey(readFileSync(privatePath)))
+    if (!verify(null, bytes, createPublicKey(appPublicKey()), signature)) {
+      fail('the private key is not the one the app trusts')
+    }
+    writeFileSync(join(folder, 'manifest.json.sig'), `${signature.toString('base64')}\n`)
+    execFileSync(
+      'gh',
+      ['release', 'upload', tag as string, join(folder, 'manifest.json.sig'), '--clobber'],
+      {
+        stdio: 'inherit'
+      }
+    )
+    execFileSync('gh', ['release', 'edit', tag as string, '--draft=false'], { stdio: 'inherit' })
+    console.log(`${tag} is signed and published`)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
 } else {
-  fail('usage: keygen | manifest | sign (see the top of this file)')
+  fail('usage: keygen | manifest | sign | publish (see the top of this file)')
 }

@@ -1,0 +1,99 @@
+name: Release
+
+# A tag `v<version>` (the version of package.json) builds a release; `v<version>-<suffix>`
+# builds a prerelease, which the app's updater never sees. The release is a DRAFT: the
+# owner signs its manifest on their own machine and publishes it there
+# (`npm run release:publish -- <tag>`), so the release key never reaches GitHub.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Apple Silicon: the app, its runtime and its native modules are arm64 macOS only.
+    runs-on: macos-14
+    timeout-minutes: 120
+    permissions:
+      # Only this job, and only to create the draft release.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against package.json
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          case "${TAG}" in
+            "v${version}") echo "prerelease=false" >>"${GITHUB_OUTPUT}" ;;
+            "v${version}-"*) echo "prerelease=true" >>"${GITHUB_OUTPUT}" ;;
+            *) echo "::error::the tag ${TAG} does not name version ${version} of package.json"; exit 1 ;;
+          esac
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+          echo "runtime=$(tr -d '[:space:]' <python/runtime-version.txt)" >>"${GITHUB_OUTPUT}"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: '0.13.0'
+      # The whole environment: the weights are converted with torch, and the Python
+      # tests run against Essentia and Demucs too.
+      - run: uv sync --locked
+        working-directory: python
+
+      - name: Cache the Demucs weights
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: resources/models
+          key: demucs-weights-${{ hashFiles('scripts/fetch-demucs-weights.sh', 'scripts/convert-demucs-weights.py') }}
+
+      - run: ./scripts/fetch-binaries.sh
+      - run: ./scripts/fetch-demucs-weights.sh
+
+      # A failing test stops the workflow: no release is created.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: uv run --no-sync pytest
+        working-directory: python
+
+      # Builds the runtime, the app and both DMGs, checking signatures and fuses.
+      - run: ./scripts/build-dmg.sh
+      # The runtime unpacked to another path, signed and answering.
+      - run: ./scripts/smoke-runtime.sh
+
+      - name: Gather the files of the release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RUNTIME: ${{ steps.version.outputs.runtime }}
+        run: |
+          mkdir dist
+          cp "release/FixLibrary-${VERSION}-arm64.dmg" "release/FixLibrary-${VERSION}-arm64-lite.dmg" \
+            "build/python-runtime-${RUNTIME}.tar.gz" dist/
+          npm run release:key -- manifest dist "${VERSION}" "${RUNTIME}"
+          (cd dist && shasum -a 256 -- *)
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          flags=(--draft --generate-notes --verify-tag --title "FixLibrary ${TAG}")
+          if [[ "${PRERELEASE}" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "${TAG}" "${flags[@]}" dist/*
