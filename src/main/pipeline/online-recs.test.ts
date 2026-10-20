@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/database.test-util'
 import { appendPlaylistTracks, createPlaylist, getPlaylist } from '../db/playlists'
-import { setSetting } from '../db/settings'
+import { z } from 'zod'
+import { getSetting, setSetting } from '../db/settings'
 import { addStyle } from '../db/styles'
 import { getTracksByIds, insertTracks, updateTrack } from '../db/tracks'
 import type { OnlineRecCandidate } from '../services/claude-prompts/online-recs'
@@ -12,6 +13,7 @@ import {
   noteInboxTrack,
   notePendingAdd,
   onlineScore,
+  profileOfTarget,
   verifiedHit,
   videoIdOf,
   type OnlineRecsDependencies
@@ -131,57 +133,57 @@ describe('videoIdOf', () => {
   })
 })
 
-describe('recommending online', () => {
-  function dependencies(
-    candidates: OnlineRecCandidate[],
-    hits: Record<string, { title: string; duration: number }>,
-    inspection: { lowBitrate: boolean; duplicate: object | null } = {
-      lowBitrate: false,
-      duplicate: null
-    }
-  ): OnlineRecsDependencies & {
-    inspect: ReturnType<typeof vi.fn>
-    start: ReturnType<typeof vi.fn>
-    json: ReturnType<typeof vi.fn>
-    clock: { now: number }
-  } {
-    const clock = { now: 1_000_000 }
-    const inspect = vi.fn(async () => ({
-      ok: true,
-      value: { ...inspection, bitrateKbps: inspection.lowBitrate ? 96 : 320 }
-    }))
-    const json = vi.fn(async (args: readonly string[]) => {
-      const term = (args.at(-1) ?? '').replace('ytsearch1:', '')
-      const found = hits[term]
-      return {
-        entries:
-          found === undefined
-            ? []
-            : [
-                {
-                  id: term.length.toString(),
-                  title: found.title,
-                  duration: found.duration,
-                  url: `https://www.youtube.com/watch?v=v${Object.keys(hits).indexOf(term)}`
-                }
-              ]
-      }
-    })
-    const start = vi.fn(() => ({ ok: true, value: [] }))
-    return {
-      db: testDatabase.db,
-      listMountedVolumes: () => new Set(),
-      claude: () => ({ ask: vi.fn(async () => ({ candidates })) }) as never,
-      ytDlp: { json },
-      downloads: () => ({ inspect, start }) as never,
-      now: () => clock.now,
-      inspect,
-      start,
-      json,
-      clock
-    }
+function recommendingDependencies(
+  candidates: OnlineRecCandidate[],
+  hits: Record<string, { title: string; duration: number }>,
+  inspection: { lowBitrate: boolean; duplicate: object | null } = {
+    lowBitrate: false,
+    duplicate: null
   }
+): OnlineRecsDependencies & {
+  inspect: ReturnType<typeof vi.fn>
+  start: ReturnType<typeof vi.fn>
+  json: ReturnType<typeof vi.fn>
+  clock: { now: number }
+} {
+  const clock = { now: 1_000_000 }
+  const inspect = vi.fn(async () => ({
+    ok: true,
+    value: { ...inspection, bitrateKbps: inspection.lowBitrate ? 96 : 320 }
+  }))
+  const json = vi.fn(async (args: readonly string[]) => {
+    const term = (args.at(-1) ?? '').replace('ytsearch1:', '')
+    const found = hits[term]
+    return {
+      entries:
+        found === undefined
+          ? []
+          : [
+              {
+                id: term.length.toString(),
+                title: found.title,
+                duration: found.duration,
+                url: `https://www.youtube.com/watch?v=v${Object.keys(hits).indexOf(term)}`
+              }
+            ]
+    }
+  })
+  const start = vi.fn(() => ({ ok: true, value: [] }))
+  return {
+    db: testDatabase.db,
+    listMountedVolumes: () => new Set(),
+    claude: () => ({ ask: vi.fn(async () => ({ candidates })) }) as never,
+    ytDlp: { json },
+    downloads: () => ({ inspect, start }) as never,
+    now: () => clock.now,
+    inspect,
+    start,
+    json,
+    clock
+  }
+}
 
+describe('recommending online', () => {
   it('shows only checked candidates the library has not, the best fitting first', async () => {
     // Arrange
     const house = addStyle(testDatabase.db, 'Deep House', '#ffffff')?.id ?? null
@@ -190,7 +192,7 @@ describe('recommending online', () => {
     const member = addTrack('/Music/a.mp3', { artist: 'A', title: 'B', primaryStyleId: house })
     addTrack('/Music/owned.mp3', { artist: 'Owned', title: 'Track', durationMs: 400_000 })
     appendPlaylistTracks(testDatabase.db, playlistId, [member])
-    const deps = dependencies(
+    const deps = recommendingDependencies(
       [
         { artist: 'Techno', title: 'One', mix: null, style: 'Techno' },
         { artist: 'Owned', title: 'Track', mix: null, style: 'Deep House' },
@@ -231,7 +233,7 @@ describe('recommending online', () => {
   it('asks once at a time and not again within 30 seconds', async () => {
     // Arrange
     const playlistId = playlistWithOneTrack()
-    const deps = dependencies([], {})
+    const deps = recommendingDependencies([], {})
     const onlineRecs = createOnlineRecs(deps)
 
     // Act
@@ -250,7 +252,7 @@ describe('recommending online', () => {
 
   it('asks nothing after it was stopped', async () => {
     // Arrange
-    const deps = dependencies([], {})
+    const deps = recommendingDependencies([], {})
     const onlineRecs = createOnlineRecs(deps)
     onlineRecs.stop()
 
@@ -265,14 +267,14 @@ describe('recommending online', () => {
   it('says Claude failed when Claude is not set up, and finds nothing for an empty playlist', async () => {
     // Arrange
     const empty = createPlaylist(testDatabase.db, 'Empty')
-    const onlineRecs = createOnlineRecs({ ...dependencies([], {}), claude: () => null })
+    const onlineRecs = createOnlineRecs({ ...recommendingDependencies([], {}), claude: () => null })
 
     // Act
     const withoutClaude = await onlineRecs.request(playlistWithOneTrack())
 
     // Assert
     expect(withoutClaude).toEqual({ ok: false, code: 'CLAUDE_FAILED' })
-    expect(await createOnlineRecs(dependencies([], {})).request(empty)).toEqual({
+    expect(await createOnlineRecs(recommendingDependencies([], {})).request(empty)).toEqual({
       ok: true,
       value: []
     })
@@ -282,7 +284,7 @@ describe('recommending online', () => {
     // Arrange
     const playlistId = createPlaylist(testDatabase.db, 'Sunset')
     appendPlaylistTracks(testDatabase.db, playlistId, [addTrack('/Music/a.mp3')])
-    const deps = dependencies([{ artist: 'X', title: 'Y', mix: null, style: null }], {
+    const deps = recommendingDependencies([{ artist: 'X', title: 'Y', mix: null, style: null }], {
       'X - Y': { title: 'X - Y', duration: 300 }
     })
     const onlineRecs = createOnlineRecs(deps)
@@ -306,7 +308,7 @@ describe('recommending online', () => {
   it('asks before a download of a low bitrate, and starts it once confirmed', async () => {
     // Arrange
     const playlistId = playlistWithOneTrack()
-    const deps = dependencies(
+    const deps = recommendingDependencies(
       [{ artist: 'X', title: 'Y', mix: null, style: null }],
       { 'X - Y': { title: 'X - Y', duration: 300 } },
       { lowBitrate: true, duplicate: null }
@@ -323,6 +325,48 @@ describe('recommending online', () => {
     expect(asked).toEqual({ ok: true, value: { kind: 'lowBitrate', kbps: 96 } })
     expect(confirmed).toEqual({ ok: true, value: { kind: 'started' } })
     expect(deps.start).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('recommending for a gap of the generator', () => {
+  it('keeps what a gap found apart from the playlists, and joins no playlist on download', async () => {
+    // Arrange
+    const playlistId = createPlaylist(testDatabase.db, 'Sunset')
+    appendPlaylistTracks(testDatabase.db, playlistId, [addTrack('/Music/a.mp3')])
+    const deps = recommendingDependencies([{ artist: 'X', title: 'Y', mix: null, style: null }], {
+      'X - Y': { title: 'X - Y', duration: 300 }
+    })
+    const onlineRecs = createOnlineRecs(deps)
+    const found = await onlineRecs.requestGap({
+      styleId: null,
+      bpm: 122,
+      camelotKey: '8A',
+      energy: 6
+    })
+    const url = found.ok ? (found.value[0]?.url ?? '') : ''
+
+    // Act
+    const asPlaylist = await onlineRecs.download(playlistId, url, false)
+    const asGap = await onlineRecs.downloadGap(url, false)
+
+    // Assert
+    expect(asPlaylist).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(asGap).toEqual({ ok: true, value: { kind: 'started' } })
+    expect(getSetting(testDatabase.db, 'pendingPlaylistAdds', z.unknown())).toBeUndefined()
+  })
+
+  it('makes a profile of the target alone', () => {
+    // Act
+    const profile = profileOfTarget({ styleId: 3, bpm: 124, camelotKey: '5A', energy: 7 })
+
+    // Assert
+    expect(profile).toEqual({
+      styles: [{ primaryStyleId: 3, secondaryStyleId: null, share: 1 }],
+      bpm: 124,
+      keys: ['5A'],
+      energy: 7,
+      moods: []
+    })
   })
 })
 

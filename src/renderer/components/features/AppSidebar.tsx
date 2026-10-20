@@ -9,6 +9,7 @@ import {
   ListChecks,
   ListMusic,
   Settings,
+  Sparkles,
   type LucideIcon
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ const PAGES: { page: AppPage; label: string; icon: LucideIcon }[] = [
   { page: 'cues', label: 'Cue-k', icon: AudioWaveform },
   { page: 'energy', label: 'Energy', icon: Gauge },
   { page: 'playlists', label: 'Playlistek', icon: ListMusic },
+  { page: 'generator', label: 'Generátor', icon: Sparkles },
   { page: 'rekordbox', label: 'Rekordbox', icon: Disc3 },
   { page: 'settings', label: 'Beállítások', icon: Settings }
 ]

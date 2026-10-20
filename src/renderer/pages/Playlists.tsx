@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDown, ArrowUp, Pause, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogClose, DialogContent, DialogFooter } from '@/components/ui/dialog'
@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input'
 import { StatusLine } from '@/components/ui/status-line'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Data } from '@/components/features/playlists/DataText'
+import { PlayButton, TrackFacts, TrackName } from '@/components/features/playlists/TrackParts'
+import { nameOf } from '@/lib/track-name'
 import { OnlineRecommendations } from '@/components/features/playlists/OnlineRecommendations'
 import { cn } from '@/lib/cn'
 import { formatCount, formatElapsed } from '@/lib/format'
@@ -19,65 +21,7 @@ import {
   type PlaylistEditOutcome,
   type PlaylistNotice
 } from '@/stores/playlists-store'
-import {
-  MAX_PLAYLIST_NAME,
-  MAX_PLAYLISTS,
-  type PlaylistTrackItem,
-  type PlaylistView
-} from '@shared/playlists'
-
-function nameOf(item: PlaylistTrackItem): string {
-  return item.artist && item.title ? `${item.artist} - ${item.title}` : item.fileName
-}
-
-/** Tempo, key and energy of a track in the Data role, en dashes for what is not known. */
-function TrackFacts({ item }: { item: PlaylistTrackItem }): React.JSX.Element {
-  return (
-    <span className="flex shrink-0 gap-3 text-text-muted">
-      <Data>{item.bpm === null ? '–' : Math.round(item.bpm)}</Data>
-      <Data>{item.camelotKey ?? '–'}</Data>
-      <Data>{item.energy === null ? '–' : `E${item.energy}`}</Data>
-    </span>
-  )
-}
-
-function PlayButton({
-  item,
-  player
-}: {
-  item: PlaylistTrackItem
-  player: TrackPlayer
-}): React.JSX.Element {
-  const name = nameOf(item)
-  const playing = player.playingId === item.trackId
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label={playing ? `${name} megállítása` : `${name} lejátszása`}
-      disabled={item.unavailable}
-      onClick={() => player.toggle(item.trackId)}
-    >
-      {playing ? <Pause /> : <Play />}
-    </Button>
-  )
-}
-
-function TrackName({ item }: { item: PlaylistTrackItem }): React.JSX.Element {
-  return (
-    <span className="flex min-w-0 flex-1 flex-col">
-      <span
-        title={nameOf(item)}
-        className={cn('truncate text-body', item.unavailable && 'text-text-muted')}
-      >
-        {nameOf(item)}
-      </span>
-      <span className="truncate text-small text-text-muted">
-        {item.unavailable ? 'Nem elérhető' : (item.styleName ?? 'Nincs stílus')}
-      </span>
-    </span>
-  )
-}
+import { MAX_PLAYLIST_NAME, MAX_PLAYLISTS, type PlaylistView } from '@shared/playlists'
 
 function noticeText(notice: PlaylistNotice): string {
   if (notice.kind === 'skipped') {
@@ -195,7 +139,7 @@ function TrackList({
       aria-label="A playlist trackjei"
       className="max-h-96 overflow-auto rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
     >
-      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+      <div role="presentation" className="relative" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((row) => {
           const item = tracks[row.index]
           if (!item) return null

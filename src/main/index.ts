@@ -11,6 +11,7 @@ import { registerLibraryIpc, sendScanProgress } from './ipc/library'
 import { registerPipelineIpc, sendRunProgress } from './ipc/pipeline'
 import { registerPreviewIpc } from './ipc/preview'
 import { registerEnergyIpc } from './ipc/energy'
+import { registerGeneratorIpc } from './ipc/generator'
 import { registerPlaylistsIpc } from './ipc/playlists'
 import { createOnlineRecs, noteInboxTrack, type OnlineRecs } from './pipeline/online-recs'
 import { registerCueEditorIpc } from './ipc/cue-editor'
@@ -540,6 +541,12 @@ function registerLibraryAndPipeline(): void {
     downloads: () => downloads
   })
   registerPlaylistsIpc({ db, listMountedVolumes: cachedVolumes }, onlineRecs)
+  registerGeneratorIpc({
+    db,
+    listMountedVolumes: cachedVolumes,
+    claude: () => claudeService,
+    onlineRecs: () => onlineRecs
+  })
   // New files of the Inbox become a batch of their own once nothing else runs or waits
   // for approval, so a batch of the user's is never given up for one.
   inboxWatcher = createInboxWatcher({

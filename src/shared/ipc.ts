@@ -17,12 +17,21 @@ import type {
 import type { DuplicateGroup, KeepDuplicate } from './duplicates'
 import type { CalibrationRating, CalibrationView } from './energy'
 import type {
+  AlternativesRequest,
+  GapTarget,
+  GeneratorParams,
+  GeneratorResult,
+  PromptParams,
+  SaveRequest
+} from './generator'
+import type {
   OnlineDownloadOutcome,
   OnlineRecommendation,
   OnlineRecsState,
   PlaylistAction,
   PlaylistEditResult,
   PlaylistSummary,
+  PlaylistTrackItem,
   PlaylistView
 } from './playlists'
 import type { Result } from './errors'
@@ -135,6 +144,12 @@ export const IPC_CHANNELS = {
   playlistsOnlineLast: 'playlists:onlineLast',
   playlistsOnlineRequest: 'playlists:onlineRequest',
   playlistsOnlineDownload: 'playlists:onlineDownload',
+  generatorParsePrompt: 'generator:parsePrompt',
+  generatorGenerate: 'generator:generate',
+  generatorAlternatives: 'generator:alternatives',
+  generatorSave: 'generator:save',
+  generatorGapRecs: 'generator:gapRecs',
+  generatorGapDownload: 'generator:gapDownload',
   downloadInspect: 'download:inspect',
   downloadStart: 'download:start',
   downloadSearch: 'download:search',
@@ -319,6 +334,21 @@ export interface FixLibraryApi {
       url: string,
       confirmed: boolean
     ) => Promise<Result<OnlineDownloadOutcome>>
+  }
+  generator: {
+    /** Reads a prompt into the fields it names, and the styles it named that the user has not. */
+    parsePrompt: (
+      prompt: string
+    ) => Promise<Result<{ params: PromptParams; unknownStyles: string[] }>>
+    generate: (params: GeneratorParams) => Promise<GeneratorResult>
+    /** Up to five tracks that could take a place of the list and still mix with its neighbours. */
+    alternatives: (request: AlternativesRequest) => Promise<Result<PlaylistTrackItem[]>>
+    /** Saves the tracks of the list as a new playlist; how many were skipped. */
+    save: (request: SaveRequest) => Promise<Result<{ playlistId: number; skipped: number }>>
+    /** Online recommendations for a gap, by what the missing track should be like. */
+    gapRecs: (target: GapTarget) => Promise<Result<OnlineRecommendation[]>>
+    /** Downloads a recommendation for a gap into the Inbox. */
+    gapDownload: (url: string, confirmed: boolean) => Promise<Result<OnlineDownloadOutcome>>
   }
   energy: {
     /** The calibration sample, the ratings given, and the kept model. */
